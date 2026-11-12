@@ -89,13 +89,9 @@ _REASONS: dict[str, tuple[str, ...]] = {
                                     "drive_amplitude", "drive_frequency", "drive_phase"),
     "it is the folder the plan stands in": ("model",),
     "it is not a setting of the inference steps": (
-        "plan", "artifact", "compare_records", "prefactor", "slice_at",
-        # the two secondary analyses, and the five settings neither front end exposes
-        "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset", "s_grid", "t_grid",
-        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
-        # the live simulation and the model builder
-        "frame_steps", "fps", "param_value", "param_min", "param_max", "init", "x_scale", "t_scale",
-        "forcing_value",
+        "plan", "artifact",
+        # the model builder
+        "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
         # the diagnostics and the probe checks; the drive check's own knobs are not a recording's drive
         "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows", "n_sweep",
         "chi_k_fixed", "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",

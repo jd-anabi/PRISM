@@ -214,11 +214,9 @@ class StorePicker(QWidget):
         super().__init__(parent)
         self.kind, self._allow_new, self._store = kind, allow_new, store
         self.keeps_selection = keeps_selection
-        # ``Summary -> bool``, or None for "every row of the kind". One kind can hold several things
-        # a screen wants to offer separately: the ``fdt`` kind holds single-cell measurements, sweeps
-        # and comparisons, told apart by ``body["study"]``, and the FDT and CrossVal screens each
-        # offer one of them. Applied AFTER the finished rule. Before ``parent``; no caller passes
-        # ``parent`` positionally.
+        # ``Summary -> bool``, or None for "every row of the kind": one kind can hold several things a
+        # screen wants to offer separately (no page of the window passes one now). Applied AFTER the
+        # finished rule. Before ``parent``; no caller passes ``parent`` positionally.
         self._row_filter = row_filter
         # id -> the line selection_summary() returns, recorded by refresh(). BEFORE refresh() below,
         # which fills it.
@@ -262,10 +260,10 @@ class StorePicker(QWidget):
         except Exception:                        # noqa: BLE001 -- an unreadable root lists nothing
             rows = []
         for s in rows:
-            # FINISHED, not ``complete``. ``complete`` means "has a valid manifest"; for the two
-            # kinds written progressively (the training cache, and ``fdt``) a record carries one
-            # from its first moment, so ``complete`` would offer a run still going, or one a cancel
-            # left half written, as a result. For every other kind the two are the same fact,
+            # FINISHED, not ``complete``. ``complete`` means "has a valid manifest"; for a kind
+            # written as its run goes (the training cache) a record carries one from its first
+            # moment, so ``complete`` would offer a run still going, or one a cancel left half
+            # written, as a result. For every other kind the two are the same fact,
             # because _commit writes the manifest last.
             if not s.finished:
                 continue

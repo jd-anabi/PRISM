@@ -13,7 +13,7 @@ flag's entry here ends with the same clause. The examples are run from the repos
 ## Conventions
 
 - **References.** Wherever a flag or an `artifacts` mode asks for a record (`--prior`,
-  `--posterior`, `--observation`, `--record`, `<ref>`), it takes the record's name or its bare id,
+  `--posterior`, `--observation`, `<ref>`), it takes the record's name or its bare id,
   as [The artifact store](getting-started.md#the-artifact-store) describes. That section also says
   what a record holds and what the kinds, names and ids are, and
   [Inputs and records](getting-started.md#inputs-and-records) says where each run saves.
@@ -25,8 +25,8 @@ flag's entry here ends with the same clause. The examples are run from the repos
   The four keys a plan adds to the refusal registry (`plan`, `chi_mode`, `reparam_rotate` and
   `expected_epochs`) map to no flag in the tool's table (`--chi` sets chi mode, but no refusal of the
   tool's carries the key), so a refusal that names one is the window's and never the tool's.
-- **What goes where.** The tool's own framing lines (`[cfg]`, `[prism]`, `[smoke]`, `[prism fdt]`,
-  `[prism crossval]`, and the `artifacts` family's listings and reports) are prints on stdout. They
+- **What goes where.** The tool's own framing lines (`[cfg]`, `[prism]`, `[smoke]`, and the `artifacts`
+  family's listings and reports) are prints on stdout. They
   are not records, so no `log.txt` holds them. A stage's messages are records: information goes to
   stdout as the bare message, and warnings and errors go to stderr with the prefix `warning: ` or
   `error: ` (`core.tool.logging_console`); the record the run writes keeps them all in its
@@ -66,7 +66,7 @@ command that takes them. Each command's section lists them again, briefly, with 
 
 Taken by `prior`, `train`, `validate`, `infer`, `tsnpe`, `sbc`, the three `identifiability` modes,
 `ablation` and `smoke`. The `probes` modes take `--bounds`, `--model` and `--device` only, because
-each sets its own observation mode. `fdt`, `crossval`, `compare` and `artifacts` take none of them.
+each sets its own observation mode. `artifacts` takes none of them.
 
 - `--bounds PATH` — required. The bounds file declares which parameters are inferred, in what order
   and over what box, and whether a drive is declared (a Forcing section). With `--no-chi`, a bounds
@@ -96,12 +96,11 @@ each sets its own observation mode. `fdt`, `crossval`, `compare` and `artifacts`
 ### Naming flags
 
 Taken by every command that writes a record except `smoke`, whose `--save` names what it builds:
-the five stages, `sbc`, the `identifiability` modes, `ablation`, the `probes` modes, `fdt`,
-`crossval` and the `compare` modes.
+the five stages, `sbc`, the `identifiability` modes, `ablation` and the `probes` modes.
 
 - `--name NAME` — names the record the command writes; `''`, the default, leaves it unnamed. A taken
-  name is refused when the stage starts, before anything is spent. `infer` names only its inference,
-  and `crossval` makes two names from one ([crossval](#crossval)). What a name may hold is in
+  name is refused when the stage starts, before anything is spent. `infer` names only its inference.
+  What a name may hold is in
   [The artifact store](getting-started.md#the-artifact-store).
 - `--note TEXT` — free text recorded in the record's manifest; `''`, the default, means no note. It
   must be one line of at most 200 characters (`core.refusals.NOTE_MAX_CHARS`), checked once, before
@@ -191,7 +190,7 @@ The tool reads no environment variable itself; every setting is a flag. PRISM re
 | variable | what it sets | when it is read |
 |---|---|---|
 | `PRISM_RESOURCES` | the inputs root | see [Inputs and records](getting-started.md#inputs-and-records) |
-| `PRISM_ARTIFACTS` | the records root | see [Inputs and records](getting-started.md#inputs-and-records); the tool resolves it once, when a command starts, except for `smoke`, and for `fdt` and `crossval` given `--store-root`, which use another root |
+| `PRISM_ARTIFACTS` | the records root | see [Inputs and records](getting-started.md#inputs-and-records); the tool resolves it once, when a command starts, except for `smoke`, which uses another root |
 | `PRISM_VRAM_CEILING_GIB` | the GiB one simulation batch may plan to hold on the card; 0 or unset is automatic; in the window, a number here takes precedence over the memory limit kept in Settings | afresh for every batch plan |
 | `PRISM_MEM_LOG_EVERY` | the batches between `[mem]` memory lines, 250 when unset | once, when the simulation pipeline is first imported |
 
@@ -230,15 +229,14 @@ Two more are set rather than read as settings:
   `python -m core [<command>]: error: <message>`. A flag combination that only the built
   configuration can judge is a usage error too (`core.tool.config_args.UsageError`), printed as
   `prism <subcommand>: usage: <message>`: the recording rules of [infer](#infer), the resume rules
-  of [smoke](#smoke), `fdt --skip-sanity` with `--no-production`, and a `crossval` grid whose point
-  count is not a whole number of at least 2.
+  of [smoke](#smoke).
 - **1, a refusal.** A refusal prints one line, `prism <subcommand>: refused: <message> (<flag>)`,
   ending with the flag that answers it, for example `(--n-cal)` (`core.tool.fields.FLAG`). A missing
   or blank `--bounds`, `--cell`, `--spont` or `--forced` file is such a refusal, and names its flag
   (`core.refusals.require_file`), once the model is known. Without `--model`, the model is read from
   the file's parent folder. So a `--bounds` that is blank or outside a `Bounds/<model>/` folder is
-  refused first as an unsupported model, in the `ValueError` form below, and `fdt`'s `--cell` in the
-  same case ends `(--model)`. A refusal that carries no flag ends at the message: a record
+  refused first as an unsupported model, in the `ValueError` form below. A refusal that carries no
+  flag ends at the message: a record
   reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
   mode's `<ref>`), `--resume require` with no cache to resume, the narrowed-parent rule of
   [tsnpe](#tsnpe), a missing units file (the tool has no units flag), and a rule two settings
@@ -252,12 +250,10 @@ Two more are set rather than read as settings:
   `prism <subcommand>: *** FAILED ***`. An `artifacts sweep` that could not read or remove something
   exits 1 too.
 - **130, Ctrl-C.** `prism <subcommand>: interrupted: ` and advice for what was cut short: the
-  `interrupt_note` a family's parser sets, where it sets one (`core.tool.fdt`, `core.tool.probes`),
-  else the generic advice.
+  `interrupt_note` a family's parser sets, where it sets one (`core.tool.probes`), else the generic
+  advice.
   - `smoke`: for the case where a `[checkpoint]` line said batches were saved, the flags to re-run
     with to continue them ([smoke](#smoke), `core.tool._smoke_interrupt_advice`);
-  - `fdt`, `crossval` and `compare`: the record is kept, marked unfinished, and nothing resumes
-    ([fdt](#fdt));
   - the `probes` modes: a check writes its record only when it finishes, so nothing is left, and the
     same command starts it again;
   - every other command: the generic advice, that the record being written was removed and, if a
@@ -1008,174 +1004,6 @@ records no seed (`results.seed` is null); only re-running `smoke` with its `--se
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
-## fdt
-
-The effective-temperature analysis (FDT) for one cell: the sanity checks, then the production sweep
-of driven responses, set against the cell's spontaneous fluctuations.
-
-- `--cell PATH` — required: the cell file whose ground truth the analysis runs at.
-- `--model NAME` — model name (default the cell file's parent folder, upper-cased).
-- `--store-root PATH` — the store this run writes its record into (default the artifacts root).
-- `--name NAME` — see [Naming flags](#naming-flags).
-- `--note TEXT` — see [Naming flags](#naming-flags).
-- `--n-freqs N` — drive frequencies in the driven-response sweep (default 60).
-- `--ensemble-m N` — trajectories per frequency (default 256).
-- `--freqs-per-batch N` — frequencies packed into one simulator call (default 1).
-- `--f0 X` — non-dimensional drive amplitude; keep it inside the linear regime (default 0.05).
-- `--seed N` — the random seed for the whole run, a whole number from 0; the record carries it, so the run can be repeated (default none: one is drawn and recorded).
-- `--skip-sanity` — skip the sanity checks and go straight to the production sweep.
-- `--no-production` — stop after the sanity checks.
-
-**Writes** one fdt record, progressively. It prints `[prism fdt] writing record <id> at <dir>`
-before anything is spent and before the folder exists. The folder and a first manifest appear when
-the run opens the record, which it logs as `Writing fdt record <id> at <dir>`, and the manifest is
-rewritten as the run goes. It prints `[prism fdt] record <id> at <path>` when it finishes. The
-record holds the figures (the power spectrum, the chi components, T_eff/T and the spontaneous
-trajectory), the numbers in `data.h5`, the settings and seed, and the log. A cancel or a crash after
-the record opens keeps the folder, marked unfinished; a cancel or a refusal before then leaves
-nothing (`core.FDT.fdt_pipeline.run_fdt`).
-
-**Rules:**
-
-- The command takes no configuration flags: no prior is built and nothing is trained, so it has no
-  observation mode and no `--bounds`. The bounds file is resolved from the cell
-  ([How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file)), and the
-  record names it by path and hash.
-- It runs on the CPU only and takes no `--device`: its solver steps a small ensemble one time step
-  at a time, which at 256 trajectories runs about 3.4 times faster on the CPU than on a card.
-- The model comes from the cell's folder unless `--model` is given. A model FDT cannot run is refused
-  with the reason `(--model)`: FDT drives the observable itself, so a user model needs additive,
-  non-zero observable noise and no intrinsic forcing.
-- The pair `--skip-sanity` and `--no-production` is a usage error: together they run nothing.
-- An `--n-freqs`, `--ensemble-m` or `--freqs-per-batch` below 1, an `--f0` of 0 or less, and a
-  `--seed` outside 0 to 2^64 − 1 are refused, naming the flag (`core.cli.make_fdt_config`).
-
-**Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C the record named by the
-`writing record` line is kept, marked unfinished, unless the run was stopped before its folder
-existed; then there is nothing to clear. `python -m core artifacts list fdt` lists it and
-`python -m core artifacts rm fdt <id>` removes it. Nothing resumes; the same command starts the
-analysis again, and with `--name` only once the unfinished record is removed, because it keeps the
-name. The `artifacts` family reads only the `PRISM_ARTIFACTS` root, so after a run given
-`--store-root`, point `PRISM_ARTIFACTS` at that root first.
-
-## crossval
-
-The FDT parameter-sweep study on the Nadrowski model, whose model is fixed: an S sweep, holding
-T_a/T = 1 and varying S (FDT is restored as S goes to 0), then a T_a/T sweep, holding S = 0 and
-varying T_a/T (restored as T_a/T goes to 1).
-
-- `--cell PATH` — required: a Nadrowski cell file whose ground truth the sweeps start from.
-- `--preset exploratory|production` — resolution preset (default exploratory).
-- `--s-grid MIN MAX N` — required: the S sweep grid.
-- `--t-grid MIN MAX N` — required: the T_a/T sweep grid.
-- `--store-root PATH` — the store this run writes its records into (default the artifacts root).
-- `--name NAME` — a base name for the study's two records, `NAME-s` and `NAME-temp`, one per swept parameter; `''` leaves both unnamed. Both names are claimed before anything is spent, so a taken one is refused before either sweep starts.
-- `--note TEXT` — see [Naming flags](#naming-flags).
-- `--n-freqs N` — drive frequencies of each sweep's one common grid, as a floor: the grid covers every resonant operating point's band, and its point count grows with the span of their resonances (default the preset's: exploratory 30, production 60).
-- `--ensemble-m N` — trajectories per frequency (default 256).
-- `--freqs-per-batch N` — frequencies packed into one simulator call (default 1).
-- `--f0 X` — non-dimensional drive amplitude; keep it inside the linear regime (default 0.05).
-- `--seed N` — the random seed for the whole run, a whole number from 0; the records carry it (default none: one is drawn and recorded).
-
-**The presets** set the resolution the flags do not expose, and two flags' defaults
-(`core.cli.SWEEP_PRESETS`):
-
-| preset | drive band, in multiples of ω₀ | drive window, in drive periods | spontaneous recording, ND time | `--n-freqs` | `--ensemble-m` |
-|---|---|---|---|---|---|
-| exploratory | 0.2 to 30 | 20 | 4000 | 30 | 256 |
-| production | 0.1 to 30 | 30 | 8000 | 60 | 256 |
-
-The operating points' resonances set ω₀, not the cell's: a sweep's one grid runs from the band's
-low multiple of the lowest resonant operating point's ω₀ to its high multiple of the highest's, or,
-when no operating point is resonant, of every operating point's linearised ω₀ estimate
-(`core.FDT.cross_validation._build_common_grid`).
-
-**Writes** two fdt records, `NAME-s` and `NAME-temp`, each progressive like the record of
-[fdt](#fdt), and each with its `data.h5`, its 3-D plot and its point counts. The S sweep's record is
-finished and readable before the T_a/T sweep starts. Before anything is spent, it prints one
-`[prism crossval] writing record <id> at <dir> (the S sweep)` line and one for the T_a/T sweep; then
-one `[prism crossval] sweep record <id> at <path>` line per finished record.
-
-**Rules** for each grid, `MIN MAX N`: N must be a whole number of at least 2, else a usage error;
-MIN must be below MAX; and the T_a/T grid's MIN may not be below 0, because a negative temperature
-ratio is unphysical and the simulation diverges there. The last two are refusals naming the grid's
-flag; S has no floor. The resolution settings and the seed are refused as [fdt](#fdt) refuses them
-(`core.cli.make_param_sweep_config`). A sweep whose every operating point failed keeps its
-unfinished record and lets the other sweep run; when both sweeps measured nothing, the study is
-refused `(--s-grid)`, exit 1, with both unfinished records kept
-(`core.FDT.cross_validation.run_param_study_cli`). Like `fdt`, the study runs on the CPU only and
-takes no configuration flags.
-
-**Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C a sweep that had finished keeps its
-finished record, the one in progress keeps an unfinished one, and a sweep not yet started left
-nothing; the advice under [fdt](#fdt) applies to each.
-
-## compare
-
-Draws saved fdt records into a comparison record of its own (kind fdt, study "comparison"): its
-figures are its output, and its `data.h5` holds the common grid and the interpolated curves.
-
-- Nothing is simulated, and no record it draws is modified. It has no `--store-root` and no
-  configuration flags: it reads and writes the `PRISM_ARTIFACTS` root.
-- Runs land on different frequencies, since each detects its own resonance, so the modes that draw
-  two or more runs interpolate the curves onto a grid log-spaced over the intersection of their
-  spans; a point whose bracketing samples include a blank stays blank rather than being drawn
-  through. Runs that share no frequency band are refused. `renormalise` draws its one run on the
-  run's own grid and interpolates nothing.
-- Every mode takes each record with its own `--record REF`, by name or id. A record whose run did
-  not finish is refused, naming it `(--record)`, as are one run named twice, a record of the wrong
-  study (a single-cell run or a sweep) and a record with no data file.
-- A comparison names the records it drew in its body, not as its parents, so it does not protect
-  them: [artifacts rm](#artifacts-rm) of one succeeds, and the comparison's lineage report then
-  prints that record as `MISSING`.
-- It logs `Writing comparison record <id> at <dir>` when it opens its record and prints
-  `[prism] fdt <name>__<id>  <path>` when it finishes. After Ctrl-C the opened record is kept,
-  marked unfinished, and nothing resumes.
-
-### compare cells
-
-Two or more single-cell runs' ratio curves on one axis, labelled by cell.
-
-- `--record REF` — required, once per record: a saved single-cell fdt record, by name or id; at least two.
-- `--name NAME` — see [Naming flags](#naming-flags).
-- `--note TEXT` — see [Naming flags](#naming-flags).
-
-**Exit codes** as in [Exit codes](#exit-codes).
-
-### compare repeats
-
-Several runs of one cell, with the spread across them drawn as a band. The mode does not enforce one
-cell: it names the cells it drew, as a notice in the record when there is more than one. It also
-notes records that share a seed: they are one run drawn twice, and their spread measures nothing.
-
-- `--record REF` — required, once per record: a saved single-cell fdt record, by name or id; at least two.
-- `--name NAME` — see [Naming flags](#naming-flags).
-- `--note TEXT` — see [Naming flags](#naming-flags).
-
-**Exit codes** as in [Exit codes](#exit-codes).
-
-### compare renormalise
-
-One run's T_eff/T recomputed with a supplied normalisation constant, drawn against the original.
-
-- `--record REF` — required: exactly one saved single-cell fdt record, by name or id; it must record the constant it used.
-- `--name NAME` — see [Naming flags](#naming-flags).
-- `--note TEXT` — see [Naming flags](#naming-flags).
-- `--prefactor X` — required: the normalisation constant to recompute T_eff/T with; one that is not greater than 0 is refused `(--prefactor)`.
-
-**Exit codes** as in [Exit codes](#exit-codes).
-
-### compare sweeps
-
-Two sweep records together, and a slice of both at one operating point.
-
-- `--record REF` — required, once per record: exactly two saved sweep records, sweeping the same parameter over ranges that overlap.
-- `--name NAME` — see [Naming flags](#naming-flags).
-- `--note TEXT` — see [Naming flags](#naming-flags).
-- `--at X` — the operating point to slice both sweeps at; without it, the middle of the range they share. A point outside that range is refused.
-
-**Exit codes** as in [Exit codes](#exit-codes).
-
 ## artifacts
 
 Reads, annotates and tidies the store of records: the command-line twin of the window's Records
@@ -1185,7 +1013,7 @@ screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two
   `PRISM_ARTIFACTS` names. A listing must not be able to fail on a bounds file it does not need, so
   the family loads nothing and cannot tell you whether a posterior matches your bounds file; loading
   it does.
-- `<kind>` is one of the nine kinds of [The artifact store](getting-started.md#the-artifact-store),
+- `<kind>` is one of the eight kinds of [The artifact store](getting-started.md#the-artifact-store),
   named in the singular. It is a plain positional, so an unknown kind is a refusal (exit 1), not a
   usage error. `<ref>` is a record's name or its id.
 - Its output is plain aligned text on stdout, meant for a person or a script. It is not a record and
@@ -1197,12 +1025,12 @@ screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two
 ### artifacts list
 
 `python -m core artifacts list [<kind>]`: one line per record of a kind, or, with no kind, of all
-nine under `== <kind> ==` headings. The mode takes no flags.
+eight under `== <kind> ==` headings. The mode takes no flags.
 
 The columns are the window's, lower-cased: name and created for every kind; then progress and
 finished for a simulation cache, mode, width and amortized for a posterior, mode and width for an
-observation, variant for a diagnostic, study, points and finished for an fdt record, and, for a kept
-training (`fit`), "for", passes and state; then the note. A directory with no usable manifest
+observation, variant for a diagnostic, and, for a kept training (`fit`), "for", passes and state;
+then the note. A directory with no usable manifest
 comes last, as `incomplete  <dir>  -- <reason>`. With no kind, the kinds that hold nothing are
 named on a trailing `nothing in:` line.
 
@@ -1240,8 +1068,7 @@ It is refused while any other record depends on it. The refusal names every depe
 names this record as a parent, or, for a prior, it is a training cache generated against it, found
 by the prior's fit alone. Delete those first; no flag overrides the refusal. A kept training (`fit`)
 that a running process is training is refused too, until that process stops; no flag overrides that
-either. A comparison is not a dependent: deleting a record a comparison drew succeeds, and the
-comparison's lineage report then prints it as `MISSING` ([compare](#compare)).
+either.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -1259,8 +1086,8 @@ removal prints `[prism] removed ...`. A directory that holds a `manifest.json` i
 one this build cannot read or one that declares another kind: it is reported as
 `[prism] kept <kind> <dir> -- <reason>` and left where it is (`core.tool.browse._sweep`, and
 `core.artifacts.store.ArtifactStore.remove_incomplete` refuses it too). Nothing inside a record's
-own folder is offered: the loose-file read never descends into a record, so an unfinished fdt
-record's measurements cannot be reached from here (`core.artifacts.store.ArtifactStore.loose_files`).
+own folder is offered: the loose-file read never descends into a record, so a record's own files
+cannot be reached from here (`core.artifacts.store.ArtifactStore.loose_files`).
 Anything written recently is refused at removal, as
 [Browsing the store](getting-started.md#browsing-the-store) describes.
 
@@ -1283,8 +1110,8 @@ rather than raised.
 
 ## Worked examples
 
-The three examples write into whatever records root is current when they run, so the first line
-points `PRISM_ARTIFACTS` at a scratch folder. Run all three in that same shell, so it stays set and
+The two examples write into whatever records root is current when they run, so the first line
+points `PRISM_ARTIFACTS` at a scratch folder. Run both in that same shell, so it stays set and
 the real store gains nothing.
 
 **A stage chain at small sizes.** The prior builds at its full default size, which takes about
@@ -1314,21 +1141,8 @@ python -m core probes drive --bounds Resources/Bounds/nadrowski/master.txt --cel
 
 Each writes one diagnostic record; `python -m core artifacts show diagnostic spont_band` prints its
 verdicts and the settings it judged. The bounds file must declare a Forcing section for
-`probes drive`, and this one does.
+`probes drive`, and this one does. When you are done, delete the scratch folder.
 
-**An FDT run twice, then compared.** Each run draws and records a seed of its own, so the two are
-independent repeats of one cell. The sizes here (4 drive frequencies, 8 trajectories each, no
-sanity checks) show the commands working and mean nothing more. A real run takes its defaults, 60
-frequencies of 256 trajectories after the sanity checks, and is long: it runs on the CPU only.
-
-```bash
-python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_a
-python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_b
-python -m core compare repeats --record spont_fdt_a --record spont_fdt_b --name spont_fdt_repeats
-```
-
-The comparison record draws both ratio curves on one axis, with their spread as a band. When you
-are done, delete the scratch folder.
 
 ## Where the old scripts went
 

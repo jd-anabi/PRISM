@@ -193,7 +193,7 @@ def test_seeded_restores_the_callers_rng():
 def test_a_cpu_seeded_block_leaves_every_cuda_generator_alone():
     """``torch.manual_seed`` reseeds EVERY CUDA device as well as the CPU, and a CPU block forks no
     CUDA generator -- ``fork_rng(devices=[cpu])`` raises -- so the old ``seeded(seed, cpu)`` left each
-    card's generator pinned at the block's seed: two CPU FDT runs at seed 5, each followed by a CUDA
+    card's generator pinned at the block's seed: two CPU blocks at seed 5, each followed by a CUDA
     draw, drew identical CUDA numbers. That is the hazard core/SBI/decorrelate.py documents, reached
     through the context whose whole job is to hand the caller's streams back. A CPU block now seeds
     the CPU generator and numpy only.

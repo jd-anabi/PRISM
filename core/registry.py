@@ -6,13 +6,10 @@ positionally, so user models are APPENDED IN PLACE to those live lists -- the bu
 core.gui.app.build_app and core.tool.main), never an import side effect: the GUI test suite constructs
 MainWindow directly and must keep seeing pristine registries.
 
-``register`` puts a user model into every model list, and Simulate runs any of them. The other uses
-gate on their own predicates: inference, in the window and on the command line, takes only a model
-``is_sbi_user_model`` admits (no forcing, at least one ND parameter), and FDT only one ``fdt_support``
-admits (no forcing, and additive, non-zero noise on the observable). A user model has no INIT_SHAPES
-row. Training, the prior's stability sweep and the Fisher rotation start it from the initial
-conditions its definition declares; Simulate, FDT and a simulated observation start it from its cell
-file's.
+``register`` puts a user model into every model list. Inference, in the window and on the command line,
+takes only a model ``is_sbi_user_model`` admits (no forcing, at least one ND parameter). A user model
+has no INIT_SHAPES row. Training, the prior's stability sweep and the Fisher rotation start it from the
+initial conditions its definition declares; a simulated observation starts it from its cell file's.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,8 +58,7 @@ def is_user_model(name: str) -> bool:
 
 def user_model_has_forcing(name: str) -> bool:
     """True if any variable of a user model declares a forcing entry. ``register`` still puts such a
-    model in every model list and Simulate runs it, but parameter inference (``is_sbi_user_model``)
-    and FDT (``fdt_support``) both refuse it."""
+    model in every model list, but parameter inference (``is_sbi_user_model``) refuses it."""
     spec = get(name)
     return bool(spec and spec.is_user_model and any(v.get("forcing") for v in spec.variables))
 
@@ -71,8 +67,7 @@ def is_sbi_user_model(name: str) -> bool:
     """A user model eligible for the SBI (Parameter Inference) path in v2: user-defined, NO forcing
     (spontaneous dynamics only), and at least one ND parameter to infer. A forced model keeps the
     sinusoid machinery out of scope; a zero-parameter model (e.g. pure SHM) has nothing to infer and
-    can't build a stability-screened GMM prior -- both stay out of inference (FDT has its own gate,
-    fdt_support)."""
+    can't build a stability-screened GMM prior -- both stay out of inference."""
     spec = get(name)
     return bool(
         spec and spec.is_user_model
@@ -80,36 +75,6 @@ def is_sbi_user_model(name: str) -> bool:
         and spec.compiled is not None
         and len(spec.compiled.param_names) >= 1
     )
-
-
-def fdt_support(name: str) -> tuple:
-    """Whether the FDT effective-temperature pipeline can run for this model, and why not.
-
-    Built-ins are always supported (their observable-noise prefactor is coded per model in
-    ``campaigns.observable_noise_prefactor``). A user model is supported only when its OBSERVABLE
-    (variable index 0) has ADDITIVE, non-zero white noise and the model carries NO intrinsic forcing --
-    FDT overwrites the force tensor to probe chi(omega), so a user's own drive would be silently
-    dropped. Returns (ok, reason); ``reason`` is '' when ok. The single source of truth for the FDT
-    GUI gate (mirrors ``is_sbi_user_model`` for the SBI gate)."""
-    spec = get(name)
-    if spec is None:
-        return False, f"Unknown model '{name}'."
-    if not spec.is_user_model:
-        return True, ""
-    if spec.compiled is None:
-        return False, f"User model '{name}' has no compiled definition."
-    if user_model_has_forcing(name):
-        return False, (f"FDT can't run '{name}': it has intrinsic forcing, but FDT drives the "
-                       "observable itself to measure the response. Remove the forcing to use FDT.")
-    c = spec.compiled
-    obs, d0 = c.var_names[0], c.diff_exprs[0]
-    if {str(s) for s in d0.free_symbols} & set(c.var_names):
-        return False, (f"FDT can't run '{name}': observable '{obs}' has state-dependent "
-                       "(multiplicative) noise. FDT supports additive-noise observables only.")
-    if d0.is_zero:
-        return False, (f"FDT can't run '{name}': observable '{obs}' is deterministic (D=0). "
-                       "FDT needs a stochastic observable.")
-    return True, ""
 
 
 def state_dep_drift(name: str) -> bool:
@@ -179,7 +144,7 @@ def load_user_models() -> None:
                 log_params=model_store.nd_log_params(doc),
             ))
         except Exception as e:                                  # noqa: BLE001 -- one bad file must not
-            load_errors.append((Path(path), str(e)))            # brick startup (CrossValPanel precedent)
+            load_errors.append((Path(path), str(e)))            # brick startup
 
 
 def make_user_simulator(spec: ModelSpec, params: torch.Tensor, force: torch.Tensor,
@@ -187,8 +152,8 @@ def make_user_simulator(spec: ModelSpec, params: torch.Tensor, force: torch.Tens
                         segs: int = 1, batch_size: int = 1,
                         device: torch.device = torch.device('cpu')):
     """Construct a UserSimulator for a registered user-model spec (lazy import keeps registry light).
-    ``freqs_per_batch`` supports the FDT Campaign-2 frequency packing; it defaults to 1, so existing
-    SBI callers are unaffected."""
+    ``freqs_per_batch`` packs several drive frequencies into one simulator call; it defaults to 1, and
+    no caller packs any now."""
     from core.Simulator.user_simulator import UserSimulator
     if spec.compiled is None:
         raise RuntimeError(f"User model '{spec.name}' has no compiled definition.")

@@ -118,8 +118,6 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",
     "note": f"Edit it in the Note box {_in('records')}.",
-    # comparing saved records of the effective temperature: the window no longer has a control for any of the three
-    "compare_records": None, "prefactor": None, "slice_at": None,
     # inputs. ``units`` is NOT widened -- one units control exists in the whole application (the choice of step 1);
     # everywhere else the units file is resolved from the model and there is no control to name.
     "bounds": ("prior", "Bounds file"),
@@ -149,13 +147,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # a run plan: the thing to correct is the file, so the sentence names no box
     "plan": "Correct the file, then choose the plan again.",
     "expected_epochs": ("training", "Expected epochs (for the time estimate only)"),
-    # the effective temperature's settings: the window no longer has a control for any of them
-    "n_freqs": None, "ensemble_m": None, "freqs_per_batch": None, "f0": None, "preset": None, "s_grid": None,
-    "t_grid": None,
     # the random seed: the window draws one itself, and no page asks for it
     "seed": None,
-    # the effective temperature's settings that neither front end exposes
-    "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
     # the model builder, in Your own models. The parameter rows repeat per parameter, so the label is
     # the row's own ("value" / "min" / "max") and the message names which parameter.
     "param_value": ("models", "value"),
@@ -168,8 +161,6 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # tau, ...), built per kind, so there is no one label(key) to build a row from.
     "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
                       f"choice, {_in('models')}."),
-    # the live simulation's two settings: the window no longer has a control for either
-    "frame_steps": None, "fps": None,
     # tool-only: the diagnostics' knobs; no window sentence
     "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
     "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,

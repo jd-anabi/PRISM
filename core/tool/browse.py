@@ -12,8 +12,7 @@ sibling of that name would sit one mistaken relative import away from shadowing 
 NO CONFIGURATION FLAGS. ``add_config_flags`` is deliberately NOT called: a listing must not be able
 to fail on a bounds file it does not need, and ``python -m core artifacts --help`` must stay
 torch-free. The consequence is stated in EPILOG: this family cannot say "this posterior does not
-match your bounds file" -- that is what LOADING it does. ``fdt``/``crossval`` are the precedent for a
-subcommand that builds no SimConfig.
+match your bounds file" -- that is what LOADING it does.
 
 NO ``--store-root``, EITHER. The root is ``config.artifacts_root()`` (PRISM_ARTIFACTS) and ``main``
 has already opened the store by the time a handler runs, so this family has no second root to point
@@ -23,12 +22,10 @@ subcommand's), spends nothing a Ctrl-C could abandon, and reads the one root the
 The flag is no longer a proxy for anything else, either. It used to be: ``main`` keyed three of
 smoke's behaviours on ``hasattr(args, "store_root")`` -- the throwaway ``mkdtemp`` root, the removal
 of an auto-created root left empty by a failure, and the Ctrl-C advice -- so declaring the name here
-would have changed all three for a root this family does not want. ``fdt`` and ``crossval`` take a
-``--store-root`` of their own now, and those three behaviours were reworked deliberately rather
-than left to flip: the throwaway root, its cleanup and smoke's Ctrl-C advice are now keyed on
-``temp_store_root``, a property only ``smoke``'s parser sets (``set_defaults(temp_store_root=True)``),
-never on the flag's presence; ``fdt``, ``crossval``, ``compare`` and the ``probes`` checks print
-their own ``interrupt_note``, which ``main`` checks first. The absence here is now what it says on the
+would have changed all three for a root this family does not want. Those three behaviours are keyed
+on ``temp_store_root``, a property only ``smoke``'s parser sets (``set_defaults(temp_store_root=True)``),
+never on the flag's presence; the ``probes`` checks print their own ``interrupt_note``, which ``main``
+checks first. The absence here is now what it says on the
 face of it -- this family wants one root, the environment's.
 
 (No line numbers into ``core/tool/__init__.py`` on purpose: the four this paragraph used to carry
@@ -55,12 +52,10 @@ from pathlib import Path
 
 from core.refusals import NOTE_MAX_CHARS, Refusal
 
-# The nine kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
+# The eight kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
 # at parser-build time would import torch (core/artifacts/__init__.py imports .store, which imports
-# core.config). tests/test_tool.py pins the two in sync, both order and membership -- the same shape
-# as --preset's hard-coded choices pinned against cli.SWEEP_PRESETS.
-KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic",
-         "fdt", "fit")
+# core.config). tests/test_tool.py pins the two in sync, both order and membership.
+KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic", "fit")
 
 # The columns each kind shows: the browser's own tuples (core/gui/widgets/artifact_table.columns_for),
 # LOWER-CASED. A SECOND literal on purpose -- that module is a Qt module, and importing it here
@@ -75,7 +70,6 @@ COLUMNS = {
     "calibration": ("name", "created", "note"),
     "inference": ("name", "created", "note"),
     "diagnostic": ("name", "created", "variant", "note"),
-    "fdt": ("name", "created", "study", "points", "finished", "note"),
     "fit": ("name", "created", "for", "passes", "state", "note"),
 }
 
@@ -103,7 +97,7 @@ family cannot tell you whether a posterior matches your bounds file; loading
 it does (python -m core validate --posterior ...).
 
 """ + textwrap.fill("<kind> is one of " + ", ".join(KINDS) + "; list and sweep with no kind cover "
-                    "all nine.", 79) + """
+                    "all eight.", 79) + """
 <ref> is an artifact's name or its id. An empty listing exits 0: a script must
 be able to tell "nothing on disk" from "you asked for something wrong".
 """
@@ -134,19 +128,6 @@ def _progress(s) -> str:
     return text
 
 
-def _fdt_points(s) -> str:
-    """"10/12" for a sweep, "10/12, 2 failed" when some points failed, "-" for a single run or a
-    comparison, which have no operating points at all. A comma and plain ASCII, not the browser's
-    middle dot: a script may read this line -- ``_progress`` above takes the same care."""
-    if s.points_done is None:
-        return "-"
-    planned = "?" if s.points_planned is None else str(int(s.points_planned))
-    text = f"{int(s.points_done)}/{planned}"
-    if s.points_failed:
-        text += f", {int(s.points_failed)} failed"
-    return text
-
-
 def _cells(kind: str, s) -> tuple:
     """One complete row's cells, in ``COLUMNS[kind]`` order. ``label`` is the name, or
     ``(unnamed <id>)`` -- as the pickers show it. A simulation cache and a kept training are written
@@ -167,9 +148,6 @@ def _cells(kind: str, s) -> tuple:
         # A diagnostic records its kind under ``variant``, never ``mode``: the mode column would
         # otherwise report a conditioning geometry that does not exist.
         return head + (_flat(s.variant) or "-", _flat(s.note))
-    if kind == "fdt":
-        return head + (_flat(s.study) or "-", _fdt_points(s), "yes" if s.finished else "no",
-                       _flat(s.note))
     if kind == "fit":
         # the posterior it is to write, the passes it holds and its state's word; "-" for each the
         # record does not say, as a diagnostic's missing variant reads
@@ -200,7 +178,7 @@ def _print_kind(kind: str, rows) -> None:
 
 def _list(args, store) -> int:
     """``list [<kind>]``. An empty listing is EXIT 0 with a line saying so; an unknown kind is
-    the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all nine
+    the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all eight
     are walked and a kind with nothing in it is NAMED in a trailing line rather than silently
     skipped, so "I did not look" and "there is nothing" stay distinguishable."""
     kinds = [args.kind] if args.kind else list(KINDS)
@@ -370,16 +348,16 @@ def _joined(clauses: list) -> str:
 
 
 def _sweep(args, store) -> int:
-    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all nine) that has NO
+    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all eight) that has NO
     manifest at all, and the two categories below. Nothing to remove is exit 0; anything that would
     not delete is 1, naming each. A failure never stops the sweep -- ``sweep_incomplete`` finishes
     the rest and reports it, and the two loops below follow the same rule.
 
     TWO MORE CATEGORIES, each read through its own store call and never through ``list``: a loose
     FILE sitting directly inside a kind directory (``loose_files``, which never descends, so nothing
-    inside a record's own folder -- an unfinished fdt record's measurement included -- can be
-    offered), and, in the all-kinds form ALONE, a LEGACY DIRECTORY beside the kind directories
-    (``legacy_dirs``, which skips a link or a junction because ``remove_legacy`` refuses one).
+    inside a record's own folder can be offered), and, in the all-kinds form ALONE, a LEGACY DIRECTORY
+    beside the kind directories (``legacy_dirs``, which skips a link or a junction because
+    ``remove_legacy`` refuses one).
     Nothing is deleted on the owner's behalf: both appear in the dry run and both wait for
     ``--yes``, and each remover applies the store's recency guard itself -- a directory or file
     written within ``store.RECENT_WRITE_SECONDS`` may be a run in flight, so it is refused.
@@ -425,7 +403,7 @@ def _sweep(args, store) -> int:
     for kind in kinds:
         # The first of the two categories. `list` reports DIRECTORIES (store._entries iterates
         # directories only), so a FILE sitting directly inside a kind directory is invisible to every
-        # listing in both front ends -- and an older build left such files in Artifacts/fdt.
+        # listing in both front ends -- and an older build left such files in a kind directory.
         # loose_files never descends, so an artifact's own payload cannot be reached from here.
         try:
             loose += [(kind, f) for f in store.loose_files(kind)]
@@ -452,7 +430,7 @@ def _sweep(args, store) -> int:
     if not cands and not loose and not legacy:
         # Each clause only where its read SUCCEEDED: the problems above say what was not read.
         # No legacy clause for a per-kind sweep at all: it never reads the store root, so it would
-        # be claiming what nobody checked -- and a `crossval/` may well sit there.
+        # be claiming what nobody checked -- and a legacy directory may well sit there.
         where = "a kind directory" if args.kind is None else f"the {args.kind} directory"
         said = [text for ok, text in (
             (read_dirs, "every directory here carries a manifest.json"),
@@ -561,7 +539,7 @@ def register(subparsers) -> dict:
     modes = p.add_subparsers(dest="mode", required=True,
                              metavar="{list,show,note,rm,sweep,summary}")
 
-    text = "one line per artifact of a kind, or, with no kind, of all nine under headings"
+    text = "one line per artifact of a kind, or, with no kind, of all eight under headings"
     ls = modes.add_parser("list", help=text, description=text)
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
     ls.set_defaults(handler=_list)
@@ -593,7 +571,7 @@ def register(subparsers) -> dict:
             "directories (a dry run until --yes)")
     sweep = modes.add_parser("sweep", help=text, description=text)
     sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
-                       help=f"{_KIND}; with no kind, all nine, and the legacy directory beside them")
+                       help=f"{_KIND}; with no kind, all eight, and the legacy directory beside them")
     sweep.add_argument("--yes", action="store_true",
                        help="actually remove them. Without it this is a DRY RUN: it prints exactly "
                             "what it would remove and removes nothing, which is the confirmation "

@@ -938,16 +938,6 @@ _DRAWN_FIGURES: dict = {
     "plot_psd_overlay, nothing finite": "0f3259c78c4187f6",
     "plot_cycle_average": "c549495d1076b0e3",
     "plot_training_loss": "2695bad252b76e82",
-    "plot_eff_temp_ratio": "12c9e81bbcd22e5d",
-    "plot_spontaneous_trajectory": "b8f3c318519c9754",
-    "plot_psd": "0780c351b338e84c",
-    "plot_chi_components": "56ad3b53ada40e13",
-    "FDT ratio across repeats": "c76a4a21722c902a",
-    "Sweep surfaces": "efcb50c9d30b7a0e",
-    "Sweep slice": "911994075a7ab1a7",
-    "plot_fdt_3d_vs_param": "753e7a3f5c7b0dbd",
-    "plot_sweep_summary": "c020e21966f75c9b",
-    "plot_cross_validation_3d": "8a10155901ca25c3",
     "Jacobian cosine matrix": "a556abf4f111a624",
     "Jacobian singular spectrum": "4eb4bc606a9a42d3",
     "Probe drive own-peak ratio": "97633d5b965d5090"
@@ -961,13 +951,6 @@ _MUST_SHOW = {
     "plot_posterior_vs_truth": ("Posterior 95% band", "Posterior samples", "Posterior median", "Posterior mean"),
     "plot_psd_overlay, nothing finite": ("no finite posterior-predictive PSD",),
     "plot_training_loss": ("training loss", "early-stop window"),
-    "plot_eff_temp_ratio": ("approx",),
-    "plot_spontaneous_trajectory": ("burn-in ends",),
-    "plot_psd": ("probe band", "approx"),
-    "plot_chi_components": ("approx",),
-    "FDT ratio across repeats": ("spread across the repeats", "mean of the repeats"),
-    "plot_fdt_3d_vs_param": ("Omega_0 = 1",),
-    "plot_cross_validation_3d": ("Hopf manifold",),
     "Probe drive own-peak ratio": ("free-running at or above", "captured at or below"),
 }
 
@@ -982,15 +965,10 @@ def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
 
     import matplotlib
     import numpy as np
-    import pandas as pd
     from matplotlib import pyplot as plt
 
-    from core.artifacts import ArtifactStore
     from core.diagnostics import identifiability, probes
-    from core.FDT import compare, cross_validation_plots, plots
     from core.Helpers import visualizers
-    from core.Reduction import plots as reduction_plots
-    from tests._fixtures import build_fdt_record
 
     drawn = {}
 
@@ -1026,51 +1004,6 @@ def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
             {"training_loss": [1.0, 0.7, 0.5, 0.45, 0.44], "validation_loss": [1.1, 0.8, 0.6, 0.62, 0.63],
              "stop_after_epochs": 2, "epochs_trained": 5, "best_validation_loss": 0.6}))
 
-        # core/FDT/plots.py: each saves through pyplot and then closes its figure, so the figure is
-        # taken at the save, and nothing is written; the path they are handed is in this test's own
-        # folder all the same, so a save by another way could not land in the working directory
-        caught = []
-        monkeypatch.setattr(plots.plt, "savefig", lambda *a, **k: caught.append(plots.plt.gcf()))
-        unwritten = tmp_path / "unwritten.png"
-        om = np.array([0.5, 1.0, 2.0, 4.0])
-        plots.plot_eff_temp_ratio(om, np.array([0.5, 1.0, -2.0, 3.0]), save_path=unwritten, omega_natural=1.0)
-        keep("plot_eff_temp_ratio", caught.pop())
-        plots.plot_spontaneous_trajectory(t, wave, save_path=unwritten, burn_in=0.25)
-        keep("plot_spontaneous_trajectory", caught.pop())
-        welch = np.linspace(0.0, 2.0 * np.pi, 9)
-        plots.plot_psd(welch, 1.0 / (1.0 + (welch - np.pi) ** 2), save_path=unwritten,
-                       omega_natural=np.pi, plot_band=(8.0, 30.0))
-        keep("plot_psd", caught.pop())
-        plots.plot_chi_components(om, np.array([1.0 + 0.5j, 0.5 - 0.2j, -0.3 + 0.1j, 0.1 + 0.4j]),
-                                  save_path=unwritten, omega_natural=1.0)
-        keep("plot_chi_components", caught.pop())
-
-        # core/FDT/compare.py, through the comparison's own entry, on records written in seconds
-        store = ArtifactStore(tmp_path / "artifacts")
-        repeats = [build_fdt_record(store, name=f"rep{i}", omegas=(1.0, 2.0, 4.0), ratio=r, seed=i)
-                   for i, r in enumerate([(1.0, 3.0, 1.0), (1.2, 5.0, 1.1), (0.8, 4.0, 0.9)])]
-        compare.compare("repeats", repeats, fig_sink=keep, store=store)
-        sweeps = [build_fdt_record(store, name=name, study="sweep", omegas=(0.5, 1.0, 2.0), sweep_param="s",
-                                   points=points)
-                  for name, points in (("s_low", [(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))]),
-                                       ("s_high", [(0.25, (1.0, 2.0, 1.0)), (0.75, (1.0, 6.0, 1.2))]))]
-        compare.compare("sweeps", sweeps, fig_sink=keep, store=store)
-
-        # the three that return nothing and leave their figure open: it is pyplot's current one
-        cross_validation_plots.plot_fdt_3d_vs_param(
-            [{"failed": False, "omega_norm": om, "param_value": v, "T_eff_over_T": v + 1.0 / om}
-             for v in (0.0, 0.5, 1.0)], r"$S$", "Sweep", None)
-        keep("plot_fdt_3d_vs_param", plt.gcf())
-        table = pd.DataFrame({"failed": [False] * 4, "f_max": [1.0, 2.0, 3.0, 4.0], "mu_N": [-0.2, -0.1, 0.1, 0.2],
-                              "Omega0_N": [1.0, 1.5, 2.0, 2.5], "alpha_H_N": [0.3, 0.2, -0.1, -0.2],
-                              "beta_H_N": [0.1, 0.0, -0.1, -0.2],
-                              "regime": ["subcritical", "subcritical", "supercritical", "supercritical"]})
-        reduction_plots.plot_sweep_summary(table, save=False)
-        keep("plot_sweep_summary", plt.gcf())
-        reduction_plots.plot_cross_validation_3d(
-            table, [{"f_max": f, "omega_grid": om, "T_eff_over_T": f + om} for f in (1.0, 2.0, 3.0, 4.0)], save=False)
-        keep("plot_cross_validation_3d", plt.gcf())
-
         # core/diagnostics: the two figure builders, called as their diagnostics call them
         J = np.array([[1.0, 0.2, 0.0], [0.5, 1.0, 0.1], [0.1, 0.3, 1.0], [0.9, 0.1, 0.4], [0.2, 0.8, 0.6], [0.3, 0.5, 0.7]])
         identifiability._summaries(SimpleNamespace(feat_labels=[f"feature {i}" for i in range(6)]), J, np.ones(6),
@@ -1078,13 +1011,11 @@ def test_what_each_plotting_function_draws_is_unchanged(tmp_path, monkeypatch):
                                    [1.0] * 3, 0.05, keep)
         probes._drive_figure(keep, [0.01, 0.1, 1.0], [0.9, None, 0.05], 0.70, 0.10)
 
-    assert len(drawn) == 22, sorted(drawn)
+    assert len(drawn) == 12, sorted(drawn)
     for name, words in _MUST_SHOW.items():
         shown = json.dumps(drawn[name])
         for word in words:
             assert word in shown, f"{name}: the call that draws {word!r} was not reached"
-    assert [len(a["patches"]) for a in drawn["plot_sweep_summary"]["axes"]] == [2, 2, 2, 2], \
-        "the reduction map's two shaded ranges were not both drawn"
     got = {name: _digest(record) for name, record in drawn.items()}
     (tmp_path / "drawn.json").write_text(json.dumps(drawn, indent=1, sort_keys=True), encoding="utf-8")
     assert got == _DRAWN_FIGURES, (
@@ -1137,8 +1068,7 @@ def test_every_plotting_function_draws_under_the_windows_figure_settings(tmp_pat
 _FIGURE_LIBRARY_WORDS = frozenset({"matplotlib", "pyplot", "plt", "mpl", "Figure", "savefig"})
 # The modules that build figures, the engine's own and the libraries' it draws with, each as a part of a
 # dotted path, so that an import reaches one by its full path, a relative one or its short name alike.
-_FIGURE_BUILDING_MODULES = ("visualizers", "FDT.plots", "cross_validation_plots", "Reduction.plots",
-                            "figure_window", "corner", "seaborn", "mpl_toolkits", "sbi.analysis")
+_FIGURE_BUILDING_MODULES = ("visualizers", "figure_window", "corner", "seaborn", "mpl_toolkits", "sbi.analysis")
 
 def _figure_library_names(tree) -> list:
     """``(line, word)``, in order, for every word of ``tree`` that names the figure library: ``matplotlib``,
@@ -1188,8 +1118,7 @@ def test_the_run_page_draws_with_no_figure_library():
     to draw. No module there names matplotlib, pyplot, plt, mpl, Figure, savefig or a name that begins
     FigureCanvas, in an import (a late one inside a function included), a name, an attribute or a string,
     its docstrings among them (they say "the figure library"). And none imports a module that builds
-    figures: the engine's plotting modules (core/Helpers/visualizers.py, core/FDT/plots.py,
-    core/FDT/cross_validation_plots.py, core/Reduction/plots.py), the window's pop-out figure window
+    figures: the engine's plotting module (core/Helpers/visualizers.py), the window's pop-out figure window
     (core/gui/widgets/figure_window.py), corner, seaborn, mpl_toolkits or sbi's analysis, by its full path,
     a relative one or its short name. Those are read on the imports only, so a sentence or a name there may
     still say "corner"; and the window's figure stack, which shows pictures, may be imported. What importing
@@ -1218,10 +1147,9 @@ def test_the_run_page_draws_with_no_figure_library():
         "from mpl_toolkits.mplot3d import Axes3D",                        # 17
         "from sbi import analysis",                                       # 18
         "from core.Helpers.visualizers import plt",                       # 19: the engine's, and its pyplot
-        "from ...FDT import plots, cross_validation_plots",               # 20: by a relative path
-        "import core.Reduction.plots",                                    # 21
-        "from ..widgets.figure_window import build_interactive_window",   # 22: the window's pop-out
-        "from . import visualizers",                                      # 23: by its short name
+        "from ...Helpers import visualizers",                             # 20: by a relative path
+        "from ..widgets.figure_window import build_interactive_window",   # 21: the window's pop-out
+        "from . import visualizers",                                      # 22: by its short name
         "from core.SBI import pipeline",                                  #    the engine: what it loads is not read
         "corner = self.rect().topRight()",                                #    a name, not an import
         '"""The two choices sit in the empty top-right corner."""',       #    a sentence
@@ -1231,9 +1159,8 @@ def test_the_run_page_draws_with_no_figure_library():
         (5, "pyplot"), (6, "pyplot"), (7, "matplotlib"), (7, "plt"), (7, "pyplot"), (10, "FigureCanvasBase"),
         (11, "Figure"), (11, "pyplot"), (12, "pyplot"), (13, "Figure"), (14, "matplotlib"), (14, "mpl"),
         (14, "plt"), (14, "savefig"), (15, "corner"), (16, "seaborn"), (17, "mpl_toolkits.mplot3d.Axes3D"),
-        (18, "sbi.analysis"), (19, "core.Helpers.visualizers.plt"), (19, "plt"),
-        (20, "...FDT.cross_validation_plots"), (20, "...FDT.plots"), (21, "core.Reduction.plots"),
-        (22, "..widgets.figure_window.build_interactive_window"), (23, ".visualizers")], _figure_library_names(snippet)
+        (18, "sbi.analysis"), (19, "core.Helpers.visualizers.plt"), (19, "plt"), (20, "...Helpers.visualizers"),
+        (21, "..widgets.figure_window.build_interactive_window"), (22, ".visualizers")], _figure_library_names(snippet)
 
     repo = Path(__file__).resolve().parents[1]
     package = repo / "core" / "gui" / "run"

@@ -1,6 +1,5 @@
-"""The SimConfig / FDTConfig data carriers, split out of config.py (which stays the constants
-module and re-exports both classes permanently -- ``from core.config import SimConfig`` keeps
-working everywhere).
+"""The SimConfig data carrier, split out of config.py (which stays the constants module and re-exports
+the class permanently -- ``from core.config import SimConfig`` keeps working everywhere).
 
 Every module-level constant is read as ``config.NAME`` -- a LIVE read, never a from-import
 snapshot -- so the chi default factories keep their read-at-construction semantics and a per-run
@@ -11,7 +10,7 @@ import os
 import math
 import warnings
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import cached_property
 
 import torch
@@ -585,111 +584,3 @@ class SimConfig:
             c.__dict__.pop(key, None)
         return copy.deepcopy(c)
 
-
-# === FDT CONFIG DATACLASS ===
-@dataclass
-class FDTConfig:
-    """
-    Carries all state needed to run the FDT analysis pipeline.
-    Parallel to SimConfig but minimal: no prior/posterior/inference plumbing.
-    """
-    # Shared with SimConfig (model identity + parsed cell file)
-    model: str
-    state_dep_drift: bool
-    inits_dict: OrderedDict           # {name: val}
-    params_dict: OrderedDict          # {name: (val, (lo, hi))}
-    rescale_params: OrderedDict       # {name: (val, (lo, hi))}
-    force_params_dict: OrderedDict    # {name: (val, (lo, hi))}
-    units_dict: tuple
-
-    # FDT-specific knobs (sensible defaults; overrideable in cli.make_fdt_config)
-    n_freqs: int = 60
-    # Multipliers of omega_0 for the Campaign-2 production grid.
-    # Asymmetric in log space by design: below = 1 decade, above = 1.5 decades
-    # (=> ~50% more drive frequencies above omega_0, to capture FDT recovery
-    # at the high-frequency end while still resolving the active band below).
-    freq_bounds: tuple = (0.1, 30.0)
-    ensemble_M: int = 256              # trajectories per Campaign-2 frequency
-    freqs_per_batch: int = 1           # frequencies packed per simulator call in Campaign 2
-    F0: float = 0.05                   # ND forcing amplitude (within linear regime)
-    burn_in_nd: float = 100.0
-    T_obs_periods: int = 30
-    dt_nd: float = 0.01
-    psd_T_obs_nd: float = 8000.0       # Campaign-1 steady-state duration
-
-    # Filled in by run_fdt after cfg is built (from params_dict["k"])
-    omega_0: float = None
-
-    # Hardware
-    hw: DeviceConfig = field(default_factory=detect_device)
-
-    # The files this config was built from, as paths, plus the model NAME:
-    # {"cell": ..., "bounds": ..., "units": ..., "model": ...}. Filled by cli.cell_sources in the two
-    # FDT builders (make_reduction_config leaves it empty); read by
-    # core.artifacts.provenance.inputs_from_cfg, so an fdt record names its cell, its RESOLVED
-    # bounds file and its units file by path AND content hash.
-    # Defaulted, like `seed`: the reduction map shares this dataclass and never sets it.
-    sources: dict = field(default_factory=dict)
-
-    # The seed the run used, drawn when none was supplied. None means "not chosen yet".
-    seed: "int | None" = None
-
-    # The sweep preset's NAME ("exploratory" | "production"), set by cli.make_param_sweep_config;
-    # None for a single-cell run and for the reduction map. The resolved dict alone does not say
-    # which preset it was, and body.settings["preset"] must. Defaulted, for the reduction map.
-    preset_name: "str | None" = None
-
-    # --- Derived ---
-    @property
-    def inits_tensor(self) -> torch.Tensor:
-        """(1, n_vars) tensor of initial conditions."""
-        return torch.tensor(list(self.inits_dict.values()),
-                            dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
-
-    @property
-    def params_tensor(self) -> torch.Tensor:
-        """(1, n_params) Nadrowski ND params."""
-        nd = [row[0] for row in self.params_dict.values()]
-        return torch.tensor(nd, dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
-
-    def params_for_M(self, M: int) -> torch.Tensor:
-        """Tile ND params to shape (M, n_params) for ensemble batching."""
-        return self.params_tensor.expand(M, -1).contiguous()
-
-    def inits_for_M(self, M: int) -> torch.Tensor:
-        """Tile initial conditions to shape (M, n_vars)."""
-        return self.inits_tensor.expand(M, -1).contiguous()
-
-    def with_overrides(self, **kwargs) -> "FDTConfig":
-        """
-        Return a shallow copy with overridden values.
-
-        Keys may be:
-          - ND parameter names from params_dict (overrides value, preserves bounds);
-            used by passive-baseline sanity check (temp=1.0, tau_c=0.0)
-          - any top-level FDTConfig field (n_freqs, F0, ensemble_M, ...)
-        """
-        nd_keys = set(self.params_dict.keys())
-        top_kwargs = {k: v for k, v in kwargs.items() if k not in nd_keys}
-        nd_kwargs = {k: v for k, v in kwargs.items() if k in nd_keys}
-
-        new_params = OrderedDict(self.params_dict)
-        for k, v in nd_kwargs.items():
-            _, bounds = new_params[k]
-            new_params[k] = (v, bounds)
-
-        return replace(self, params_dict=new_params, **top_kwargs)
-
-    def copy_for_run(self) -> "FDTConfig":
-        """A private deep copy for one run: what `core.runs.public_entry` hands a public entry in
-        place of the caller's config.
-
-        NOT optional, and not cosmetic: `public_entry` is duck-typed on this method (its wrapper
-        tests `if hasattr(kwargs["cfg"], "copy_for_run")`), so a config class without it gets the
-        run log and silently NO copy -- and run_fdt writes `cfg.omega_0` twice. A plain deep copy
-        suffices, unlike SimConfig's: this class carries no cached_property, so there is no
-        2.4M-point grid and no pint registry to pop off a shallow copy first (a test pins that it
-        still carries none). Everything a run writes on -- omega_0, seed, sources and
-        the four OrderedDicts through with_overrides -- is an independent equal object on the copy.
-        """
-        return copy.deepcopy(self)

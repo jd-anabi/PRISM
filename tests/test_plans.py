@@ -293,7 +293,7 @@ def _bytes(folder, data) -> Path:
     ("t_obs", "it is a pick, not a setting"), ("chi_f0_si", "it is a pick, not a setting"),
     ("recording_probe", "it is a pick, not a setting"), ("drive_amplitude", "it is a pick, not a setting"),
     ("model", "it is the folder the plan stands in"),
-    ("n_freqs", "it is not a setting of the inference steps"), ("plan", "it is not a setting of the inference steps"),
+    ("artifact", "it is not a setting of the inference steps"), ("plan", "it is not a setting of the inference steps"),
     # named like a recording's drive, but the drive check's own knob
     ("drive_t_obs", "it is not a setting of the inference steps"),
     ("drive_repeats", "it is not a setting of the inference steps"),
@@ -346,7 +346,7 @@ def test_every_registered_key_is_allowed_or_refused_for_a_stated_reason():
     assert {reason: len(keys) for reason, keys in reasons.items()} == {
         "it is fixed by measurement": 2, "it belongs to the computer": 1, "it belongs to one run": 4,
         "it is a consent": 4, "it is a pick, not a setting": 13, "it is the folder the plan stands in": 1,
-        "it is not a setting of the inference steps": 58}
+        "it is not a setting of the inference steps": 41}
     assert reasons["it is a pick, not a setting"] == {
         "prior", "posterior", "observation", "cell", "resume_fit", "t_obs", "chi_f0_si", "recording_spont",
         "recording_forced", "recording_probe", "drive_amplitude", "drive_frequency", "drive_phase"}

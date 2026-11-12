@@ -1,7 +1,7 @@
 """Single source of truth for plot/GUI variable-name symbols and unit annotations.
 
 Two audiences, two renderers:
-  * PLOTS (matplotlib) use true LaTeX mathtext ($...$) -- `axis_label` / `rescale_axis_label` / `SWEEP_LATEX`.
+  * PLOTS (matplotlib) use true LaTeX mathtext ($...$) -- `axis_label` / `rescale_axis_label`.
   * The Qt GUI cannot render LaTeX in a QLabel, so config-option labels use Qt rich text (Unicode Greek +
     <sub>/<sup>) -- `pretty_gui` / `gui_forcing_label`. Qt's AutoText auto-detects the HTML, and using no
     explicit color keeps it dark-mode safe (the label inherits palette text colour).
@@ -21,10 +21,6 @@ RESCALE_LATEX = {
 }
 _RESCALE_KIND = {"x_scale": "length", "x_offset": "length", "t_scale": "time",
                  "t_offset": "time", "f_scale": "force", "f_offset": "force"}
-
-# Full LaTeX (with $) for the FDT sweep parameters -- centralizes the literals in cross_validation.py.
-SWEEP_LATEX = {"s": r"$S$", "temp": r"$T_a/T$"}
-
 
 def axis_label(symbol_latex: str, unit: str | None = None) -> str:
     """A matplotlib axis label ``"$sym$ (unit)"`` -- or ``"$sym$ (ND)"`` for a dimensionless axis."""

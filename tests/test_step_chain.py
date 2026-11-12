@@ -97,7 +97,7 @@ record_words.record_label("simulation", "", None, prior_label="p")
 record_words.record_label("calibration", "", datetime(2026, 10, 3, 14, 2))
 record_words.record_label("prior", "p", None)
 made = held(created="2026-10-03T21:02:11+00:00")
-record_words.label_of(held(kind="fdt", name="", manifest=made, body={"study": "sweep"}))
+record_words.label_of(held(kind="diagnostic", name="", manifest=made, body={"variant": "laplace"}))
 record_words.label_of(held(kind="prior", name="", manifest=held(created="not a moment")))
 roots = sys.argv[1].split(",")
 bad = sorted(name for name in sys.modules if any(name == root or name.startswith(root + ".") for root in roots))
@@ -737,8 +737,8 @@ def test_the_rule_never_raises_on_what_a_session_may_hold():
     states = chain.step_states(odd, observation_on_offer=True)
     assert [states[n].detail for n in (0, 1, 2, 4)] == ["unnamed"] * 4, "a name that is not text was kept"
     made = SimpleNamespace(created=12345)
-    assert record_words.label_of(SimpleNamespace(kind="fdt", name="", manifest=made, body=["sweep"])) == (
-        "Unnamed effective-temperature measurement")
+    assert record_words.label_of(SimpleNamespace(kind="diagnostic", name="", manifest=made, body=["laplace"])) == (
+        "Unnamed check")
 
 
 def test_checks_is_in_hand_while_a_deciding_check_that_applies_is_open():
@@ -1088,9 +1088,7 @@ def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):
     assert record_words.record_label("calibration", "", at) == "Unnamed calibration, 3 Oct 2026, 14:02"
     assert record_words.record_label("calibration", "cal_7", at) == "cal_7"
     assert record_words.record_label("inference", "", None) == "Unnamed inference result"
-    assert record_words.record_label("fdt", "", at, study="sweep") == "Unnamed sweep, 3 Oct 2026, 14:02"
-    assert record_words.record_label("fdt", "", at) == (
-        "Unnamed effective-temperature measurement, 3 Oct 2026, 14:02")
+    assert record_words.record_label("diagnostic", "", at) == "Unnamed check, 3 Oct 2026, 14:02"
     assert record_words.record_label("simulation", "", at, prior_label="retrain_prior") == (
         "Simulation set for retrain_prior")
     assert record_words.record_label("simulation", "", at) == "Simulation set for a prior that is no longer here"
@@ -1101,10 +1099,9 @@ def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):
         w.body = {"results": {}}
     held = store.load_calibration(w.id)
     assert record_words.label_of(held) == "Unnamed calibration, 3 Oct 2026, 14:02"
-    with store.create("fdt", None, name="") as w:
-        w.body = {"study": "sweep", "settings": {}, "seed": 7, "grid": None, "points": None, "offgrid": None,
-                  "notices": [], "compared": None, "complete": True, "results": {}}
-    assert record_words.label_of(store.load_fdt(w.id)) == "Unnamed sweep, 3 Oct 2026, 14:02"
+    with store.create("diagnostic", None, name="") as w:
+        w.body = {"diagnostic": "identifiability", "variant": "laplace", "settings": {}, "results": {}}
+    assert record_words.label_of(store.load_diagnostic(w.id)) == "Unnamed check, 3 Oct 2026, 14:02"
     assert record_words.label_of(SimpleNamespace(kind="prior", name="retrain_prior", manifest=None)) == (
         "retrain_prior")
     assert record_words.label_of(object()) == "Unnamed record"
@@ -1125,19 +1122,16 @@ def test_a_record_is_called_by_its_name_or_by_its_kind_and_date(tmp_path):
 
 
 def test_each_store_kind_has_one_word():
-    """Every kind the store keeps has its one word and no two kinds share one; an effective-temperature record
-    takes the word of its study."""
+    """Every kind the store keeps has its one word and no two kinds share one; a kind it does not keep is a
+    record."""
     from core.artifacts.store import KIND_DIRS
     assert set(record_words.KIND_WORDS) == set(KIND_DIRS)
     assert len(set(record_words.KIND_WORDS.values())) == len(record_words.KIND_WORDS)
     assert record_words.KIND_WORDS == {
         "prior": "prior", "simulation": "simulation set", "posterior": "posterior", "observation": "observation",
         "calibration": "calibration", "inference": "inference result", "diagnostic": "check",
-        "fdt": "effective-temperature measurement", "fit": "unfinished training"}
-    assert [record_words.kind_word("fdt", study) for study in ("single", "sweep", "comparison", None)] == [
-        "effective-temperature measurement", "sweep", "comparison", "effective-temperature measurement"]
-    assert record_words.kind_word("prior", "sweep") == "prior"
-    assert record_words.kind_word("crossval") == "record"
+        "fit": "unfinished training"}
+    assert record_words.kind_word("fdt") == record_words.kind_word("crossval") == "record"
 
 
 # the main button of each step's page, by the step; a rebuilt page's is its foot's

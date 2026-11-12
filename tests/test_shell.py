@@ -75,7 +75,7 @@ def _records():
             RecordRow("diagnostic", "d1", "retrain_band", "check", at(2025, 3, 1, 15, 30)),
             RecordRow("simulation", "s1", "Simulation set for retrain_prior", "simulation set", at(2025, 3, 2, 18, 46)),
             RecordRow("posterior", "q1", "an_old_posterior", "posterior", at(2024, 1, 5, 9, 0)),
-            RecordRow("fdt", "f1", "sweep-s", "sweep", at(2025, 3, 3, 11, 2)),
+            RecordRow("inference", "i1", "infer_7", "inference result", at(2025, 3, 3, 11, 2)),
             RecordRow("calibration", "c1", "Unnamed calibration, 3 Mar 2025, 14:02", "calibration", None),
             RecordRow("observation", "o1", "cell_7", "observation", at(2025, 2, 20, 8, 5))]
 
@@ -273,7 +273,7 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(mo
     assert _cells(home.parts_table) == [[name, line] for name, line in PARTS]
     assert _titles(home.records_table) == ["Name", "Kind", "Made"]
     assert _cells(home.records_table) == [
-        ["sweep-s", "Sweep", "3 Mar 2025, 11:02"],
+        ["infer_7", "Inference result", "3 Mar 2025, 11:02"],
         ["Simulation set for retrain_prior", "Simulation set", "2 Mar 2025, 18:46"],
         ["retrain_band", "Check", "1 Mar 2025, 15:30"],
         ["retrain_prior", "Prior", "1 Mar 2025, 15:29"],
@@ -304,12 +304,12 @@ def test_home_mid_project_states_the_one_next_step_and_where_each_step_stands(mo
     assert _cells(home.steps_table)[1][2] == long_name, "a step's detail is not in full"
     assert len(laid) > 1 and widest <= view.columnWidth(2) and view.rowHeight(1) > view.rowHeight(0), (
         "a step's detail is cut where it is drawn", laid, widest, view.columnWidth(2))
-    measured = _home(_facts(_under_way(), [RecordRow("fdt", "f2", "cell7_fdt", "effective-temperature measurement",
+    measured = _home(_facts(_under_way(), [RecordRow("fit", "k2", "kept_round", "unfinished narrowing-round training",
                                                      datetime(2025, 3, 3, 11, 2, tzinfo=timezone.utc))]))
     _laid_out(measured)
     drawn = _drawn_lines(monkeypatch, measured.records_table)
     assert ([lines for lines, _widest in drawn], measured.records_table.view.rowHeight(0)) == (
-        [["Effective-temperature ", "measurement"]], 50), "a record's kind word is cut"
+        [["Unfinished narrowing-", "round training"]], 50), "a record's kind word is cut"
 
 
 def test_a_row_of_home_opens_its_place_on_a_click_enter_or_space():
@@ -501,9 +501,8 @@ def test_the_window_reads_for_home_its_session_its_run_and_every_record_of_the_s
             label = ("Simulation set for a prior that is no longer here" if kind == "simulation" else
                      record_words.record_label("fit", "", made) if kind == "fit" else f"browse_{kind}")
             assert (row.label, row.kind_word, row.made, row.made.utcoffset()) == (
-                label, record_words.kind_word(kind, summary.study), made, made.utcoffset())
+                label, record_words.kind_word(kind), made, made.utcoffset())
         assert rows[("simulation", held.id)].label == "Simulation set for browse_prior"
-        assert rows[("fdt", ids["fdt"])].kind_word == "sweep"
         assert not window.part("home").is_first_time()
         with running(window.part("inference").posterior_panel):
             live = window._home_facts()

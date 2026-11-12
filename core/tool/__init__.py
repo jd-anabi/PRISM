@@ -18,7 +18,7 @@ from pathlib import Path
 from core import logging_root
 from core.refusals import Refusal, require_note
 
-from . import browse, config_args, diagnostics, fdt, probes, smoke, stages
+from . import browse, config_args, diagnostics, probes, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
 from .logging_console import console_handlers
 from .fields import fix_sentence
@@ -29,8 +29,8 @@ environment -- the only variables PRISM reads; none stands in for a flag:
                           (default <repo>/Resources)
   PRISM_ARTIFACTS         the artifacts root (default <repo>/Artifacts). Every
                           subcommand writes here except smoke, which makes a
-                          fresh temporary root for each run; smoke, fdt and
-                          crossval also take --store-root, naming another root
+                          fresh temporary root for each run, or the one its
+                          --store-root names
   PRISM_VRAM_CEILING_GIB  GiB one simulation batch may plan to occupy
                           (0 = automatic); read afresh for every batch plan
   PRISM_MEM_LOG_EVERY     batches between memory log lines; read once, when the
@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="The PRISM command-line tool. The GUI is `python -m core.gui`.")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="<subcommand>")
     p.subcommands = {}
-    for module in (stages, diagnostics, probes, smoke, fdt, browse):
+    for module in (stages, diagnostics, probes, smoke, browse):
         p.subcommands.update(module.register(sub))
     return p
 
@@ -118,11 +118,10 @@ def main(argv=None) -> int:
     registry.load_user_models()                # idempotent; AFTER parsing, so --help stays torch-free
     # smoke is the one subcommand with its own root: a fresh store per run unless one is named, so
     # two runs never share a cache by accident and a named one can be resumed. Keyed on smoke's OWN
-    # PROPERTY, never on the FLAG's presence and never on the subcommand name: `fdt` and `crossval`
-    # take --store-root too, and all three of the behaviours below are wrong for them. An unnamed
-    # root must be the operator's PRISM_ARTIFACTS; `auto_root` must stay false, or a failed run would
-    # call rmdir on that real root; and _smoke_interrupt_advice reads args.prior/args.save, which
-    # neither of them has.
+    # PROPERTY, never on the FLAG's presence and never on the subcommand name, so that a subcommand
+    # that came to take --store-root would not inherit the behaviours below, all three wrong for it: an
+    # unnamed root must be the operator's PRISM_ARTIFACTS; `auto_root` must stay false, or a failed run
+    # would call rmdir on that real root; and _smoke_interrupt_advice reads args.prior/args.save.
     temp_store_root = bool(getattr(args, "temp_store_root", False))   # set by smoke's parser alone
     named_root = getattr(args, "store_root", None)
     auto_root = temp_store_root and not named_root             # True only for smoke's own mkdtemp
@@ -164,10 +163,9 @@ def main(argv=None) -> int:
         with use_store(ArtifactStore(root)) as store, console_handlers():
             rc = int(args.handler(args, store) or 0)
     except KeyboardInterrupt:
-        # fdt, crossval and compare (core/tool/fdt.py) and the probe checks (core/tool/probes.py) set
-        # their own `interrupt_note` through set_defaults -- they keep no cache and take no --resume,
-        # so the generic advice below (written for a checkpointed training cache) would be flatly
-        # wrong for them. Every other subcommand leaves interrupt_note unset, so getattr's default
+        # The probe checks (core/tool/probes.py) set their own `interrupt_note` through set_defaults
+        # -- they keep no cache and take no --resume, so the generic advice below (written for a
+        # checkpointed training cache) would be flatly wrong for them. Every other subcommand leaves interrupt_note unset, so getattr's default
         # keeps their message as is.
         note = getattr(args, "interrupt_note", None)
         if note is not None:

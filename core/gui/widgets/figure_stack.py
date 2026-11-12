@@ -280,9 +280,8 @@ class FigureStack(QTabWidget):
 
     def png_path(self, index: int) -> "str | None":
         """The file the tab at ``index`` shows when ``add_png`` opened it; None for a figure that
-        arrived as bytes (``add_figure``) and for an index with no tab. A saved-run viewer asks this so
-        a PNG the run's own watcher already put up is not opened a second time
-        (core/gui/panels/record_view.py)."""
+        arrived as bytes (``add_figure``) and for an index with no tab, so that a viewer of a saved
+        run need not open a second time a PNG the run's own watcher already put up."""
         return getattr(self.widget(index), "_png_path", None)
 
     def tabRemoved(self, index: int) -> None:

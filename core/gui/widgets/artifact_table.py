@@ -31,11 +31,6 @@ _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
     "calibration": (),
     "inference": (),
     "diagnostic": ("Variant",),
-    # An fdt record shows WHICH of the three studies it is, a sweep's operating points, and whether
-    # the run finished -- ``finished`` is a real question for this kind (an interrupted run keeps
-    # its folder, marked unfinished), which is why it has the cache's column and the other kinds
-    # do not.
-    "fdt": ("Study", "Points", "Finished"),
     # A kept training shows the posterior it is to write, the passes it holds and its state's word,
     # which says more than a Finished column could: whether a process is training it now, how it
     # stopped, and whether it can be resumed.
@@ -54,7 +49,7 @@ DEFAULT_SORT = (1, 1)
 # lives here, named by column title, rather than in a per-kind branch that the next numeric column
 # would have to remember to join. "Width" and "Passes" are here for the same reason: "100" sorts
 # before "50" as text, and "10" before "9".
-NUMERIC_COLUMNS: frozenset = frozenset({"Progress", "Points", "Width", "Passes"})
+NUMERIC_COLUMNS: frozenset = frozenset({"Progress", "Width", "Passes"})
 
 _LEADING_NUMBER = re.compile(r"^\s*(-?\d+(?:\.\d+)?)")
 
@@ -125,23 +120,6 @@ def _amortization(s) -> str:
     return "amortized" if s.amortized else "narrowed (TSNPE)"
 
 
-def _points(s) -> str:
-    """A sweep's operating points: ``"10/12"``, or ``"10/12 · 2 failed"`` when some failed.
-
-    Blank for a single run and for a comparison, which have no points at all -- ``points`` is null in
-    their bodies, so ``points_done`` is None and the cell says nothing rather than "0/0". A planned
-    total the manifest does not carry (a hand-edited body) falls back to the count alone rather than
-    printing "10/None", exactly as ``_progress`` does above.
-    """
-    if s.points_done is None:
-        return ""
-    head = (f"{int(s.points_done)}" if s.points_planned is None
-            else f"{int(s.points_done)}/{int(s.points_planned)}")
-    if not s.points_failed:
-        return head
-    return f"{head} · {int(s.points_failed)} failed"
-
-
 def cells_for(kind: str, s) -> tuple[str, ...]:
     """One row's cells in ``columns_for(kind)`` order, every one a string.
 
@@ -165,8 +143,6 @@ def cells_for(kind: str, s) -> tuple[str, ...]:
         middle = (s.mode or "", "" if s.width is None else str(s.width))
     elif kind == "diagnostic":
         middle = (s.variant or "",)
-    elif kind == "fdt":
-        middle = (s.study or "", _points(s), "yes" if s.finished else "no")
     elif kind == "fit":
         middle = (s.fit_for or "", "" if s.fit_passes is None else str(s.fit_passes), s.fit_state or "")
     return (s.label, s.created) + middle + (s.note or "",)

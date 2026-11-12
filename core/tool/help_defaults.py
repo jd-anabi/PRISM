@@ -14,8 +14,7 @@ Each flag that takes a value is in exactly one of three classes.
 
 WHY A PINNED LITERAL OUTRANKS THE REGISTRY. The registry's default is the one a refusal line prints,
 and a few of its keys are worded for another subcommand: the seed's reads "none: one is drawn and
-recorded", which is what the FDT analyses and validate do, while the diagnostics seed with 0; and
-the FDT resolution knobs' carry the sweep preset's clause, which reads wrongly on a single run. A literal
+recorded", which is what validate does, while the diagnostics seed with 0. A literal
 pinned here says what THIS subcommand does, and tests/test_tool.py checks each one against the
 signature or constant that owns it.
 
@@ -43,7 +42,7 @@ def _none(*flags) -> dict:
     return {f: (NONE, None) for f in flags}
 
 
-# the groups the shared flag helpers add (core/tool/config_args.py and the two analyses' helpers)
+# the groups the shared flag helpers add (core/tool/config_args.py)
 _CONFIG = {"--bounds": (NONE, None),                       # add_config_flags
            "--model": (BEHAVIOUR, "the bounds file's parent folder, upper-cased"),
            "--chi": (VALUE, "--no-chi"), "--chi-k": (VALUE, None), "--device": (VALUE, None)}
@@ -56,9 +55,6 @@ _RESUME = {"--resume": (VALUE, None)}
 _RESUME_FIT = {"--resume-fit": (BEHAVIOUR, "a new training")}            # train and tsnpe only
 _PROBE = {"--m": (VALUE, None), "--m-noise": (VALUE, None), "--rel": (VALUE, None),
           "--min-valid": (VALUE, "0.5"), "--seed": (VALUE, "0")}
-_FDT_KNOBS = {"--store-root": (BEHAVIOUR, "the artifacts root"), "--freqs-per-batch": (VALUE, None),
-              "--f0": (VALUE, None), "--seed": (VALUE, None)}
-_COMPARE = {**_none("--record"), **_NAMES}
 
 _PER_LEAF = {
     "prior": {**_CONFIG, **_NAMES,
@@ -118,15 +114,6 @@ _PER_LEAF = {
               **_value("--seed", "--stages", "--num-runs", "--run-size", "--n-cal", "--max-epochs",
                        "--hidden-features", "--num-transforms"),
               "--store-root": (BEHAVIOUR, "a fresh temporary directory, left on disk"), **_RESUME},
-    "fdt": {**_none("--cell"), "--model": (BEHAVIOUR, "the cell file's parent folder, upper-cased"),
-            **_NAMES, **_FDT_KNOBS, "--n-freqs": (VALUE, "60"), "--ensemble-m": (VALUE, "256")},
-    "crossval": {**_none("--cell", "--s-grid", "--t-grid"), **_value("--preset"), **_NAMES,
-                 **_FDT_KNOBS, "--n-freqs": (VALUE, "the preset's: exploratory 30, production 60"),
-                 "--ensemble-m": (VALUE, "256")},
-    "compare cells": {**_COMPARE},
-    "compare repeats": {**_COMPARE},
-    "compare renormalise": {**_COMPARE, **_none("--prefactor")},
-    "compare sweeps": {**_COMPARE, **_none("--at")},
     # the artifacts family names its kind and artifact positionally; only two modes take a value flag
     "artifacts list": {},
     "artifacts show": {},

@@ -1,12 +1,10 @@
-"""The one seeding context ``smoke``, every diagnostic, the FDT measurement and a seeded calibration
-run inside.
+"""The one seeding context ``smoke``, every diagnostic and a seeded calibration run inside.
 
 Here, at the top of ``core``, and not in ``core/diagnostics`` where it started: importing ANY
 submodule of a package runs the package's ``__init__``, and ``core/diagnostics/__init__.py`` imports
-the five diagnostics and through them ``core.orchestrator`` and sbi's inference modules. An FDT
-run needs none of that; under sbi 0.25, which also loaded ``pytensor``, it paid about two seconds and
-two false pytensor "g++" lines on stderr for it at the head of every ``python -m core fdt``. This
-module imports only
+the five diagnostics and through them ``core.orchestrator`` and sbi's inference modules, which a
+caller that only seeds a run needs none of: under sbi 0.25, which also loaded ``pytensor``, that cost
+about two seconds and two false pytensor "g++" lines on stderr. This module imports only
 ``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are imported when the context
 is entered, and numpy when ``calibration_seed`` is called. ``core.diagnostics.rng`` re-exports the
 same object, so every diagnostics import keeps working.
@@ -38,7 +36,7 @@ from core.refusals import describe, refuse, require_at_least
 
 #: The largest seed ``seeded`` can take: ``torch.manual_seed``'s documented ceiling,
 #: 0xffff_ffff_ffff_ffff. One above it raises "Overflow when unpacking long long", a bare ValueError,
-#: from inside the block -- that is, after an FDT run has opened its record.
+#: from inside the block -- that is, after a run has opened its record.
 SEED_MAX = 2 ** 64 - 1
 
 #: The fixed tag a calibration's stream is derived with: the ASCII bytes of "CAL".
@@ -57,8 +55,8 @@ def calibration_seed(seed: int) -> int:
 
 def require_seed(seed, *, key: str = "seed") -> int:
     """The one rule for a seed a run is handed: a whole number from 0 to ``SEED_MAX``, refused under
-    the field key ``key`` before anything is spent. Both FDT builders, the sweep study, each sweep, a
-    seeded calibration and the probe checks apply it, so none of them can disagree; ``--seed`` is
+    the field key ``key`` before anything is spent. A seeded calibration and the probe checks apply it,
+    so neither can disagree with the other; ``--seed`` is
     ``type=int`` and takes any integer. The key is ``seed`` for every caller but the probe checks,
     whose seed has its own key because its default is 0 rather than one drawn and recorded -- so the
     refusal states the default of the seed actually refused.
@@ -87,7 +85,7 @@ def seeded(seed: int, device):
                    CPU, and ``torch.manual_seed`` seeds the CPU and every CUDA device, so the fork is
                    what makes the restore complete. A CPU device forks no CUDA generator --
                    ``fork_rng(devices=[cpu])`` raises -- so it seeds the CPU generator ALONE: under
-                   ``torch.manual_seed`` a CPU run (every FDT run is one) left each card's generator
+                   ``torch.manual_seed`` a CPU run left each card's generator
                    pinned at its seed after the block, and two runs at one seed made the next CUDA
                    draws identical -- the hazard core/SBI/decorrelate.py documents.
     """

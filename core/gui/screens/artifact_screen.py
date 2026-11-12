@@ -46,9 +46,6 @@ KIND_LABELS = {
     "calibration": "Calibrations",
     "inference": "Inferences",
     "diagnostic": "Diagnostics",
-    # comparisons too: a comparison is a record of this kind, and both measurement panels send the
-    # operator here to find one
-    "fdt": "FDT measurements, sweeps and comparisons",
     "fit": "Unfinished trainings",
 }
 
@@ -89,18 +86,11 @@ def _stale_folder_note(actual: str, expected: str) -> str:
             f"nothing is lost -- only the folder name is out of date.")
 
 
-# An fdt body's ``study`` as ``_unfinished_note`` names it; its docstring says why a phrase.
-_STUDY_PHRASES = {"single": "single-cell measurement", "sweep": "sweep", "comparison": "comparison"}
-
-
 def _unfinished_note(s) -> str:
     """The one sentence that says what deleting an UNFINISHED record of this kind destroys.
 
-    THREE kinds can be unfinished, not one: a training cache, whose manifest exists from its first
-    batch because it is resumable, an fdt record, whose folder survives a cancel or a crash so
-    that what it measured is still readable, and a kept training, which holds the passes a fit has
-    made. The old form named the cache by hand and would have deleted a half-measured sweep behind a
-    prompt that said nothing about it.
+    TWO kinds can be unfinished: a training cache, whose manifest exists from its first batch because it
+    is resumable, and a kept training, which holds the passes a fit has made.
 
     A kept training names the pass it is kept after: deleting it loses those passes, and a new
     training starts from its first pass, while the simulation cache it trained on stays. One a
@@ -111,28 +101,6 @@ def _unfinished_note(s) -> str:
     The cache names its committed BATCHES and not its rows, deliberately: ``rows`` is written by
     ``mark_complete`` alone -- ``training_checkpoint.save`` passes none -- so every real mid-run
     cache has ``rows is None``, and a ``sum(())`` here would print a confident, false "0 rows".
-
-    An fdt record is described by what its study holds, because one sentence for all three was false
-    for some of them:
-
-    - a MEASUREMENT (a single-cell run or a sweep) names its operating points where it has them --
-      the done count alone when the planned total is not recorded, as the table's Points cell does,
-      never "4 of ?" -- and says there is no resume: unlike a cache, whose batches a later run
-      continues from, it is measured again from the beginning. Its figures and log are
-      "any it had written": a single-cell run cancelled during its spontaneous campaign has no
-      figure yet.
-    - a COMPARISON measures nothing -- it draws records already measured -- so deleting one loses no
-      measurement, and running it again redraws it (an interrupted one stays on disk and a re-run
-      writes a new one). "Measuring again from the start" would be false for it.
-
-    The study is named as a phrase, not as the body's bare word: "This single record" reads as "this
-    one record". A null or unrecognised study is a "measurement", which claims nothing it cannot back.
-
-    An fdt record still being WRITTEN -- by a run in another window or at a terminal -- looks exactly
-    like an interrupted one until it finishes, and nothing stops it being deleted (there is no
-    cross-process lock; ``_refuse_while_running`` sees only this process). A flat "the run was
-    interrupted or it failed" was false for it, and deleting on the strength of it killed the live
-    run, so every fdt branch says so and says what to do first.
     """
     if s.kind == "simulation":
         return (f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
@@ -148,23 +116,6 @@ def _unfinished_note(s) -> str:
         if s.fit_state == "running":
             text += " If it is still running, stop it first."
         return text
-    if s.kind == "fdt":
-        why = ("its run was interrupted or failed, or it is still being written by a run in another "
-               "window or at a terminal, which looks exactly the same until it finishes. If one is "
-               "still running, let it finish or stop it before deleting.")
-        if s.study == "comparison":
-            return (f"This comparison record is UNFINISHED: {why} It holds whatever it had drawn "
-                    "when it stopped. Deleting it loses nothing measured: running the comparison "
-                    "again redraws it from the records it compares.")
-        if s.points_done is None:
-            held = "whatever it had measured when it stopped"
-        elif s.points_planned is None:
-            held = f"{s.points_done} operating point(s)"
-        else:
-            held = f"{s.points_done} of {s.points_planned} operating point(s)"
-        return (f"This {_STUDY_PHRASES.get(s.study, 'measurement')} record is UNFINISHED: {why} "
-                f"It holds {held} and any figures and log it had written. There is no resume for "
-                "these runs -- deleting it means measuring again from the start.")
     return ("This record is UNFINISHED: its folder holds only what the run had written when it "
             "stopped.")
 
@@ -792,8 +743,8 @@ class ArtifactScreen(QWidget):
         ``loose`` is ``[(kind, LooseFile)]`` -- a FILE sitting directly inside a kind directory,
         which no artifact accounts for. ``_entries`` iterates directories only (store.py's
         ``for sub in ... if p.is_dir()``), so such a file is invisible to every listing and no front
-        end could see or clear one until the sweeps learned to (a run stamped 20260915_153042 once
-        left two in ``Artifacts/fdt``). ``loose_files`` reads the kind directory's own files and
+        end could see or clear one until the sweeps learned to (a run of an older build once left two
+        in a kind directory). ``loose_files`` reads the kind directory's own files and
         NEVER DESCENDS, so nothing inside a record's folder is reachable from here -- the same
         complement rule ``remove_incomplete`` has against ``delete``.
 

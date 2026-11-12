@@ -51,7 +51,7 @@ def sim_class(model: str):
             "User-defined models are simulated through registry.make_user_simulator, not this table.")
     return cls
 
-# Fraction of the available pool one simulation batch may plan to use. Higher than the FDT default
+# Fraction of the available pool one simulation batch may plan to use. Higher than config's default
 # (0.6) because the estimate below counts the major tensors explicitly rather than guessing, and
 # because splitting is EXPENSIVE here: the SDE solver is a sequential kernel-launch-bound time loop,
 # so a batch of 256 costs the same wall-clock as a batch of 2048 (measured: ~22 s either way at

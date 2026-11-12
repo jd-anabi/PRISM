@@ -6,24 +6,19 @@ left is pure: cell / bounds / units parsing, the unit conversion factors, and th
 builders that the GUI (``core/gui``) and the command-line tool (``core/tool``) each call with values
 they obtained their own way. The module keeps the name ``core.cli``.
 """
-import math
 from collections import OrderedDict
 from pathlib import Path
 
 import pint
 
 from core import config          # live-read config.CHI_MODE / CHI_N_FREQS (avoid import-time snapshot)
-from core import registry        # fdt_support, the FDT model gate; imports only config and torch
 from .config import (
-    SimConfig, FDTConfig, detect_device, cpu_device,
+    SimConfig, detect_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
     BOUNDS_PATH, UNITS_PATH,
 )
 from .Helpers import file_manager
-from .refusals import (Refusal, describe, missing_values_phrase, refuse, require_at_least,
-                       require_below, require_between, require_choice, require_file, require_finite,
-                       require_positive)
-from .rng import require_seed
+from .refusals import Refusal, missing_values_phrase, require_file
 
 
 class UnitParseError(Refusal):
@@ -103,7 +98,7 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
 # DERIVED from config.FORCING_SI_UNITS, the authoritative conversion table, so the two cannot drift.
 INFERENCE_PROMPT_UNITS = config.FORCING_DISPLAY_UNITS
 
-# ── Cell-file parsing (shared by the FDT/REDUCTION/CROSSVAL builders + the CrossVal panel) ───
+# ── Cell-file parsing ──────────────────────────────────────────────────────────────────────────
 def _merge_vals_bounds(vals: dict, bounds: OrderedDict,
                        label: str, cell_file: str) -> OrderedDict:
     """
@@ -160,7 +155,7 @@ def cell_sources(cell_file: str, model: str | None = None) -> dict:
     units file, and the model NAME. Beside :func:`parse_cell`, which keeps its 7-tuple.
 
     parse_cell resolves both paths and throws them away (``bounds_path`` and ``units_path`` are
-    local to it), so an FDT record had no way to say which box its parameter set came from. The two
+    local to it), so a record made from it had no way to say which box its parameter set came from. The two
     candidates resolve DIFFERENTLY -- a same-named sibling, else the folder's master.txt -- and only
     one of them governed the run.
 
@@ -181,9 +176,7 @@ def cell_sources(cell_file: str, model: str | None = None) -> dict:
 
 def parse_cell(cell_file: str, model: str | None = None):
     """
-    Parse a cell file into the 7-tuple used by the FDT/REDUCTION/CROSSVAL config builders
-    (``make_fdt_config``, ``make_reduction_config``, ``make_param_sweep_config``) and by the CrossVal
-    panel's prefill from the chosen cell, then run pint unit conversion.
+    Parse a cell file into the 7-tuple a configuration is built from, then run pint unit conversion.
 
     Cell files hold VALUES only (bounds + units are decoupled) and live in per-model subfolders:
     Resources/Cells/<model>/<cell>.txt. If a bounds file RESOLVES for the cell (see
@@ -246,9 +239,8 @@ def parse_cell(cell_file: str, model: str | None = None):
 def units_to_factors(units: tuple) -> tuple[list[float], float]:
     """
     From a set of unit strings compute (si_factors, s_to_cell). Standalone so `parse_cell` stays
-    byte-for-byte untouched (it is shared by the FDT/REDUCTION/CROSSVAL builders + the CrossVal
-    panel). Also called by ``make_sim_config``, and by the Config tab to refuse a typed unit token it
-    cannot resolve before a run starts.
+    byte-for-byte untouched. Also called by ``make_sim_config``, and by the Config tab to refuse a
+    typed unit token it cannot resolve before a run starts.
     """
     ureg = config.unit_registry()      # shared singleton: building one parses pint's full unit file
     try:
@@ -349,202 +341,3 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         sources={k: str(v) for k, v in (("bounds", bounds_file), ("units", units_path)) if v},
     )
 
-
-# ── Pure config core (FDT) ───────────────────────────────────────────────────
-def check_fdt_settings(cfg: FDTConfig) -> None:
-    """Refuse the five FDT settings neither front end exposes: the frequency band, the burn-in, the
-    two durations and the integration step.
-
-    They are parameters of neither builder -- they arrive from the dataclass defaults, from the
-    closed preset, or from ``with_overrides`` -- so a bad one is a hand-edited preset or a caller's
-    bug, not a mistyped control. They are registered in ``core.refusals.FIELDS`` like every key and
-    map to ``None`` in BOTH front-end tables: each refusal names the setting and offers no fix,
-    because there is no box and no flag to name.
-    """
-    require_positive("dt_nd", cfg.dt_nd)
-    require_positive("psd_t_obs_nd", cfg.psd_T_obs_nd)
-    require_positive("t_obs_periods", cfg.T_obs_periods)
-    # A zero burn-in is a well-defined setting, not a broken one, and a floor sits only where the
-    # computation would otherwise be undefined (a setting merely too thin to trust warns). Not the
-    # count rule, require_at_least: it coerces with int(), so -0.5 would pass as 0 and NaN would
-    # raise a bare ValueError. Finite first, so NaN and an infinity get that rule's own sentence; then
-    # the CLOSED half-line, which keeps 0 legal and reports a negative as it was given. Closed, not an
-    # open upper end (open_hi=True): require_between marks any open end "(exclusive)" without saying
-    # which, and beside a legal 0 that reads as though 0 were excluded.
-    require_between("burn_in_nd", require_finite("burn_in_nd", cfg.burn_in_nd), 0.0, math.inf)
-    lo, hi = cfg.freq_bounds
-    require_positive("freq_bounds", lo)
-    require_below("freq_bounds", lo, hi)
-
-
-def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
-                    n_freqs: int = 60, ensemble_M: int = 256, freqs_per_batch: int = 1,
-                    F0: float = 0.05, seed: "int | None" = None) -> FDTConfig:
-    """Build an FDTConfig (no prompts) from a model + cell file + FDT knobs. Shared by the command-line
-    tool (core/tool) and the GUI's FDT form.
-
-    The checks live HERE and not on FDTConfig and not in the screens, so both front ends
-    inherit one wording. The knobs, the cell and the model are checked before ``parse_cell``: every
-    one of those checks is free, and the four knobs are what a blank field turns into a zero -- 0
-    frequencies is an empty figure and exit 0, 0 trajectories is a ZeroDivisionError, 0 frequencies
-    per call is an unbounded loop that looks like a hang, and F0 = 0 divides by zero in the lock-in.
-    The five settings no front end exposes are not arguments here, so they are checked on the built
-    object, by :func:`check_fdt_settings`.
-    """
-    n_freqs = require_at_least("n_freqs", n_freqs, 1)
-    ensemble_M = require_at_least("ensemble_m", ensemble_M, 1)
-    freqs_per_batch = require_at_least("freqs_per_batch", freqs_per_batch, 1)
-    F0 = require_positive("f0", F0)
-    if seed is not None:
-        seed = require_seed(seed)
-    require_file("cell", cell_file, "cell")
-    ok, reason = registry.fdt_support(model)
-    if not ok:
-        # NOT require_choice: fdt_support is a predicate returning a tailored diagnostic sentence
-        # per model, not a list of choices, and that sentence is the useful half of the refusal.
-        refuse("model", reason)
-    (inits_dict, params_dict, rescale_params, force_params_dict,
-     units_dict, _, _) = parse_cell(cell_file, model=model)
-    cfg = FDTConfig(
-        model=model,
-        state_dep_drift=state_dep_drift,
-        inits_dict=inits_dict,
-        params_dict=params_dict,
-        rescale_params=rescale_params,
-        force_params_dict=force_params_dict,
-        units_dict=units_dict,
-        n_freqs=n_freqs,
-        ensemble_M=ensemble_M,
-        freqs_per_batch=freqs_per_batch,
-        F0=F0,
-        hw=cpu_device(),  # FDT: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
-        sources=cell_sources(cell_file, model),
-        seed=seed,
-    )
-    check_fdt_settings(cfg)
-    return cfg
-
-
-def make_reduction_config(cell_file: str, *, F0: float = 0.05) -> FDTConfig:
-    """Build a reduction-map FDTConfig (no prompts) from a cell file. Model is fixed to NADROWSKI
-    (the reduction is Nadrowski-specific). The GUI's Reduction form is its only caller -- there is no
-    reduction subcommand."""
-    (inits_dict, params_dict, rescale_params, force_params_dict,
-     units_dict, _, _) = parse_cell(cell_file, model="NADROWSKI")
-    return FDTConfig(
-        model="NADROWSKI",
-        state_dep_drift=True,
-        inits_dict=inits_dict,
-        params_dict=params_dict,
-        rescale_params=rescale_params,
-        force_params_dict=force_params_dict,
-        units_dict=units_dict,
-        F0=F0,
-        hw=detect_device(),
-    )
-
-
-# ── Sweep-study resolution presets ───────────────────────────────────────────
-# Drive the FDT resolution knobs for the parameter-sweep study. The exploratory
-# preset is a fast/coarse pass to confirm the FDT-restoration trend before a full
-# overnight run; production is the publication-quality resolution. The dominant
-# cost is Campaign 2's low-frequency drive points (cost ~ 1/omega), so the
-# exploratory preset raises freq_bounds[0] and trims n_freqs / T_obs_periods /
-# psd_T_obs_nd while keeping ensemble_M=256 so the trend stays clean above noise.
-# Public: the GUI's CrossVal panel builds its preset combo and knob defaults from this table.
-SWEEP_PRESETS = {
-    "exploratory": dict(freq_bounds=(0.2, 30.0), n_freqs=30, T_obs_periods=20,
-                        psd_T_obs_nd=4000.0, ensemble_M=256, points=8),
-    "production":  dict(freq_bounds=(0.1, 30.0), n_freqs=60, T_obs_periods=30,
-                        psd_T_obs_nd=8000.0, ensemble_M=256, points=12),
-}
-
-
-def _check_grid(key: str, spec: tuple) -> tuple:
-    """One sweep axis, ``(min, max, N)``, as ``np.linspace`` needs it: both ends finite, ``N`` a
-    whole number of at least 2, and the minimum below the maximum.
-
-    Checked as a WHOLE, because an end is only wrong against the other one. A blank box must
-    therefore arrive as None, never as 0: 0 is a legal sweep end, so a blank read as 0 under a
-    positive max passes "min below max" as a sweep nobody typed. The window's grid row reads its
-    boxes through value_or_none, so each blank part is refused here AS blank, naming which one --
-    its minimum, its maximum or its point count (a blank count used to read "needs at least 2
-    points; got 0", a zero nobody typed).
-    """
-    lo, hi, n = spec
-    what = describe(key)
-    what = what[0].upper() + what[1:]
-    for part, value in (("minimum", lo), ("maximum", hi), ("point count", n)):
-        if value is None:
-            refuse(key, f"{what} is incomplete: its {part} is blank.")
-    n = int(n)
-    if n < 2:
-        refuse(key, f"{what} needs at least 2 points; got {n}.")
-    lo, hi = require_below(key, lo, hi)
-    return lo, hi, n
-
-
-def make_param_sweep_config(cell_file: str, *, preset: dict, preset_name: str,
-                            s_spec: tuple, t_spec: tuple,
-                            n_freqs: int | None = None, ensemble_M: int | None = None,
-                            freqs_per_batch: int | None = None, F0: float | None = None,
-                            seed: "int | None" = None) -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
-    """Build (FDTConfig, s_grid, temp_grid) for the sweep study (no prompts). ``preset`` supplies the
-    advanced resolution levers (freq_bounds / T_obs_periods / psd_T_obs_nd); ``s_spec``/``t_spec`` are
-    (min, max, n_points). Model fixed to NADROWSKI. Shared by the command-line tool (core/tool) + the GUI.
-
-    ``preset_name`` is the name of the preset ``preset`` was resolved from. Both front ends pick the
-    preset from a closed list and then pass the resolved DICT, dropping the name -- and the record's
-    ``settings["preset"]`` has to hold the name, because the dict alone does not say which of the two
-    a reader is looking at.
-
-    Each unset knob falls back to the preset (or to FDTConfig's own default), here rather than at
-    each call site, so the window and the tool cannot fall back differently.
-    """
-    import numpy as np  # local import — keep top-of-file lean
-    require_choice("preset", preset_name, tuple(SWEEP_PRESETS))
-    n_freqs = require_at_least("n_freqs", preset["n_freqs"] if n_freqs is None else n_freqs, 1)
-    ensemble_M = require_at_least(
-        "ensemble_m", preset["ensemble_M"] if ensemble_M is None else ensemble_M, 1)
-    freqs_per_batch = require_at_least(
-        "freqs_per_batch", 1 if freqs_per_batch is None else freqs_per_batch, 1)
-    F0 = require_positive("f0", 0.05 if F0 is None else F0)
-    if seed is not None:
-        seed = require_seed(seed)
-    s_spec = _check_grid("s_grid", s_spec)
-    t_spec = _check_grid("t_grid", t_spec)
-    if t_spec[0] < 0:
-        # A negative T_a/T is unphysical, and it is the one known way a sweep point diverges -- the
-        # model takes a square root of it, which torch answers with NaN rather than an error. 0
-        # stays legal (no active noise is a meaningful operating point) and S has no floor; any other
-        # diverging point is a failed point in the sweep itself.
-        refuse("t_grid", f"The temperature sweep grid must not reach below 0: T_a/T is a ratio of two "
-                         f"temperatures, so a negative value is unphysical, and the simulation "
-                         f"diverges there; got a minimum of {t_spec[0]:g}.")
-    require_file("cell", cell_file, "cell")
-    (inits_dict, params_dict, rescale_params, force_params_dict,
-     units_dict, _, _) = parse_cell(cell_file, model="NADROWSKI")
-    s_grid = np.linspace(*s_spec)
-    temp_grid = np.linspace(*t_spec)
-    cfg = FDTConfig(
-        model="NADROWSKI",
-        state_dep_drift=True,
-        inits_dict=inits_dict,
-        params_dict=params_dict,
-        rescale_params=rescale_params,
-        force_params_dict=force_params_dict,
-        units_dict=units_dict,
-        n_freqs=n_freqs,
-        freq_bounds=preset["freq_bounds"],
-        ensemble_M=ensemble_M,
-        freqs_per_batch=freqs_per_batch,
-        F0=F0,
-        T_obs_periods=preset["T_obs_periods"],
-        psd_T_obs_nd=preset["psd_T_obs_nd"],
-        hw=cpu_device(),  # sweep: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
-        sources=cell_sources(cell_file, "NADROWSKI"),
-        seed=seed,
-        preset_name=preset_name,
-    )
-    check_fdt_settings(cfg)
-    return cfg, s_grid, temp_grid

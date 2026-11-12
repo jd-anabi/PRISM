@@ -946,9 +946,7 @@ def test_the_prompt_cli_is_retired():
     """Nothing under core/ asks a question at a terminal any more.
 
     A surviving input() is not cosmetic. On a GUI worker thread it blocks forever with no prompt
-    anyone can answer -- which is exactly what run_fdt's two ``None`` defaults meant, and why the
-    FDT panel had to remember to pass explicit booleans. Making them REQUIRED moves that from a
-    convention a caller can forget to a TypeError at the call site. The scan walks CODE_ROOTS and
+    anyone can answer. The scan walks CODE_ROOTS and
     CODE_FILES, the same set the other source scans walk -- core/, where every front end now lives
     (the GUI, and the command-line tool under core/tool), plus the top-level conftest.py.
     """
@@ -969,13 +967,6 @@ def test_the_prompt_cli_is_retired():
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "input":
                 offenders.append(f"{py.relative_to(repo)}:{node.lineno}")
     assert not offenders, "input() survives the prompt CLI's retirement:\n" + "\n".join(offenders)
-
-    from core.FDT.fdt_pipeline import run_fdt
-    params = inspect.signature(run_fdt).parameters
-    for name in ("skip_sanity", "confirm_production"):
-        p = params[name]
-        assert p.kind is inspect.Parameter.KEYWORD_ONLY, f"run_fdt's {name} is {p.kind}"
-        assert p.default is inspect.Parameter.empty, f"run_fdt's {name} still defaults to {p.default!r}"
 
     from core import orchestrator
     assert not hasattr(orchestrator, "run"), "orchestrator.run is still there"

@@ -46,13 +46,12 @@ class Refusal(ValueError):
 
 
 # The refusal's counterpart: what is judged rather than refused. It lives HERE, beside Refusal, and not
-# in core.orchestrator (which re-exports this same class), because the FDT path raises it too and
-# must not pay for the SBI stack to do so: importing the orchestrator for one class cost every
-# fdt/crossval tool run about two seconds (and, under sbi 0.25, two false pytensor warnings).
+# in core.orchestrator (which re-exports this same class), so that a module that raises it need not pay
+# for the SBI stack to do so: importing the orchestrator for one class costs about two seconds.
 class PreflightWarning(UserWarning):
     """A judgement reported before or instead of refusing: out-of-distribution truth, a truth outside a
     non-amortized posterior's region, T_obs outside the training range, an HPD tighter than recommended,
-    cell values the bounds ignore, an FDT setting too thin to trust."""
+    cell values the bounds ignore."""
 
 
 # The GUI routes warnings.showwarning to the log pane at WARNING severity (core/gui/streams.py,
@@ -135,43 +134,14 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     # the artifact browser: the artifact a browse action acts on, and its note
     Field("artifact", "the artifact", None),
     Field("note", "the note", None),
-    # comparing saved FDT records: which records a comparison was asked to draw, and the two settings
-    # a mode takes -- checked by the comparison BEFORE its record opens, which is why they are
-    # registered with it: the normalisation constant renormalise recomputes the ratio
-    # with, and the operating point sweeps slices both records at
-    Field("compare_records", "the saved runs to compare", None),
-    Field("prefactor", "the normalisation constant", None),
-    Field("slice_at", "the operating point to slice at", None),
     # a run plan (core/plans.py): the file to correct, and the three settings a plan holds that no stage's
     # rule names. None has a default: a plan's own sentences say what a setting left out means.
     Field("plan", "the plan", None),
     Field("chi_mode", "the kind of observation", None),
     Field("reparam_rotate", "the rotation", None),
     Field("expected_epochs", "the expected number of epochs", None),
-    # the two secondary analyses: the knobs both front ends expose. n_freqs and ensemble_m have two
-    # effective defaults, the dataclass's and the sweep preset's.
-    Field("n_freqs", "the number of drive frequencies", "60, or the preset's in a sweep"),        # FDTConfig.n_freqs
-    Field("ensemble_m", "the number of trajectories per frequency", "256, or the preset's in a sweep"),  # FDTConfig.ensemble_M
-    Field("freqs_per_batch", "the number of frequencies per simulator call", "1"),     # FDTConfig.freqs_per_batch
-    Field("f0", "the non-dimensional drive amplitude", "0.05"),                        # FDTConfig.F0
-    Field("preset", "the resolution preset", "exploratory"),                           # crossval --preset default
-    Field("s_grid", "the activity sweep grid", None),
-    Field("t_grid", "the temperature sweep grid", None),
+    # the random seed of a seeded calibration and of the command line's smoke run
     Field("seed", "the random seed", "none: one is drawn and recorded"),
-    # the five FDT settings NEITHER front end exposes. Registered like any other key, because every
-    # require_* rule builds its sentence through describe(key); both front-end tables map them to
-    # None, so a refusal names the setting and offers no fix -- there is nothing to name. The band
-    # and the two durations are also set by the sweep preset, so their defaults say so.
-    Field("freq_bounds", "the drive frequency band, in multiples of the resonance",
-          "0.1 to 30.0, or the preset's in a sweep"),                                   # FDTConfig.freq_bounds
-    Field("burn_in_nd", "the burn-in, in ND units", "100.0"),                         # FDTConfig.burn_in_nd
-    Field("t_obs_periods", "the drive window, in periods", "30, or the preset's in a sweep"),  # FDTConfig.T_obs_periods
-    Field("dt_nd", "the integration step, in ND units", "0.01"),                      # FDTConfig.dt_nd
-    Field("psd_t_obs_nd", "the spontaneous recording length, in ND units",
-          "8000.0, or the preset's in a sweep"),                                        # FDTConfig.psd_T_obs_nd
-    # the live simulation. Both were SILENT CLAMPS -- max(1, ...) -- before.
-    Field("frame_steps", "the number of simulation steps per displayed frame", "2000"),
-    Field("fps", "the maximum render frame rate, in frames per second", "30"),
     # the model builder. Window-only settings: core/tool/fields.py maps each to None.
     Field("param_value", "the parameter's value", None),
     Field("param_min", "the parameter's lower bound", None),

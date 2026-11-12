@@ -39,18 +39,11 @@ BASE_KEYS = (
     "name", "observation_name", "bounds", "cell", "units", "recording_spont", "recording_forced", "recording_probe",
     "drive_amplitude", "drive_frequency", "drive_phase", "chi_f0_si", "chi_n_freqs", "chi_k_pad",
     "chi_max_cycles", "chi_f0", "chi_freq_bounds", "device", "model", "observation", "posterior", "prior",
-    # the secondary analyses: the eight knobs the FDT and sweep screens and their two subcommands
-    # expose, then the five FDT settings neither front end exposes -- registered all the same.
-    "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset", "s_grid", "t_grid", "seed",
-    "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
+    # the random seed of a seeded calibration and of the command line's smoke run
+    "seed",
     "artifact", "note",
     # the model builder
     "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
-    # the live simulation
-    "frame_steps", "fps",
-    # comparing saved FDT records -- which records, and the two mode settings the comparison checks
-    # before its record opens
-    "compare_records", "prefactor", "slice_at",
     # a run plan: the file to correct, and the three settings a plan holds that no stage's rule names
     "plan", "chi_mode", "reparam_rotate", "expected_epochs",
 )
@@ -115,7 +108,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     reader and refuses an unknown key with a KeyError: a message can only be built for a field a
     front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 115, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 98, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -317,29 +310,31 @@ def test_require_between_honours_open_and_closed_ends_and_treats_nan_as_outside(
 
 
 def test_require_below_refuses_an_inverted_or_blank_pair_and_returns_two_floats():
-    """The sweep grids and the FDT frequency band are ORDERED PAIRS, and none of the existing eight
-    rules covers that shape: require_between judges one value against fixed bounds, and a pair whose
-    own two ends are the thing being judged has no bound to compare to. An inverted or degenerate
-    pair is not hypothetical: a typed (0.0, 0.0) would make np.linspace produce a sweep of one
-    repeated value rather than refuse. A BLANK end is another matter -- value() would read it as a
+    """A band's two ends are an ORDERED PAIR, and none of the existing eight rules covers that
+    shape: require_between judges one value against fixed bounds, and a pair whose own two ends are
+    the thing being judged has no bound to compare to. An inverted or degenerate pair is not
+    hypothetical: a typed (0.0, 0.0) would make np.linspace produce a grid of one repeated value
+    rather than refuse. A BLANK end is another matter -- value() would read it as a
     real 0, which passes here whenever the other end is above it -- so every caller reads its ends
     through value_or_none and a blank arrives as None.
 
     Both ends are refused blank and non-finite first, so the message never reads "0 and nan"; the
     pair comes back as floats, which is what the caller binds."""
-    assert require_below("s_grid", 0.0, 1.0) == (0.0, 1.0)
-    assert all(isinstance(v, float) for v in require_below("s_grid", 0, 1))
+    assert require_below("chi_freq_bounds", 0.0, 1.0) == (0.0, 1.0)
+    assert all(isinstance(v, float) for v in require_below("chi_freq_bounds", 0, 1))
     for lo, hi, shown in ((1.0, 0.0, "1 and 0"), (0.0, 0.0, "0 and 0"), (2.5, 2.5, "2.5 and 2.5")):
         with pytest.raises(Refusal) as e:
-            require_below("s_grid", lo, hi)
-        assert _shape(e.value, "s_grid") == (
-            f"The activity sweep grid must have its lower bound below its upper bound; got {shown}.")
+            require_below("chi_freq_bounds", lo, hi)
+        assert _shape(e.value, "chi_freq_bounds") == (
+            f"The chi frequency band (fixed by measurement) must have its lower bound below its upper bound; "
+            f"got {shown}.")
     with pytest.raises(Refusal) as e:
-        require_below("t_grid", None, 2.0)
-    assert _shape(e.value, "t_grid") == "The temperature sweep grid is blank."
+        require_below("chi_freq_bounds", None, 2.0)
+    assert _shape(e.value, "chi_freq_bounds") == "The chi frequency band (fixed by measurement) is blank."
     with pytest.raises(Refusal) as e:
-        require_below("t_grid", 1.0, float("nan"))
-    assert _shape(e.value, "t_grid") == "The temperature sweep grid must be a finite number; got nan."
+        require_below("chi_freq_bounds", 1.0, float("nan"))
+    assert _shape(e.value, "chi_freq_bounds") == (
+        "The chi frequency band (fixed by measurement) must be a finite number; got nan.")
 
 
 def test_require_finite_refuses_nan_and_inf_and_returns_a_float():
@@ -480,7 +475,7 @@ def test_the_module_is_torch_free_and_imports_only_the_standard_library():
     """The window runs the rules on the GUI thread at the click and the tool before any stage import,
     so ``core.refusals`` must cost nothing: no torch, no ``core.config`` (which imports torch). Two
     pins: the module's import statements name only the five standard-library modules it may use
-    (``warnings`` because PreflightWarning and its "always" filter live here, so the FDT path can
+    (``warnings`` because PreflightWarning and its "always" filter live here, so the store can
     raise one without the SBI stack), and a fresh interpreter that imports it has neither torch nor
     core.config loaded. The subprocess is the real pin -- in this process torch is long since
     imported by the session fixtures, so a sys.modules check here would pass vacuously."""
@@ -504,9 +499,8 @@ def test_every_registry_default_is_the_trees_own_default():
     config.py without pulling torch into the click path, so its defaults are literal strings; this is
     what keeps them honest. Every default that config.py owns is pinned as ``str(constant)`` -- the
     same spelling the message shows -- and every other default against the object whose signature
-    owns it: the truncation defaults, the stages' keyword defaults, the diagnostics' signatures, the
-    tool's ``--device`` and ``crossval --preset`` defaults, FDTConfig's own field defaults, and the
-    Simulate panel's two frame boxes as a built panel shows them. A constant retuned in config.py
+    owns it: the truncation defaults, the stages' keyword defaults, the diagnostics' signatures and the
+    tool's ``--device`` default. A constant retuned in config.py
     without this registry following it fails here, not in a message that names a default nobody set.
     The last assertion closes the set: no default exists that this test did not look at."""
     import argparse
@@ -583,41 +577,7 @@ def test_every_registry_default_is_the_trees_own_default():
     config_args.add_config_flags(p)
     assert FIELDS["device"].default == p.get_default("device") == "auto"
 
-    # The FDT knobs' defaults are FDTConfig's own -- make_fdt_config's keyword defaults equal them --
-    # and every key whose sweep value comes from the preset also says a sweep takes the preset's value
-    # (the band and the two durations as well as n_freqs / ensemble_m). Each preset is pinned to carry
-    # those keys, so the suffix cannot outlive the fact it states.
-    import dataclasses
-    from core import cli
-    from core.config import FDTConfig
-    from core.tool import build_parser
-    fdt = {f.name: f.default for f in dataclasses.fields(FDTConfig)}
-    owned_by_fdt_config = {"freqs_per_batch": "freqs_per_batch", "f0": "F0", "burn_in_nd": "burn_in_nd",
-                           "dt_nd": "dt_nd"}
-    for key, name in owned_by_fdt_config.items():
-        assert FIELDS[key].default == str(fdt[name]), (key, name, FIELDS[key].default)
-    set_by_the_preset = {"n_freqs": "n_freqs", "ensemble_m": "ensemble_M",
-                         "t_obs_periods": "T_obs_periods", "psd_t_obs_nd": "psd_T_obs_nd"}
-    for key, name in set_by_the_preset.items():
-        assert FIELDS[key].default == f"{fdt[name]}, or the preset's in a sweep", (key, FIELDS[key].default)
-    lo, hi = fdt["freq_bounds"]
-    assert FIELDS["freq_bounds"].default == f"{lo} to {hi}, or the preset's in a sweep", \
-        FIELDS["freq_bounds"].default
-    for preset_name, preset in cli.SWEEP_PRESETS.items():
-        assert {"freq_bounds", *set_by_the_preset.values()} <= set(preset), (preset_name, preset)
-    for name in ("n_freqs", "ensemble_M", "freqs_per_batch", "F0"):
-        assert _default(cli.make_fdt_config, name) == fdt[name], name
-    assert (FIELDS["preset"].default == build_parser().subcommands["crossval"].get_default("preset")
-            == next(iter(cli.SWEEP_PRESETS)))
-
-    # The live simulation's two frame settings had no constant and no signature default: its page's own boxes
-    # were constructed with them. The page is gone, and its two settings with it.
-    owned_by_the_simulate_panel = {"frame_steps": "2000", "fps": "30"}
-    for key, box_text in owned_by_the_simulate_panel.items():
-        assert FIELDS[key].default == box_text, (key, box_text, FIELDS[key].default)
-
-    looked_at = (set(owned_by_config) | set(owned_by_a_signature) | {"device"} | set(owned_by_fdt_config)
-                 | set(set_by_the_preset) | {"freq_bounds", "preset"} | set(owned_by_the_simulate_panel))
+    looked_at = set(owned_by_config) | set(owned_by_a_signature) | {"device"}
     rest = {k: f.default for k, f in FIELDS.items() if k not in looked_at}
     no_constant = {"t_obs": "none: it must be given", "seed": "none: one is drawn and recorded"}
     assert rest == {k: no_constant.get(k) for k in rest}, rest
@@ -1200,7 +1160,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     # false red in a file that has nothing to do with it.
     assert {"units", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds", "artifact"} <= \
         {k for k, f in tool_fields.FLAG.items() if f is None}
-    assert tool_fields.FLAG["s_grid"] == "--s-grid" and tool_fields.FLAG["seed"] == "--seed"
+    assert tool_fields.FLAG["seed"] == "--seed"
     assert tool_fields.FLAG["num_posterior_samples"] == "--posterior-samples"    # the tree's spelling
     assert tool_fields.FLAG["hpd_level"] == "--level" and tool_fields.FLAG["n_directions"] == "--directions"
     assert tool_fields.FLAG["recording_probe"] == tool_fields.FLAG["recording_forced"] == "--forced"
@@ -1227,13 +1187,9 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         "max_num_epochs": "--max-epochs", "fisher_m": "--fisher-m", "fisher_dz": "--fisher-dz",
         "fisher_points": "--fisher-points", "accept_truncated": "--accept-truncated",
         "accept_other_observation": "--accept-other-observation", "name": "--name", "observation_name": None,
-        "artifact": None, "note": "--note",
-        "compare_records": "--record", "prefactor": "--prefactor", "slice_at": "--at", "param_value": None,
+        "artifact": None, "note": "--note", "param_value": None,
         "param_min": None, "param_max": None, "init": None, "x_scale": None, "t_scale": None, "forcing_value": None,
-        "frame_steps": None, "fps": None, "n_freqs": "--n-freqs", "ensemble_m": "--ensemble-m",
-        "freqs_per_batch": "--freqs-per-batch", "f0": "--f0", "preset": "--preset", "s_grid": "--s-grid",
-        "t_grid": "--t-grid", "seed": "--seed", "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None,
-        "dt_nd": None, "psd_t_obs_nd": None, "bounds": "--bounds", "cell": "--cell", "units": None, "model": "--model",
+        "seed": "--seed", "bounds": "--bounds", "cell": "--cell", "units": None, "model": "--model",
         "device": "--device", "prior": "--prior", "posterior": "--posterior", "recording_spont": "--spont",
         "recording_forced": "--forced", "recording_probe": "--forced", "drive_amplitude": "--drive",
         "drive_frequency": "--drive", "drive_phase": "--drive", "chi_f0_si": "--f0-si", "chi_n_freqs": "--chi-k",
@@ -1302,9 +1258,9 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
 
 
 def test_every_domain_error_is_a_refusal_and_carries_a_field():
-    """The six errors the tree already raises for "something asked for that the program will not
-    do" -- a bad or taken name, a stale manifest, a unit pint cannot resolve, a cell FDT cannot
-    run, a model definition that does not parse, a flag combination argparse cannot express --
+    """The five errors the tree already raises for "something asked for that the program will not
+    do" -- a bad or taken name, a stale manifest, a unit pint cannot resolve, a model definition
+    that does not parse, a flag combination argparse cannot express --
     become Refusals, so ONE ladder on the tool and ONE routing in the window tell a refusal from a
     bug by TYPE instead of guessing from ValueError. Each keeps its
     class (every ``except StoreError`` in the tree still holds) and its docstring, and each takes
@@ -1316,11 +1272,10 @@ def test_every_domain_error_is_a_refusal_and_carries_a_field():
     from core.artifacts.manifest import ManifestError
     from core.artifacts.store import StoreError
     from core.cli import UnitParseError
-    from core.FDT.campaigns import FDTModelError
     from core.Models.user_model import ModelParseError
     from core.tool.config_args import UsageError
 
-    for cls in (StoreError, ManifestError, UnitParseError, FDTModelError, ModelParseError, UsageError):
+    for cls in (StoreError, ManifestError, UnitParseError, ModelParseError, UsageError):
         assert issubclass(cls, Refusal) and issubclass(cls, ValueError), cls.__name__
         e = cls("why", field="name")
         assert isinstance(e, Refusal) and str(e) == "why" and e.message == "why", cls.__name__

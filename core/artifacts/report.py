@@ -189,74 +189,12 @@ def _accepted(m) -> list:
     return [str(a) for a in (block.get("accepted") or [])]
 
 
-def _compared_lines(store, m) -> list:
-    """What a comparison DREW, resolved.
-
-    A comparison names its sources in the body and not in ``parents``: that block is a flat
-    ``{key: id}`` map read as ``m.parents.get(pk) == id_``, so it cannot carry an arbitrary number of
-    ids without widening the store's contract for every kind. The consequence is deliberate --
-    deleting a record a comparison used is NOT refused -- and these lines are what keep the
-    comparison honest about it, printing ``MISSING <kind> [<id>]`` in the wording the parents walk
-    above already uses.
-
-    Reads ``body["compared"]`` with ``.get``: every other kind's body has no such key, and a body
-    that has it null is a record of this kind that is not a comparison.
-
-    Any other shape than ``{"mode": ..., "records": [{"kind", "id", "name"}, ...]}`` prints a line
-    saying WHAT is unreadable. Only a hand-edited manifest or a writer bug gets
-    here, but both of ``render_lineage``'s promises still hold for it. Printing nothing would make the
-    comparison read as having drawn nothing. Iterating a string or a mapping would print a false
-    ``MISSING fdt []`` for every character or key. Letting a ``TypeError`` out would break "the one
-    refusal is the head ref", and the browser catches only a Refusal.
-    """
-    from .store import KIND_DIRS, StoreError
-    comp = m.body.get("compared") if isinstance(m.body, dict) else None
-    if comp is None:
-        return []
-    if not isinstance(comp, dict):
-        return [f"{INDENT}compared: UNREADABLE ({type(comp).__name__}, not a mapping of mode and records)"]
-    out = [f"{INDENT}compared ({comp.get('mode') or NONE}):"]
-    records = comp.get("records")
-    if not isinstance(records, list):
-        shown = "null" if records is None else type(records).__name__
-        out.append(f"{INDENT}{INDENT}UNREADABLE records ({shown}, not a list of entries)")
-        return out
-    for rec in records:
-        if not isinstance(rec, dict):
-            # Its repr, never {}: a bare id string is still an id, and the reader should see it.
-            out.append(f"{INDENT}{INDENT}UNREADABLE entry {rec!r} (not a mapping of kind, id and name)")
-            continue
-        # "fdt" is the default because a comparison of measurements is what this block exists for;
-        # a kind this build does not know is named rather than skipped, like an unknown parent key.
-        ck = str(rec.get("kind") or "fdt")
-        if ck not in KIND_DIRS:
-            out.append(f"{INDENT}{INDENT}(compared entry names kind {ck!r}, which is no artifact "
-                       f"kind this build knows)")
-            continue
-        if rec.get("id") in (None, ""):
-            # Not "MISSING fdt []": nothing was looked up, and the entry's repr keeps the name it gave.
-            out.append(f"{INDENT}{INDENT}UNREADABLE entry {rec!r} (names no id)")
-            continue
-        cid = str(rec["id"])
-        try:
-            cm = store.get(ck, cid)
-        except StoreError:
-            cm = None
-        if cm is None:
-            out.append(f"{INDENT}{INDENT}MISSING {ck} [{cid}]  -- no complete {ck} with that id "
-                       f"under {store.kind_dir(ck)}")
-        else:
-            out.append(f"{INDENT}{INDENT}{ck} {cm.name or '(unnamed)'} [{cm.id}]")
-    return out
-
-
 def render_lineage(store, kind: str, ref: str) -> str:
     """The artifact and its parents transitively, each artifact BEFORE its own parents, so every chain
     reads newest first and oldest last.
 
     Each step: the kind, the name, the id, the creation time, the input files with their hashes, the
-    knobs that decided it, any Accept it recorded, and -- for a comparison -- the records it drew
-    (``_compared_lines``), which are listed but not walked. A parent a manifest names but the store
+    knobs that decided it and any Accept it recorded. A parent a manifest names but the store
     does not hold prints as MISSING with its id and with who named it -- skipping it would make a
     broken chain read as a complete one, which is the one thing a provenance report must never do.
 
@@ -297,7 +235,6 @@ def render_lineage(store, kind: str, ref: str) -> str:
             out.append(f"{INDENT}accepted: {', '.join(acc)}")
         pairs = [(pk, m.parents[pk]) for pk in sorted(m.parents) if m.parents[pk]]
         out.append(f"{INDENT}parents: " + (", ".join(f"{pk}={pid}" for pk, pid in pairs) or NONE))
-        out += _compared_lines(store, m)
         for pk, pid in pairs:
             pkind = key_kind.get(pk)
             if pkind is None:

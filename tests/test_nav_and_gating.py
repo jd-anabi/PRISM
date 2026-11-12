@@ -1371,11 +1371,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
         "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window",
         "mask_num_runs", "mask_run_size", "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths",
-        "free_min", "captured_max", "drive_peak_window", "clarity_min",
-        # the effective temperature's and the live simulation's settings, whose pages the window no longer has
-        "compare_records", "prefactor", "slice_at", "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset",
-        "s_grid", "t_grid", "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd", "frame_steps",
-        "fps"}
+        "free_min", "captured_max", "drive_peak_window", "clarity_min"}
     assert gui_fields.CONTROL["resume_fit"] == "Look at the kept trainings in step 3, Training."
 
     # (e) the drive labels, as the Infer tab builds them
@@ -3380,17 +3376,15 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
 
 def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(monkeypatch):
     """``StorePicker`` skipped rows whose ``complete`` was false, and ``complete`` means "has a valid
-    manifest" -- NOT "the run finished" (store.Summary). For the six ordinary kinds the two coincide,
-    because ``ArtifactWriter._commit`` writes the manifest last. For the two kinds written
-    PROGRESSIVELY -- the training cache, and ``fdt`` -- they do not: a record carries a manifest from
-    its first moment, so the picker would have offered a run that is still going, or one a cancel
-    left half written, as if it were a result. It filters on ``finished`` instead, which is the same
-    answer for every kind that is not progressive.
+    manifest" -- NOT "the run finished" (store.Summary). For the kinds the writer writes the two coincide,
+    because ``ArtifactWriter._commit`` writes the manifest last. For a kind written as its run goes -- the
+    training cache -- they do not: a record carries a manifest from its first moment, so the picker would
+    have offered a run that is still going, or one a cancel left half written, as if it were a result. It
+    filters on ``finished`` instead, which is the same answer for every other kind.
 
-    And ``refresh`` listed every row of the kind with no hook, so the FDT and CrossVal screens could
-    not show only their own study out of the one ``fdt`` kind (both analyses and their comparisons
-    live in it). An optional row predicate is the whole addition -- no new widget, because every
-    fact the picker shows is already a ``Summary`` field.
+    An optional row predicate narrows the listing further, for a screen that would offer only some of a
+    kind's records (no page of the window passes one now) -- no new widget, because every fact the picker
+    shows is already a ``Summary`` field.
 
     The store is stubbed at the picker's one seam, ``_resolved_store``, as the picker tests already
     stub it; each row carries exactly the ``Summary`` fields ``refresh()`` reads and no more, so the
@@ -3402,40 +3396,37 @@ def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(mon
 
     qt_app()
 
-    def row(label, id_, *, complete=True, finished=True, study=None):
+    def row(label, id_, *, complete=True, finished=True, variant=None):
         return types.SimpleNamespace(complete=complete, finished=finished, label=label, id=id_,
                                      created="2026-09-22T09:00:00", mode=None, width=None,
-                                     amortized=None, study=study)
+                                     amortized=None, variant=variant)
 
-    rows = [row("done_single", "a", study="single"),
-            row("running_single", "b", finished=False, study="single"),
-            row("done_sweep", "c", study="sweep"),
+    rows = [row("done_one", "a", variant="one"),
+            row("running_one", "b", finished=False, variant="one"),
+            row("done_two", "c", variant="two"),
             row("no_manifest", "d", complete=False, finished=False)]
-    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
+    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "simulation" else [])
     monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
 
     # (a) unfiltered: the unfinished run and the manifest-less leftover are both absent
-    plain = StorePicker("fdt")
-    assert [plain.combo.itemText(i) for i in range(plain.combo.count())] == \
-        ["done_single", "done_sweep"]
+    plain = StorePicker("simulation")
+    assert [plain.combo.itemText(i) for i in range(plain.combo.count())] == ["done_one", "done_two"]
 
-    # (b) the predicate narrows it to one study, and is applied on top of the finished rule
-    single = StorePicker("fdt", row_filter=lambda s: s.study == "single")
-    assert [single.combo.itemText(i) for i in range(single.combo.count())] == ["done_single"]
-    sweep = StorePicker("fdt", row_filter=lambda s: s.study == "sweep")
-    assert [sweep.combo.itemText(i) for i in range(sweep.combo.count())] == ["done_sweep"]
+    # (b) the predicate narrows it, and is applied on top of the finished rule
+    one = StorePicker("simulation", row_filter=lambda s: s.variant == "one")
+    assert [one.combo.itemText(i) for i in range(one.combo.count())] == ["done_one"]
+    two = StorePicker("simulation", row_filter=lambda s: s.variant == "two")
+    assert [two.combo.itemText(i) for i in range(two.combo.count())] == ["done_two"]
 
     # (c) the predicate survives a refresh, which is how a screen sees a run that just finished
-    rows.append(row("second_single", "e", study="single"))
-    single.refresh()
-    assert [single.combo.itemText(i) for i in range(single.combo.count())] == \
-        ["done_single", "second_single"]
+    rows.append(row("second_one", "e", variant="one"))
+    one.refresh()
+    assert [one.combo.itemText(i) for i in range(one.combo.count())] == ["done_one", "second_one"]
 
-    # (d) the default is no predicate at all, so every existing caller is unchanged: the sentinel +
-    # the THREE finished rows, because (c) appended one. BOUND to a name: a temporary picker can be
-    # collected before .count() runs -- "Internal C++ object already deleted" in plain Python -- so
-    # the one-liner passed only because pytest's assertion rewrite held it
-    default = StorePicker("fdt", allow_new=True)
+    # (d) the default is no predicate at all: the sentinel + the THREE finished rows, because (c) appended
+    # one. BOUND to a name: a temporary picker can be collected before .count() runs -- "Internal C++ object
+    # already deleted" in plain Python -- so the one-liner passed only because pytest's assertion rewrite held it
+    default = StorePicker("simulation", allow_new=True)
     assert default.combo.count() == 4
 
 

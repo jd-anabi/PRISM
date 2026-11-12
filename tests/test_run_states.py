@@ -1550,14 +1550,14 @@ def test_a_refusal_before_anything_is_spent_is_no_run(tmp_path):
     from core.artifacts import ArtifactStore, use_store
     from core.refusals import Refusal
     from core.gui.run.model import IDLE
-    from tests._fixtures import asked, build_fdt_record, build_run_host, qt_app
+    from tests._fixtures import asked, build_run_host, qt_app, write_observation
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     text, stand_in = RunText(held), StandIn()
     with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
-        build_fdt_record(store)                          # made before the run starts: nothing of the run's
-        start_run(build_run_host(), stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "fdt")))
+        write_observation(store, None)                   # made before the run starts: nothing of the run's
+        start_run(build_run_host(), stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "observation")))
         assert sorted(path.name for path in (tmp_path / "runs").iterdir()) == [
             "20261008T190211-training.json", "20261008T190211-training.txt"]
         stand_in.say(_LINES["budget"])
@@ -1581,20 +1581,20 @@ def test_a_refusal_after_something_was_spent_ends_the_run_as_failed(spent, tmp_p
     from core.gui.fields import fix_sentence
     from core.gui.run import history
     from core.refusals import Refusal
-    from tests._fixtures import all_asked, build_fdt_record, build_run_host, qt_app
+    from tests._fixtures import all_asked, build_run_host, qt_app, write_observation
     from tests._runs import Clock, StandIn, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     stand_in, run, host = StandIn(), "20261008T190211-training", build_run_host()
     with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
-        start_run(host, stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "fdt")))
+        start_run(host, stand_in, spec=_training(kinds=("posterior", "simulation", "fit", "observation")))
         if spent == "the solver stepped":
             stand_in.solver(5)
         elif spent == "a later stage began":
             stand_in.say(_LINES["rotation_begins"])
             stand_in.say(_LINES["simulation_writing"])
         else:
-            build_fdt_record(store)
+            write_observation(store, None)
         stand_in.fail(Refusal("The read-back of the posterior was refused.", field="name"))
         turn_until(app, lambda: not held.is_live())
     assert (held.status.state, held.status.outcome, held.status.run) == ("ended", "failed", run), held.status

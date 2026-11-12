@@ -558,9 +558,9 @@ def test_the_row_that_drives_is_the_largest_non_degenerate_total():
 def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
     """close(leave=True) at pos 0 paints the final frame and then writes a bare '\\n' -- which is
     byte-identical to a moveto(+1). Assuming "moveto" leaves the finished bar live at 100% AND, because
-    it is `informative`, measuring the run at 100% while the pipeline is still working. Both real
-    leave=True bars (core/SBI/Priors/prior.py:88 "Constructing latent prior...",
-    core/FDT/campaigns.py:214 "Campaign 2") are pos 0, so this is the common case, not a corner."""
+    it is `informative`, measuring the run at 100% while the pipeline is still working. The real
+    leave=True bar (core/SBI/Priors/prior.py:88 "Constructing latent prior...") is pos 0, so this is
+    the common case, not a corner."""
     def bar_then_work():
         for _ in tqdm(range(5), desc="Constructing latent prior..."):
             pass

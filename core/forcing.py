@@ -48,7 +48,7 @@ def zero_force(batch: int, n_channels: int, n_steps: int, dtype, device) -> torc
     batch and once per Fisher evaluation, to hold nothing but zeros.
 
     ⚠ The result is a VIEW with a zero stride: it must never be written into. Every hand-built force
-    that IS written (FDT's ``campaigns``/``sanity`` cosine drives) builds its own real tensor and does
+    that IS written builds its own real tensor and does
     not come through here. Slicing (``[s:e]``, ``[:, :, a:b]``) is fine and stays expanded.
     """
     return torch.zeros((batch, n_channels, 1), dtype=dtype, device=device).expand(batch, n_channels, n_steps)

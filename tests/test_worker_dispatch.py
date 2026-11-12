@@ -131,7 +131,7 @@ def test_a_failed_run_does_not_pin_its_frames():
 # ── cancellation ─────────────────────────────────────────────────────────────────────────────────
 def test_worker_cancelled_passes_through_except_exception():
     """The cancel exception must be a BaseException so the pipeline's many `except Exception` handlers
-    (sbi, cross_validation, Worker.run itself) do not swallow it."""
+    (sbi's, Worker.run itself) do not swallow it."""
     from core.gui.streams import WorkerCancelled
 
     try:
@@ -1441,7 +1441,6 @@ def test_columns_for_names_all_seven_kinds_after_name_and_created():
     assert columns_for("calibration") == ("Name", "Created", "Note")
     assert columns_for("inference") == ("Name", "Created", "Note")
     assert columns_for("diagnostic") == ("Name", "Created", "Variant", "Note")
-    assert columns_for("fdt") == ("Name", "Created", "Study", "Points", "Finished", "Note")
     assert columns_for("fit") == ("Name", "Created", "For", "Passes", "State", "Note")
     for kind in KIND_DIRS:
         cols = columns_for(kind)
@@ -1478,7 +1477,7 @@ def test_cells_for_renders_each_kind_from_the_summary_alone():
 
 
 def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
-    """``Progress`` and ``Points`` are cells like "10/12 batches" and "9/12", and a text sort puts 10
+    """``Progress`` and ``Passes`` are cells like "10/12 batches" and "9", and a text sort puts 10
     before 9, so both columns sort by their number.
 
     The completeness rank still comes FIRST and still survives a descending sort (that is _Row's own
@@ -1489,25 +1488,25 @@ def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
     from tests._fixtures import qt_app
     qt_app()
 
-    assert cell_key("Points", "9/12") < cell_key("Points", "10/12"), "9 sorts before 10"
+    assert cell_key("Progress", "9/12 batches") < cell_key("Progress", "10/12 batches"), "9 sorts before 10"
     assert cell_key("Note", "10") < cell_key("Note", "9"), "... yes: text order, as today"
-    assert "Points" in NUMERIC_COLUMNS and "Progress" in NUMERIC_COLUMNS
+    assert "Progress" in NUMERIC_COLUMNS
     assert "Passes" in NUMERIC_COLUMNS and cell_key("Passes", "9") < cell_key("Passes", "10")
 
-    rows = [_row("fdt", id="s9", name="nine", points_done=9, points_planned=12, study="sweep"),
-            _row("fdt", id="s10", name="ten", points_done=10, points_planned=12, study="sweep"),
-            _row("fdt", id="s2", name="two", points_done=2, points_planned=12, study="sweep")]
+    rows = [_row("fit", id="s9", name="nine", fit_passes=9),
+            _row("fit", id="s10", name="ten", fit_passes=10),
+            _row("fit", id="s2", name="two", fit_passes=2)]
     table = ArtifactTable()
-    table.set_rows("fdt", rows)
-    col = list(columns_for("fdt")).index("Points")
+    table.set_rows("fit", rows)
+    col = list(columns_for("fit")).index("Passes")
 
     table.apply_sort_state(col, 0)
     got = [table.topLevelItem(i).text(col) for i in range(table.topLevelItemCount())]
-    assert got == ["2/12", "9/12", "10/12"], got
+    assert got == ["2", "9", "10"], got
 
     table.apply_sort_state(col, 1)
     got = [table.topLevelItem(i).text(col) for i in range(table.topLevelItemCount())]
-    assert got == ["10/12", "9/12", "2/12"], got
+    assert got == ["10", "9", "2"], got
 
 
 def test_a_caches_progress_and_whether_it_finished_come_apart():
@@ -1540,20 +1539,6 @@ def test_a_caches_progress_and_whether_it_finished_come_apart():
     assert cells_for("simulation", _row("simulation", finished=True))[3] == "yes"
     # a kind with no progress to report leaves the cell out entirely
     assert "Progress" not in columns_for("prior")
-
-
-def test_an_fdt_rows_points_are_a_sweeps_fraction_and_blank_for_anything_else():
-    """The Points cell is a SWEEP's operating points as a fraction, with the failures named when
-    there are any. A single run and a comparison carry no points (``body["points"]`` is null, so
-    ``points_done`` is None), and their cell is blank rather than "0/0", which would claim a fact.
-    Finished is ``finished``, never ``complete``, exactly as for a cache."""
-    sweep = _row("fdt", study="sweep", points_done=10, points_planned=12, points_failed=0)
-    assert cells_for("fdt", sweep)[2:5] == ("sweep", "10/12", "yes")
-    assert cells_for("fdt", _row("fdt", study="sweep", points_done=10, points_planned=12,
-                                 points_failed=2))[3] == "10/12 · 2 failed"
-    # a planned total the body does not carry: the count alone, not "10/None"
-    assert cells_for("fdt", _row("fdt", points_done=10, points_planned=None))[3] == "10"
-    assert cells_for("fdt", _row("fdt", study="single", finished=False))[2:5] == ("single", "", "no")
 
 
 def test_a_posteriors_amortization_is_spelled_out_and_the_norm_is_named_too():

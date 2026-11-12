@@ -2021,9 +2021,8 @@ def test_under_the_figure_settings_a_character_the_lettering_lacks_is_drawn_with
 
 
 # ── the plotting code's line colours ────────────────────────────────────────────────────────────
-_PLOTTING_FILES = ("core/Helpers/visualizers.py", "core/FDT/plots.py", "core/FDT/compare.py",
-                   "core/FDT/cross_validation_plots.py", "core/Reduction/plots.py",
-                   "core/diagnostics/identifiability.py", "core/diagnostics/probes.py")
+_PLOTTING_FILES = ("core/Helpers/visualizers.py", "core/diagnostics/identifiability.py",
+                   "core/diagnostics/probes.py")
 # the names those files once wrote out themselves: each is refused now, as every other string is
 _OLD_LINE_COLOURS = frozenset({"steelblue", "tab:blue", "red", "r", "crimson", "tab:red", "green",
                                "tab:green", "darkorange", "orange", "tab:orange", "gray"})
@@ -2038,9 +2037,9 @@ _COLOURS_THAT_STAY = {
     "none": "no edge round a marker, and no mesh lines on a surface",
 }
 _LINE_CALLS = frozenset({"plot", "semilogx", "semilogy", "loglog", "errorbar", "step", "stem"})
-# A line call's short format: markers and line styles, and of the colour letters the white one alone,
-# for that same white line over a colour map. Any other string handed over that way is refused.
-_LINE_FORMAT = re.compile(r"(?:w|--|-\.|[-:.,ov^<>1-48spP*hH+xXDd|_])*")
+# A line call's short format: markers and line styles, and no colour letter. Any other string handed over that way
+# is refused.
+_LINE_FORMAT = re.compile(r"(?:--|-\.|[-:.,ov^<>1-48spP*hH+xXDd|_])*")
 
 
 def _bound_values(tree) -> dict:
@@ -2183,10 +2182,10 @@ def test_the_plotting_colour_scan_catches_each_form_and_spares_what_stays():
             ("ax.plot(x, y, 'k-')", [(1, "k-")]),
             (f"ax.plot(x, y, '{by_number}-')", [(1, by_number + "-")]),
             ("ax.plot(x, y, 'green')", [(1, "green")]),
+            ("ax.plot(x, y, 'w-', lw=2)", [(1, "w-")]),
             ("ax.errorbar(x, y, fmt='go')", [(1, "go")])):
         assert found(source) == reported, source
     spared = ("ax.plot(x, y, 'o-', color=plot_colours.BLUE)\n"
-              "ax.plot(x, y, 'w-', lw=2)\n"
               "ax.text(0, 0, 'r', color='white' if dark else 'black')\n"
               "ax.axhline(0, color=plt.rcParams['axes.edgecolor'])\n"
               "ax.axvline(0, color=matplotlib.rcParams['text.color'])\n"
@@ -2205,10 +2204,10 @@ def test_the_plotting_colour_scan_catches_each_form_and_spares_what_stays():
 
 
 def test_no_plotting_file_names_a_line_colour_of_its_own():
-    """The scan reads the seven files of ``_PLOTTING_FILES`` and no other. In them, wherever a call
+    """The scan reads the three files of ``_PLOTTING_FILES`` and no other. In them, wherever a call
     can take a colour (a colour keyword, a colour setter, a line call's short format), nothing is
     written out but the exceptions the tree uses today, each named with its reason: the three
-    strings of ``_COLOURS_THAT_STAY`` and the white letter of a short format. Every other colour is
+    strings of ``_COLOURS_THAT_STAY``. Every other colour is
     a name of core/Helpers/plot_colours.py or a read of matplotlib's settings, so a figure saved
     from the command line and one saved from the window carry the same named ones; a line that
     names no colour takes matplotlib's cycle, and a colour map is named as before. Refused: any
@@ -2217,25 +2216,22 @@ def test_no_plotting_file_names_a_line_colour_of_its_own():
     name the file binds to one. Not seen: a colour that reaches the call through another call, an
     attribute of another module or a container filled elsewhere. An exception no file uses any more
     fails here too, so the list cannot outlive its reasons."""
-    left, in_use, white_format = [], set(), False
+    left, in_use = [], set()
     for rel in _PLOTTING_FILES:
         tree = ast.parse((REPO / rel).read_text(encoding="utf-8"))
         left += [f"{rel}:{line} {text!r}" for line, text in _own_colour_arguments(tree)]
         for node in ast.walk(tree):
             if isinstance(node, ast.keyword) and node.arg in _COLOUR_KEYWORDS:
                 in_use |= {part.value for part in ast.walk(node.value) if isinstance(part, ast.Constant)}
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _LINE_CALLS:
-                white_format |= any(isinstance(handed, ast.Constant) and isinstance(handed.value, str)
-                                    and "w" in handed.value for handed in node.args)
     assert left == [], (f"{len(left)} colour argument(s) still name a colour of their own; each "
                         f"takes its colour from core/Helpers/plot_colours.py:\n  " + "\n  ".join(left))
-    unused = sorted(set(_COLOURS_THAT_STAY) - in_use) + ([] if white_format else ["the white letter of a short format"])
+    unused = sorted(set(_COLOURS_THAT_STAY) - in_use)
     assert not unused, f"no plotting file writes these out any more, so they stop being exceptions: {unused}"
 
 
 def test_the_plotting_colours_module_imports_nothing_but_itself():
-    """The effective-temperature and reduction plotting files, and a comparison of saved runs, must
-    be able to import the colours with neither torch nor matplotlib behind them. RUN in a fresh
+    """A plotting file must be able to import the colours with neither torch nor matplotlib behind
+    them. RUN in a fresh
     interpreter: this process already holds both, so a look at its own modules would prove
     nothing. The module's own statements are read too: it holds four values and imports nothing."""
     probe = ("import sys\n"

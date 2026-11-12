@@ -15,9 +15,8 @@ imports this module in a fresh interpreter and asserts that torch is absent afte
 constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``,
 ``chi_freq_bounds``), ``artifact``, which the ``artifacts`` subcommand names POSITIONALLY
 (``artifacts show <kind> <ref>``) -- there is no flag to print, and the refusal's own sentence already
-quotes the ref -- the five FDT settings neither front end exposes (the frequency band, the
-burn-in, the two durations and the step), the model builder's seven numeric fields, which live on
-a window-only screen, the live simulation's two frame settings, on a window-only panel, the name of the
+quotes the ref -- the model builder's seven numeric fields, which live on a window-only screen, the
+name of the
 observation an inference makes (``observation_name``), which ``infer`` never gives, so its observation
 stays unnamed, and the four keys of a run plan (``plan``, ``chi_mode``, ``reparam_rotate``,
 ``expected_epochs``): the tool reads no plan, so none of them is ever a refusal of the tool's, whatever
@@ -71,29 +70,11 @@ FLAG: dict[str, str | None] = {
     # not a positional) precisely so this table can name one; the artifact itself is positional.
     "artifact": None,
     "note": "--note",                                   # add_name_flags defines it beside --name
-    # comparing saved records: `compare <mode> --record REF --record REF`, one flag per record, and
-    # the one setting each of two modes takes (renormalise's constant, sweeps' slice point)
-    "compare_records": "--record",
-    "prefactor": "--prefactor",
-    "slice_at": "--at",
     # the model builder: a window-only screen, so no option string answers any of these
     "param_value": None, "param_min": None, "param_max": None, "init": None,
     "x_scale": None, "t_scale": None, "forcing_value": None,
-    # the live simulation: a window-only panel; the tool has no streaming subcommand
-    "frame_steps": None, "fps": None,
-    # the two secondary analyses: `fdt` and `crossval` share the four resolution knobs, and the
-    # grids and the preset are the sweep's alone. --seed exists on smoke and the simulating
-    # diagnostics, and on these two as well.
-    "n_freqs": "--n-freqs",
-    "ensemble_m": "--ensemble-m",
-    "freqs_per_batch": "--freqs-per-batch",
-    "f0": "--f0",
-    "preset": "--preset",
-    "s_grid": "--s-grid",
-    "t_grid": "--t-grid",
+    # --seed: smoke's and the simulating diagnostics'
     "seed": "--seed",
-    # the five FDT settings neither front end exposes: no option string answers them
-    "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
     # inputs
     "bounds": "--bounds",
     "cell": "--cell",

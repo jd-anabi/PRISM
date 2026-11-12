@@ -632,7 +632,7 @@ def only_masked_probe_warnings():
 
 
 def build_browse_store(root):
-    """One artifact of each of the NINE kinds plus the three bad-directory shapes, in a store at
+    """One artifact of each of the EIGHT kinds plus the three bad-directory shapes, in a store at
     ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.
 
     SECONDS, not minutes -- the browser suite must not reach for ``tiny_run``, whose cost is why
@@ -685,14 +685,6 @@ def build_browse_store(root):
         "inference": {"results": {}},
         "diagnostic": {"diagnostic": "identifiability", "variant": "laplace",
                        "settings": {}, "results": {}},
-        # A FINISHED sweep, so the fdt row carries content in both of its own columns: a study name
-        # and a point fraction with a failure in it. ``complete`` True because the writer commits
-        # cleanly here; an UNFINISHED record is a different shape and the tests that need one build
-        # it themselves rather than making this fixture carry two.
-        "fdt": {"study": "sweep", "settings": {"n_freqs": 2, "preset": "fast"}, "seed": 7,
-                "grid": None, "points": {"param": "S", "planned": 3, "done": 2, "failed": 1},
-                "offgrid": {"blanks": 0, "of": 6}, "notices": [], "compared": None,
-                "complete": True, "results": {"peak_ratio": 2.0}},
     }
     ids = {}
     for kind, body in bodies.items():
@@ -717,81 +709,6 @@ def build_browse_store(root):
         encoding="utf-8")
     ids["bad"] = bad
     return ids
-
-
-class _FdtStop(Exception):
-    """Ends a record's write block where a cancel or a crash would, so ``build_fdt_record`` can leave
-    an UNFINISHED record on disk without pretending to fail inside the store."""
-
-
-def build_fdt_record(store, *, study="single", name="", note="", finished=True,
-                     omegas=(0.5, 1.0, 2.0, 4.0), ratio=(1.0, 3.0, 1.2, 1.05),
-                     omega_0=1.0, prefactor=2.0, settings=None, sweep_param="s", points=None,
-                     seed=7):
-    """One ``fdt`` record with a real manifest, a real ``data.h5`` and one figure, written in seconds.
-
-    ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file, builds a
-    SimConfig or simulates. The dataset names are ``cross_validation._fdt_measure``'s own vocabulary
-    (``omega_grid``, ``T_eff_over_T``), which is what the single-cell run writes and what
-    ``core.FDT.compare`` reads back. A ``study="sweep"`` record holds the sweep's layout instead: one
-    group per entry of ``points``, swept in ``sweep_param``, each on the ``omegas`` axis; with no
-    ``points`` it holds an empty group, a sweep in which no operating point finished.
-    ``finished=False`` leaves the record unfinished on disk with its numbers already written -- the
-    state the store keeps an interrupted record in, and the one a comparison refuses. ``seed`` is the
-    seed the body records: 7 unless a test gives each record its own, which a repeats comparison
-    reads -- records that share one are one run drawn twice.
-
-    The figure is drawn on a bare ``matplotlib.figure.Figure``, never through pyplot, so a fixture
-    that writes dozens of records leaves no open figure and touches no backend.
-
-    :returns: the record's id.
-    """
-    import h5py
-    import numpy as np
-    from matplotlib.figure import Figure
-    w = store.create("fdt", None, name=name, note=note)
-    w.body = {"study": study, "settings": dict(settings or {"n_freqs": len(omegas), "F0": 0.05}),
-              "seed": seed, "grid": None, "points": None, "offgrid": None, "notices": [],
-              "compared": None, "complete": False, "results": None}
-    try:
-        with w:
-            with h5py.File(w.payload("data.h5"), "w") as h5:
-                h5.attrs["study"] = study
-                h5.attrs["omega_0"] = float(omega_0)
-                h5.attrs["prefactor"] = float(prefactor)
-                if study == "sweep":
-                    # The layout load_param_sweep reads, which is what the sweep record holds: one
-                    # group per operating point, each with the shared omega/omega_0 axis and its own
-                    # ratio row. `points` is [(param_value, ratio-row), ...].
-                    h5.attrs["sweep_param"] = str(sweep_param)
-                    h5.attrs["omega_0_ref"] = float(omega_0)
-                    ops = h5.create_group("operating_points")
-                    for idx, (value, row) in enumerate(points or []):
-                        grp = ops.create_group(f"{idx:03d}")
-                        grp.attrs["param_value"] = float(value)
-                        grp.attrs["sweep_param"] = str(sweep_param)
-                        grp.attrs["omega_0_resonance"] = float(omega_0)
-                        grp.attrs["omega_0_ref"] = float(omega_0)
-                        grp.attrs["is_resonant"] = True
-                        grp.attrs["failed"] = False
-                        grp.create_dataset("omega_norm", data=np.asarray(omegas, dtype=np.float64))
-                        grp.create_dataset("omega_grid", data=np.asarray(omegas, dtype=np.float64))
-                        grp.create_dataset("T_eff_over_T", data=np.asarray(row, dtype=np.float64))
-                else:
-                    h5.create_dataset("omega_grid", data=np.asarray(omegas, dtype=np.float64))
-                    h5.create_dataset("T_eff_over_T", data=np.asarray(ratio, dtype=np.float64))
-            fig = Figure(figsize=(2, 2))
-            ax = fig.add_subplot()
-            # a sweep's rows, not `ratio`: a sweep is built on its own `omegas`, which need not be as
-            # long as the single-cell default ratio
-            for row in ([r for _v, r in points or []] if study == "sweep" else [ratio]):
-                ax.plot(omegas, row)
-            fig.savefig(w.figure_path("T_eff over T"), dpi=40)
-            if not finished:
-                raise _FdtStop("interrupted after the numbers were written")
-    except _FdtStop:
-        pass
-    return w.id
 
 
 # How a kept training's record says it was stopped, by ``build_fit_record``'s ``stopped``.
@@ -1356,72 +1273,6 @@ def check_results(check: str, **given) -> dict:
     if check not in _CHECK_BUILDERS:
         raise KeyError(f"{check}: no record of this check holds results to write")
     return _CHECK_BUILDERS[check](**given)
-
-
-def compare_preflight_refusals(store) -> list:
-    """Every refusal ``core.FDT.compare``'s per-mode PRE-FLIGHT makes, over records this writes into
-    ``store``, as ``(label, mode, refs, options, field, words)``: ``words`` is a fragment of the
-    refusal and ``field`` its key.
-
-    These are the refusals a comparison can only make once it has READ the records it was given --
-    whether their curves share a band, what constant a record holds, what a sweep swept and over what
-    range, where its slice falls -- and so, before the pre-flight, were made by the drawer inside the
-    comparison's already-open record. Shared by the API's and the tool's tests, so both drive the
-    same inputs. A "hollow" record is finished and has a data file that holds none of its study's
-    numbers."""
-    import h5py
-
-    def hollow(name, study):
-        w = store.create("fdt", None, name=name)
-        w.body = {"study": study, "settings": {}, "seed": 7, "grid": None, "points": None,
-                  "offgrid": None, "notices": [], "compared": None, "complete": False,
-                  "results": None}
-        with w:
-            with h5py.File(w.payload("data.h5"), "w") as h5:
-                h5.attrs["study"] = study
-        return w.id
-
-    om = (0.5, 1.0, 2.0)
-    a = build_fdt_record(store, name="pf_a")
-    far = build_fdt_record(store, name="pf_far", omegas=(100.0, 200.0), ratio=(1.0, 1.0))
-    single_hollow = hollow("pf_hollow", "single")
-    no_constant = build_fdt_record(store, name="pf_nan", prefactor=float("nan"))
-    zero_constant = build_fdt_record(store, name="pf_zero", prefactor=0.0)
-    sweep_hollow = hollow("pf_sweep_hollow", "sweep")
-    empty = build_fdt_record(store, name="pf_empty", study="sweep", omegas=om)
-    low = build_fdt_record(store, name="pf_low", study="sweep", omegas=om,
-                           points=[(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))])
-    high = build_fdt_record(store, name="pf_high", study="sweep", omegas=om,
-                            points=[(0.25, (1.0, 2.0, 1.0)), (0.75, (1.0, 6.0, 1.2))])
-    apart = build_fdt_record(store, name="pf_apart", study="sweep", omegas=om,
-                             points=[(2.0, (1.0, 2.0, 1.0)), (3.0, (1.0, 2.5, 1.0))])
-    temp = build_fdt_record(store, name="pf_temp", study="sweep", omegas=om, sweep_param="temp",
-                            points=[(1.0, (1.0, 2.0, 1.0)), (1.5, (1.0, 4.0, 1.1))])
-    off_band = build_fdt_record(store, name="pf_off_band", study="sweep", omegas=(10.0, 20.0, 40.0),
-                                points=[(0.25, (1.0, 2.0, 1.0)), (0.5, (1.0, 4.0, 1.1))])
-    return [
-        ("cells that share no band", "cells", [a, far], {}, "compare_records",
-         "must share a frequency band"),
-        ("repeats that share no band", "repeats", [a, far], {}, "compare_records",
-         "must share a frequency band"),
-        ("a data file without the curve", "cells", [a, single_hollow], {}, "compare_records",
-         "'pf_hollow' has no 'omega_grid'"),
-        ("no recorded constant", "renormalise", [no_constant], {"prefactor": 3.0},
-         "compare_records", "'pf_nan' does not"),
-        ("a recorded constant of zero", "renormalise", [zero_constant], {"prefactor": 3.0},
-         "compare_records", "'pf_zero' records 0"),
-        ("a sweep data file without its points", "sweeps", [sweep_hollow, low], {},
-         "compare_records", "'pf_sweep_hollow' has no 'operating_points'"),
-        ("no finished operating point", "sweeps", [empty, low], {}, "compare_records",
-         "'pf_empty' has none that finished"),
-        ("two swept parameters", "sweeps", [low, temp], {}, "compare_records",
-         "these sweep s, temp"),
-        ("no shared range", "sweeps", [low, apart], {}, "compare_records", "must overlap in s"),
-        ("a slice outside the shared range", "sweeps", [low, high], {"at": 9.0}, "slice_at",
-         "([0.25, 0.5] in s); got 9"),
-        ("slice rows that share no band", "sweeps", [low, off_band], {}, "compare_records",
-         "must share a frequency band"),
-    ]
 
 
 def card_and_programs(monkeypatch) -> list:

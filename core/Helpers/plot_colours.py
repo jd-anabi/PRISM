@@ -7,9 +7,8 @@ They are the light values of the second to fifth of the window's line colours
 first of those colours, the ink, is not held: a plotting function reads it from matplotlib's settings
 (``text.color``, ``axes.edgecolor``). A line that names no colour takes matplotlib's cycle.
 
-This module imports nothing. The effective-temperature and reduction plotting files do not import
-``core.Helpers.visualizers``, which imports torch, and a comparison of saved runs loads no inference
-machinery; each can import this file at no cost.
+This module imports nothing, so a plotting file that does not import ``core.Helpers.visualizers``, which
+imports torch, can import this one at no cost.
 """
 BLUE = "#0072B2"
 VERMILION = "#C24E00"

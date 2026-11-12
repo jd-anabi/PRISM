@@ -65,7 +65,7 @@ def add_config_flags(p, *, chi: bool = True, bounds_help: "str | None" = None) -
 
 def add_name_flags(p, *, name_help: "str | None" = None) -> None:
     """``--name`` and ``--note``. ``name_help`` replaces the name's help for a subcommand whose name
-    is not used as given -- ``crossval`` names its two records from it (the stem rule)."""
+    is not used as given (no subcommand passes one now)."""
     p.add_argument("--name", default="", metavar="NAME",
                    help=name_help or ("name the artifact this command writes ('' = unnamed). A taken "
                                       "name is refused at the stage's entry, before anything is spent."))
@@ -143,9 +143,8 @@ def add_resume_flags(p) -> None:
 
 def model_from_path(model, path) -> str:
     """``model``, else ``path``'s parent folder upper-cased (the ``<kind>/<model>/`` layout every
-    input folder shares -- ``Bounds/<model>/``, ``Cells/<model>/``). The one rule both ``model_for``
-    (over ``--bounds``) and ``core.tool.fdt.model_for_cell`` (over ``--cell``) apply to their own
-    path flag, written once so the two do not restate it."""
+    input folder shares -- ``Bounds/<model>/``, ``Cells/<model>/``). The rule ``model_for`` applies
+    to ``--bounds``, written once so that a second path flag would not restate it."""
     return str(model or Path(path).parent.name).upper()
 
 

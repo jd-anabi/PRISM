@@ -114,7 +114,7 @@ def psd(traces: torch.Tensor, dt: float, nperseg: int = None) -> tuple:
     Segment-averaged rather than a raw periodogram: a single-record periodogram has ~100% variance at
     every bin, which is far too jagged to compare against a band by eye (and the eye then reads noise
     spikes as structure). Averaging trades frequency resolution for a readable estimate -- the same
-    trade core/FDT/spectral.psd_welch makes.
+    trade the removed effective-temperature measurement's Welch estimate made.
 
     :return: (freqs, power) with power shape (B, nfreq).
     """

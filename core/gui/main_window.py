@@ -186,9 +186,8 @@ def _home_records(store) -> tuple:
                 prior_label = prior_label[:1].lower() + prior_label[1:]
             made = _local(summary.created)
             rows.append(RecordRow(kind, summary.id,
-                                  record_words.record_label(kind, summary.name, made, prior_label=prior_label,
-                                                            study=summary.study),
-                                  record_words.kind_word(kind, summary.study), made))
+                                  record_words.record_label(kind, summary.name, made, prior_label=prior_label),
+                                  record_words.kind_word(kind), made))
     return tuple(rows)
 
 

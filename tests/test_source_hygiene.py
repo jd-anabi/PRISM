@@ -60,14 +60,12 @@ TEST_NAME_PATTERN = re.compile(
 # The summary features' short ids, allowed only in the two files that define and compute them.
 FEATURE_IDS = frozenset(label.split("_", 1)[0] for label in FEATURE_LABELS)
 
-ALLOW_TOKENS = frozenset({"F0", "D0", "L2", "F1", "F6"})  # a force amplitude, a diffusion constant, a norm, two keys
+ALLOW_TOKENS = frozenset({"F0", "L2", "F1", "F6"})  # a force amplitude, a norm, two keys
 ALLOW_PER_FILE: dict[str, frozenset[str]] = {
     "core/SBI/statistics.py": FEATURE_IDS,
     "core/SBI/summaries.py": FEATURE_IDS,
-    "core/FDT/spectral.py": frozenset({"S" "2"}),  # scipy's name for the window's sum of squares
 }
 ALLOW_SHAPES: tuple[re.Pattern, ...] = (
-    re.compile(r"\bPhase [A-Z]\d\b"),               # the reduction map's phases
     re.compile(r"U\+[0-9A-F]{4}"),                  # Unicode code points
     re.compile(r"\bM[1-4](?: / M[1-4]){3}\b"),      # the Apple chips the README names
 )
@@ -276,8 +274,8 @@ def test_the_matchers_catch_each_family_and_spare_the_allowed_tokens(tmp_path):
         "appendix": ["an appendix to the paper", "Appendix of results"],
         _WALKTHROUGH: ["rows A to D", "walk through the steps"],
         "programme": ["a clean breakpoint", "the training programme"],
-        "id": ["the F0 amplitude, the L2 norm and D0", "A1_mean and D3_bimodality", "UTF-8, SHA-256, HDF5",
-               "V's columns, 0..K-1, B=64/T=20000", "Phase B1", "U+E000..U+E004", "M1 / M2 / M3 / M4"],
+        "id": ["the F0 amplitude and the L2 norm", "A1_mean and D3_bimodality", "UTF-8, SHA-256, HDF5",
+               "V's columns, 0..K-1, B=64/T=20000", "U+E000..U+E004", "M1 / M2 / M3 / M4"],
     }
     assert set(spare) == set(catch) == set(PROSE_PATTERNS)
     for family, samples in spare.items():
@@ -286,8 +284,6 @@ def test_the_matchers_catch_each_family_and_spare_the_allowed_tokens(tmp_path):
     feature = _u("the A·3 feature")
     assert _scan_text(feature, "core/SBI/statistics.py") == []
     assert [h.family for h in _scan_text(feature, "core/SBI/chi.py")] == ["id"]
-    assert _scan_text(_u("scipy's S·2"), "core/FDT/spectral.py") == []
-    assert [h.family for h in _scan_text(_u("scipy's S·2"), "core/FDT/plots.py")] == ["id"]
     # a lint directive is stripped; an explanation after it is still read
     lint = tmp_path / "lint.py"
     lint.write_text(_u("import os  # noqa: E·402, F·401 -- kept for Ta·sk 7\nimport re  # noqa: F·401\n"),
@@ -365,3 +361,110 @@ def test_a_failure_names_the_file_line_family_and_the_allowlist(tmp_path):
     for entry in ("tests/x.py:12", name, "'h" + "1'", "ALLOW_TEST_NAMES", "ALLOW_TEST_NAME_TOKENS",
                   "tests/test_source_hygiene.py"):
         assert entry in named, (entry, named)
+
+
+# ── what the program no longer has ────────────────────────────────────────────────────────────────
+# The effective temperature (its measurement, its sweep study and its comparisons), the reduction map and the live
+# simulation were taken out of PRISM, which infers a cell's parameters and does nothing else. No file the rule
+# covers imports one of their modules or names one of their modules or files, by its path or its dotted name: a
+# mention would send a reader to a file that is not there. Each name is assembled from adjacent literals, so this
+# module stays under its own scan. A plain word ("the effective temperature") is not what is hunted.
+REMOVED_MODULES = ("core." "FDT", "core." "Reduction", "core.Helpers." "fdt", "core.tool." "fdt",
+                   *(f"core.gui.panels.{name}" for name in ("fdt" "_panel", "crossval" "_panel", "reduction" "_panel",
+                                                            "simulate" "_panel", "simulate" "_runner",
+                                                            "simulate" "_export", "record" "_view")),
+                   "core.gui.screens." "temperature" "_screen", "core.gui.widgets." "compare" "_list",
+                   "core.gui.widgets." "live_hair" "_bundle")
+REMOVED_NAMES = ("core/" "FDT", "core." "FDT", "core/" "Reduction", "core." "Reduction", "Helpers/" "fdt",
+                 "Helpers." "fdt", "tool/" "fdt", "tool." "fdt", "fdt" "_pipeline", "cross" "_validation",
+                 "fdt" "_panel", "crossval" "_panel", "reduction" "_panel", "simulate" "_panel", "simulate" "_runner",
+                 "simulate" "_export", "record" "_view", "temperature" "_screen", "compare" "_list",
+                 "live_hair" "_bundle", "test_fdt" "_user", "test_fdt" "_compare", "test" "_simulate")
+_REMOVED_NAME = re.compile("|".join(rf"(?<!\w){re.escape(name)}(?!\w)" for name in REMOVED_NAMES))
+# The lines that name a removed module and stay as they are, each by its file and its exact words, with why.
+REMOVED_NAMES_KEPT = {
+    # the configuration's comments stay byte for byte, as every setting of the configuration does
+    ("core/config.py", "    Originally FDT-only (" "core/" "FDT/campaigns.py); lifted here because the SBI path "
+                       "needs the same"): "a comment of core/config.py, every line of which is kept as it was",
+    ("core/config.py", "# data-driven grid; see " "core/" "FDT/spectral.gen_freqs_log / find_spectral_peak). Each "
+                       "chi(omega_k)"): "a comment of core/config.py, every line of which is kept as it was",
+}
+
+
+def _removed_scan_files() -> list[Path]:
+    """Every file the reference rule covers but the reader pages and the README, whose words follow in a change of
+    their own."""
+    return [path for path in scanned_files()
+            if _rel(path) != "README.md" and not _rel(path).startswith(READER_DOCS_DIR + "/")]
+
+
+def _imports_of(path: Path, rel: "str | None" = None) -> list[tuple[int, str]]:
+    """``(line, module)`` for every module a Python file imports, relative imports resolved from the file's own
+    package (``rel``, its path from the repository, read off the file when not handed), and for
+    ``from <package> import <name>`` the module ``<package>.<name>`` as well."""
+    rel = _rel(path) if rel is None else rel
+    package = rel[:-3].replace("/", ".").split(".")
+    if package[-1] == "__init__":
+        package = package[:-1]
+    else:
+        package = package[:-1]
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            found += [(node.lineno, alias.name) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[:len(package) - node.level + 1] if node.level else []
+            module = ".".join([*base, *([node.module] if node.module else [])])
+            found.append((node.lineno, module))
+            found += [(node.lineno, f"{module}.{alias.name}") for alias in node.names]
+    return found
+
+
+def test_no_file_imports_or_names_a_module_the_program_no_longer_has():
+    """The modules of the effective temperature, the reduction map and the live simulation are gone from disk, no
+    file imports one of them, and no line of any file the rule covers names one of their modules or files by its
+    path or its dotted name, but the lines kept as they are, each listed with its reason."""
+    for module in REMOVED_MODULES:
+        where = _REPO / module.replace(".", "/")
+        assert not where.exists() and not where.with_suffix(".py").exists(), f"{module} is still on disk"
+    imported, named, kept = [], [], set()
+    for path in _removed_scan_files():
+        rel = _rel(path)
+        if path.suffix == ".py":
+            imported += [f"{rel}:{line} imports {module}" for line, module in _imports_of(path)
+                         if any(module == gone or module.startswith(gone + ".") for gone in REMOVED_MODULES)]
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not _REMOVED_NAME.search(line):
+                continue
+            if (rel, line) in REMOVED_NAMES_KEPT:
+                kept.add((rel, line))
+                continue
+            named.append(f"{rel}:{number} {_REMOVED_NAME.search(line).group()!r}")
+    assert imported == [], "a file imports a module the program no longer has:\n  " + "\n  ".join(imported)
+    assert named == [], ("a line names a module or file the program no longer has; say it in words, or list a line "
+                         "kept as it is in REMOVED_NAMES_KEPT with its reason:\n  " + "\n  ".join(named))
+    assert kept == set(REMOVED_NAMES_KEPT), f"entries that spare nothing -- delete them: {set(REMOVED_NAMES_KEPT) - kept}"
+
+
+def test_the_scan_of_removed_modules_catches_an_import_and_a_name_and_spares_a_plain_word(tmp_path):
+    """The scan's two halves are checked on a file of its own first, so that it cannot pass by reading nothing: an
+    import of a removed module, absolute, relative or through its package, and a name of one in a comment or a
+    string, are each caught; a plain word, a longer name that merely contains one, and a kept module are not."""
+    module = tmp_path / "core" / "gui" / "panels" / "inference" / "probe.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("\n".join([
+        "from core." "FDT import spectral",                    # 1: absolute
+        "from .. import " "fdt" "_panel",                       # 2: through its package, relative
+        "import core." "Reduction" ".sweep",                    # 3: a submodule
+        "from .base import _StagePanel",                        # 4: a kept module
+        "# the effective temperature's pages were taken out",   # 5: a plain word
+        "# see " "simulate" "_panel._save_video",               # 6: a name in a comment
+        "owned_by_the_" "simulate" "_panel = 1",                # 7: a longer name that contains one
+    ]), encoding="utf-8")
+    imports = _imports_of(module, rel="core/gui/panels/inference/probe.py")
+    caught = sorted({line for line, name in imports
+                     if any(name == gone or name.startswith(gone + ".") for gone in REMOVED_MODULES)})
+    assert caught == [1, 2, 3], imports
+    named = [n for n, line in enumerate(module.read_text(encoding="utf-8").splitlines(), 1)
+             if _REMOVED_NAME.search(line)]
+    assert named == [1, 2, 3, 6], named

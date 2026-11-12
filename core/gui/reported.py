@@ -16,10 +16,10 @@ and likewise a delegate's or an icon engine's ``paint`` and what a model answers
 to the hook, and answers with a fallback so that the drawing goes on.
 
 Not guarded is a drawing library's own code inside the main window, which this program cannot decorate:
-today what the live simulation's plotting widget (core/gui/widgets/live_hair_bundle.py) inherits from its
-library. An error raised there during a repaint is dropped in the same way, and reported only when no
-other method written in Python is entered after it. What this program itself writes in that class
-carries the guard like any other.
+what a widget drawn by such a library inherits from it, should the window hold one (it holds none today).
+An error raised there during a repaint is dropped in the same way, and reported only when no other method
+written in Python is entered after it. What this program itself writes in such a class carries the guard
+like any other.
 
 What is kept of an error is words and a count, never the error. An error keeps its traceback, the
 traceback the frames of the failing call, and a frame its locals: in a paint event that is the live

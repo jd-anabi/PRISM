@@ -38,7 +38,7 @@ from .config import (
 )
 from . import cli, config, forcing
 # PreflightWarning, the judgement channel, is defined in core.refusals (with its "always" filter) so
-# the FDT path can raise it without importing this module; ``orchestrator.PreflightWarning`` is that
+# a module can raise it without importing this one; ``orchestrator.PreflightWarning`` is that
 # same class, re-exported here for every caller and test that names it through this module.
 from .refusals import (PreflightWarning, Refusal, describe, require_at_least, require_between,
                        require_choice, require_file, require_positive)

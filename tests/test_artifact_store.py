@@ -207,14 +207,6 @@ def _bodies():
         "calibration": _cal_body(), "inference": {"results": {"n_samples": 5}},
         "diagnostic": {"diagnostic": "sbc", "variant": None, "settings": {"repeats": 2},
                        "results": {"n_valid": 8}},
-        # A finished single-cell measurement at its smallest: the five keys a run knows before it
-        # starts, the three a finished single run fills, and the two that are null for a single run
-        # (``points``) and for anything but a comparison (``compared``). ``complete`` is True
-        # because _make exits its writer cleanly, and the writer is what sets that flag.
-        "fdt": {"study": "single", "settings": {"n_freqs": 2, "ensemble_M": 8}, "seed": 11,
-                "grid": {"omega_0": 1.0, "n_freqs": 2}, "points": None, "offgrid": {"blanks": 0,
-                "of": 2}, "notices": [], "compared": None, "complete": True,
-                "results": {"ratio_at_resonance": 1.5}},
     }
 
 
@@ -229,65 +221,6 @@ def test_bodies_covers_every_writer_kind():
         "a kind in BODY_KEYS with no body here is silently never written by any test"
     for kind, body in _bodies().items():
         assert set(body) == set(mf.BODY_KEYS[kind]), kind
-
-
-def test_load_fdt_verifies_the_payload_hash_and_nothing_else(store):
-    """An fdt record is a MEASUREMENT of a cell, not a constraint on a later run, so there is no
-    configuration it has to match and nothing is ever trained from it -- ``load_diagnostic`` is the
-    precedent. What it DOES check is the one thing the manifest can be checked against: the payload's
-    own sha256, so a data.h5 edited, truncated or deleted since the commit is refused rather than read
-    as the numbers the record claims.
-
-    A NULL recorded hash is not a mismatch. A progressive record hashes its payloads at the final
-    commit only, so an unfinished record lists data.h5 with a null hash and must still load --
-    reading what an interrupted run managed to write is the whole point of keeping its folder.
-    """
-    from core.artifacts import LoadedFdt
-    # "measured" never wrote numbers: _make gives it results.json and nothing else.
-    _make(store, "fdt", name="measured", body=_bodies()["fdt"])
-    # "measured2" did. A payload is registered on the WRITER, so it is written inside the with.
-    with store.create("fdt", None, name="measured2") as w2:
-        w2.body = _bodies()["fdt"]
-        w2.payload("data.h5").write_bytes(b"\x89HDF\r\n\x1a\n" + b"0" * 64)
-
-    loaded = store.load_fdt("measured2")
-    assert isinstance(loaded, LoadedFdt) and loaded.kind == "fdt" and loaded.id == w2.id
-    assert loaded.body["study"] == "single" and loaded.body["seed"] == 11
-    assert loaded.data_path == w2.dir / "data.h5" and loaded.data_path.is_file()
-    assert loaded.manifest.payloads["data.h5"] == prov.sha256_file(w2.dir / "data.h5")
-
-    # a record that never wrote numbers: no data.h5, and the loader says so rather than pointing at
-    # a path that is not there
-    assert store.load_fdt("measured").data_path is None
-
-    # a null recorded hash (an unfinished record) loads
-    mpath = w2.dir / st.MANIFEST
-    d = json.loads(mpath.read_text(encoding="utf-8"))
-    d["payloads"]["data.h5"] = None
-    mpath.write_text(json.dumps(d), encoding="utf-8")
-    assert store.load_fdt("measured2").data_path is not None, "a null hash is 'not yet', not 'wrong'"
-
-    # a payload edited since the commit IS refused
-    d["payloads"]["data.h5"] = "0" * 64
-    mpath.write_text(json.dumps(d), encoding="utf-8")
-    with pytest.raises(st.StoreError, match="data.h5") as edited:
-        store.load_fdt("measured2")
-    assert edited.value.field == "artifact"
-
-    # ... and so is one DELETED since the commit. A recorded hash is a claim the loader
-    # can check, and a file that is gone fails it; skipping it and answering data_path=None would
-    # pass a finished record off as one that never wrote numbers. Only a NULL hash means "not yet".
-    with store.create("fdt", None, name="measured3") as w3:
-        w3.body = _bodies()["fdt"]
-        w3.payload("data.h5").write_bytes(b"\x89HDF\r\n\x1a\n" + b"1" * 64)
-    (w3.dir / "data.h5").unlink()
-    with pytest.raises(st.StoreError, match="data.h5") as gone:
-        store.load_fdt("measured3")
-    assert gone.value.field == "artifact"
-
-    with pytest.raises(st.StoreError, match="no complete fdt") as nosuch:
-        store.load_fdt("nosuch")
-    assert nosuch.value.field == "artifact"
 
 
 def _make(store, kind="calibration", name="", body=None, parents=None, note=""):
@@ -330,22 +263,18 @@ ORDINARY_KINDS = ("prior", "posterior", "observation", "calibration", "inference
 
 
 def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
-    """The progressive mode touches ``ArtifactWriter``, which every kind uses, and a delete that
-    destroyed a finished artifact has been caught in this store before -- so the six ordinary kinds'
-    remove-on-exception is pinned HERE, and this test is what says the mode changed nothing for them.
+    """Every kind the writer writes removes its directory on a failure: a delete that destroyed a finished
+    artifact has been caught in this store before, so the six kinds' remove-on-exception is pinned HERE.
 
     Three exception shapes, because they arrive through the same ``__exit__``: a plain Exception, a
     BaseException (the shape of gui.streams.WorkerCancelled, which is what a Cancel click raises), and
-    a ``Refusal`` -- the one class the progressive branch singles out. Each is raised both after a
-    payload and with NOTHING written, which is exactly the condition that branch keys on: an ordinary
-    kind must remove its directory whichever way that test would come out, so neither "nothing was
-    written" nor "it was a refusal" can be what decides.
+    a ``Refusal``. Each is raised both after a payload and with NOTHING written: a kind must remove its
+    directory whichever way, so neither "nothing was written" nor "it was a refusal" can be what decides.
     """
     class _Cancel(BaseException):
         pass
 
-    assert set(ORDINARY_KINDS) == set(_bodies()) - {"fdt"}, \
-        "a kind added to _bodies must be classified here: progressive, or removed on failure"
+    assert set(ORDINARY_KINDS) == set(_bodies()), "a kind added to _bodies must be classified here"
 
     for kind in ORDINARY_KINDS:
         for boom in (RuntimeError, _Cancel, Refusal):
@@ -363,8 +292,8 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
 
 def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
     """``_entries`` iterates DIRECTORIES only, so a file sitting inside a kind directory is invisible
-    to every listing in both front ends; an older FDT run once left two PNGs that way, in
-    ``Artifacts/fdt``. This is the only route by which either front end can see or clear one; nothing
+    to every listing in both front ends; an older build's run once left two PNGs that way, in a kind
+    directory. This is the only route by which either front end can see or clear one; nothing
     is removed on the user's behalf.
 
     It can never reach a directory: the candidate is matched against ``loose_files``'s own entries,
@@ -372,35 +301,118 @@ def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
     two calls cannot do each other's job -- the same safety property ``delete`` and
     ``remove_incomplete`` keep between them.
     """
-    d = store.kind_dir("fdt")
+    d = store.kind_dir("diagnostic")
     d.mkdir(parents=True, exist_ok=True)
-    (d / "fdt_ratio_20260915_153042.png").write_bytes(b"\x89PNG stray")
-    (d / "fdt_spont_20260915_153042.png").write_bytes(b"\x89PNG stray too")
-    w = _make(store, "fdt", name="real", body=_bodies()["fdt"])   # writes results.json INSIDE its dir
+    (d / "ratio_20260915_153042.png").write_bytes(b"\x89PNG stray")
+    (d / "spont_20260915_153042.png").write_bytes(b"\x89PNG stray too")
+    w = _make(store, "diagnostic", name="real", body=_bodies()["diagnostic"])   # writes results.json INSIDE its dir
 
-    loose = store.loose_files("fdt")
-    assert [f.name for f in loose] == ["fdt_ratio_20260915_153042.png",
-                                       "fdt_spont_20260915_153042.png"], \
+    loose = store.loose_files("diagnostic")
+    assert [f.name for f in loose] == ["ratio_20260915_153042.png", "spont_20260915_153042.png"], \
         "a valid record's payloads are never offered: they are inside its own directory"
     assert loose[0].size == len(b"\x89PNG stray") and loose[0].mtime > 0
 
     with pytest.raises(st.StoreError, match="was written") as recent:
-        store.remove_loose("fdt", "fdt_ratio_20260915_153042.png")
+        store.remove_loose("diagnostic", "ratio_20260915_153042.png")
     assert recent.value.field == "artifact", "the recency guard, shared with remove_incomplete"
 
     backdate_tree(d)
-    store.remove_loose("fdt", "fdt_ratio_20260915_153042.png")
-    assert [f.name for f in store.loose_files("fdt")] == ["fdt_spont_20260915_153042.png"]
-    assert store.get("fdt", w.id).id == w.id, "a real record is untouched"
+    store.remove_loose("diagnostic", "ratio_20260915_153042.png")
+    assert [f.name for f in store.loose_files("diagnostic")] == ["spont_20260915_153042.png"]
+    assert store.get("diagnostic", w.id).id == w.id, "a real record is untouched"
 
     # what it refuses
     for bad in ("real__" + w.id, "sub/x.png", "..", "", "nosuch.png"):
         with pytest.raises(st.StoreError):
-            store.remove_loose("fdt", bad)
-    assert (store.path("fdt", w.id)).is_dir(), "the record's directory is remove_incomplete's, not this call's"
+            store.remove_loose("diagnostic", bad)
+    assert (store.path("diagnostic", w.id)).is_dir(), "the record's directory is remove_incomplete's, not this call's"
     with pytest.raises(st.StoreError, match="unknown artifact kind"):
         store.loose_files("plot")
     assert store.loose_files("prior") == [], "a kind directory that does not exist has no loose files"
+
+
+def _an_older_prisms_fdt_folder(root, *, holding: bool) -> dict:
+    """``<root>/fdt`` as an older PRISM left it: empty, or holding one record of the effective temperature it
+    measured, written here as raw files -- its manifest in the shape that build of the store wrote, its numbers and
+    one figure. Returns every file under the folder by its path, with its bytes."""
+    import hashlib
+    folder = root / "fdt"
+    folder.mkdir(parents=True)
+    if holding:
+        record = folder / "old_cell__20261001T120000"
+        (record / "figures").mkdir(parents=True)
+        numbers = b"an older build's numbers"
+        (record / "data.h5").write_bytes(numbers)
+        (record / "figures" / "t_eff_over_t.png").write_bytes(b"\x89PNG an older build's figure")
+        manifest = {
+            "schema": 1, "kind": "fdt", "id": "20261001T120000", "name": "old_cell",
+            "created": "2026-10-01T12:00:00+00:00", "note": "left by an older PRISM",
+            "prism": {"branch": "main", "git_dirty": False, "git_rev": "0" * 40},
+            "env": {"device_name": "cpu", "device_type": "cpu", "dtype": "torch.float32", "python": "3.12.12"},
+            "inputs": {"bounds": None, "cell": None, "model": None, "units": None},
+            "config": {}, "parents": {}, "fingerprints": {},
+            "payloads": {"data.h5": hashlib.sha256(numbers).hexdigest()},
+            "figures": ["figures/t_eff_over_t.png"],
+            "body": {"study": "single", "settings": {"F0": 0.05, "n_freqs": 4}, "seed": 7, "grid": None,
+                     "points": None, "offgrid": None, "notices": [], "compared": None, "complete": True,
+                     "results": None}}
+        (record / "manifest.json").write_bytes(json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"))
+    return {path: (path.read_bytes() if path.is_file() else None) for path in sorted(folder.rglob("*"))}
+
+
+@pytest.mark.parametrize("holding", [False, True], ids=["empty", "holding an old record"])
+def test_an_fdt_folder_an_older_prism_left_is_neither_listed_nor_touched(tmp_path, monkeypatch, capsys, holding):
+    """The store keeps no record of the effective temperature now, so a folder ``fdt`` an older PRISM left beside
+    the kind directories -- empty, as the owner's is, or holding a record -- is no kind of the store's, and the store
+    never walks its own root: listing every kind, loading every kind's records, the leftover sweep of every kind
+    (dry and with --yes), the store's summary, the Records screen's listing of every kind and its own clean leave
+    the folder as it was, byte for byte, and none of them names it."""
+    import shutil
+    from core.tool import main
+    from tests._fixtures import artifact_screen, backdate_tree, build_browse_store, choose, qt_app
+    root = tmp_path / "Artifacts"
+    ids = build_browse_store(root)
+    store = st.ArtifactStore(root)
+    before = _an_older_prisms_fdt_folder(root, holding=holding)
+    backdate_tree(root / "fdt")                                  # old enough that no recency guard spares it
+
+    def untouched(what):
+        now = {path: (path.read_bytes() if path.is_file() else None) for path in sorted((root / "fdt").rglob("*"))}
+        assert (root / "fdt").is_dir() and now == before, f"{what} touched the folder an older PRISM left"
+
+    def never_named(said):
+        # the scratch folder's own path carries this test's name, which holds the word; what is said of the
+        # store is read with that path taken out
+        said = said.replace(str(tmp_path), "<scratch>").replace(tmp_path.as_posix(), "<scratch>")
+        assert "fdt" not in said, said
+
+    assert "fdt" not in st.KIND_DIRS and "fdt" not in st.LEGACY_DIRS
+    for kind in st.KIND_DIRS:
+        store.list(kind)
+        store.loose_files(kind)
+    for kind in ("prior", "posterior", "observation", "calibration", "inference", "diagnostic"):
+        assert store.get(kind, ids[kind]) is not None, kind
+    assert store.legacy_dirs() == []
+    untouched("listing every kind")
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    capsys.readouterr()
+    for argv in (["artifacts", "list"], ["artifacts", "sweep"], ["artifacts", "sweep", "--yes"],
+                 ["artifacts", "summary"]):
+        main(argv)
+        said = capsys.readouterr()
+        never_named(said.out + said.err)
+        untouched(" ".join(argv))
+    qt_app()
+    screen = artifact_screen(store)
+    for kind in st.KIND_DIRS:
+        screen.kind_combo.setCurrentIndex(screen.kind_combo.findData(kind))
+    choose(monkeypatch, other=True)
+    screen._sweep(all_kinds=True)
+    never_named(screen.status.text())
+    untouched("the Records screen")
+    shutil.rmtree(root / "priors")                               # the rest of the store may change; this folder not
+    store.list("prior")
+    untouched("a listing after the store changed")
 
 
 def test_a_legacy_directory_beside_the_kind_directories_is_seen_and_cleared(store):
@@ -495,409 +507,6 @@ def test_a_legacy_name_that_resolves_to_another_directory_is_neither_offered_nor
     assert (old / "sweep_S.h5").is_file(), "the aliased directory was removed"
 
 
-def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
-    """``validate`` refuses a PARTIAL body key set, so the first manifest cannot carry only what is
-    known -- it carries every key of BODY_KEYS["fdt"] with the unknown ones null. Five are known
-    before the run starts (study, settings, seed, notices, complete) and five are not (grid, points,
-    offgrid, compared, results), which is what makes an in-flight record readable in the browser
-    while it runs.
-
-    ``complete`` is the WRITER's field, not the stage's: it is False here because the writer wrote it
-    so, and it is the writer that sets it True at the commit. A stage that forgot to touch it cannot
-    therefore produce a record that claims to have finished.
-    """
-    w = store.create("fdt", None, name="inflight")
-    assert w.progressive is True and w._wrote_anything is False
-    assert not w.dir.exists(), "create() mints the id and the path and creates NOTHING"
-    w.body = {"study": "single", "settings": {"n_freqs": 2}, "seed": 5, "notices": []}
-    with w:
-        assert w.dir.is_dir()
-        m = mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8"))
-        assert set(m.body) == set(mf.BODY_KEYS["fdt"])
-        assert m.body["complete"] is False and m.body["study"] == "single"
-        assert [k for k in mf.BODY_KEYS["fdt"] if m.body[k] is None] == \
-            ["grid", "points", "offgrid", "compared", "results"]
-        row = store.list("fdt")[0]
-        assert row.complete and not row.finished, "listed while it runs, and honestly unfinished"
-        w.body["grid"] = {"omega_0": 1.0}
-        w.refresh()
-        assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")).body["grid"] \
-            == {"omega_0": 1.0}, "refresh re-writes the manifest as the run proceeds"
-        w.payload("data.h5").write_bytes(b"numbers")
-        assert w._wrote_anything is True
-        # the manifest still parses, and a payload write does not mark the record finished (an
-        # `is not None` check could never fail here -- from_json_text returns or raises)
-        assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")).body["complete"] \
-            is False
-    assert store.list("fdt")[0].finished, "the commit is what makes it finished"
-    assert store.get("fdt", w.id).body["complete"] is True
-    assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5"), \
-        "payloads are hashed at the COMMIT, and the commit is where the hash lands"
-
-
-def test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record(store):
-    """The record exists, nothing has been written into it, and the cancel is a BaseException -- the
-    shape ``core/gui/streams.py``'s WorkerCancelled has. The folder must survive: a run that took
-    hours and was stopped is exactly what an interrupted record keeps its folder for, and the
-    spontaneous spectrum inside it is what diagnoses why it was stopped.
-
-    A REFUSAL at the same point must do the opposite, and the two arrive through the same
-    ``__exit__``, which is why both are asserted here and not in two places.
-
-    And the store half of "the leftover sweep never offers it": the kept record carries a manifest,
-    so ``remove_incomplete`` -- the one call the sweep removes through -- refuses it even once it is
-    old enough to be past the recency guard. The tool half is tests/test_tool.py's
-    test_an_unfinished_fdt_record_is_listed_as_not_finished_and_never_swept.
-    """
-    class _Cancel(BaseException):
-        pass
-
-    w = store.create("fdt", None, name="cancelled")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(_Cancel):
-        with w:
-            raise _Cancel()
-    assert w.dir.is_dir(), "an interrupted record keeps its folder"
-    row = [r for r in store.list("fdt") if r.id == w.id][0]
-    assert row.complete and not row.finished, "a manifest, and an honest 'did not finish'"
-    assert store.get("fdt", w.id).body["complete"] is False
-
-    # the same point, a REFUSAL, nothing written: the directory goes
-    w2 = store.create("fdt", None, name="refused")
-    w2.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(Refusal):
-        with w2:
-            raise Refusal("the band reaches below what the spectrum resolves", field="freq_bounds")
-    assert not w2.dir.exists(), \
-        "a pre-spend refusal must not leave a permanent empty record: the sweep can never clear one"
-
-    # a refusal AFTER something was written is an interrupted run like any other
-    w3 = store.create("fdt", None, name="refused_late")
-    w3.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(Refusal):
-        with w3:
-            w3.payload("data.h5").write_bytes(b"the spontaneous spectrum")
-            raise Refusal("every grid frequency came back blank", field=None)
-    assert w3.dir.is_dir() and (w3.dir / "data.h5").is_file(), \
-        "what the run did measure is what the message tells the reader to look at"
-
-    # past the recency guard, and still never a leftover -- it carries a manifest
-    backdate_tree(w.dir)
-    with pytest.raises(st.StoreError, match="holds a valid fdt manifest"):
-        store.remove_incomplete("fdt", w.dir.name)
-    assert w.dir.is_dir()
-    assert not [r for r in store.list("fdt") if not r.complete], \
-        "an unfinished fdt record is never listed as a manifest-less leftover the sweep could offer"
-
-
-def test_a_second_run_is_refused_by_name_while_an_unfinished_record_holds_it(store):
-    """``assert_name_free`` runs at ``create()``, before anything is spent, and a progressive record
-    occupies its name from its first moment -- so a second run under the same name is refused at the
-    click rather than colliding with a directory halfway through an hours-long measurement. The
-    refusal carries ``field="name"``, which is what lets each front end name its own control.
-    """
-    w = store.create("fdt", None, name="repeat")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    w.__enter__()             # entered and NEVER exited: the record is live on disk, mid-run
-    assert (w.dir / st.MANIFEST).is_file() and not store.list("fdt")[0].finished
-
-    with pytest.raises(st.StoreError, match="already exists") as exc:
-        store.create("fdt", None, name="repeat")
-    assert exc.value.field == "name"
-
-
-def test_a_failure_inside_a_progressive_record_writes_the_log_up_to_it(store):
-    """The final refresh on the failure path is what puts the run's records on disk. Without it the
-    one document that says WHY the run stopped would exist only for runs that did not stop -- which
-    is the opposite of when it is needed. The log is written from ``runs.current_run_log()``, which
-    is thread-local, so it is written here from inside a real run.
-    """
-    import logging
-    from core import runs
-
-    def _boom():
-        w = store.create("fdt", None, name="logged")
-        w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-        with w:
-            logging.getLogger("core.test").info("the spontaneous campaign finished")
-            raise RuntimeError("the driven campaign failed")
-
-    entry = runs.public_entry(lambda: _boom())
-    with pytest.raises(RuntimeError):
-        entry()
-    text, truncated = store.read_log("fdt", "logged")
-    assert text is not None and "the spontaneous campaign finished" in text, text
-    assert not truncated
-
-
-def test_a_refused_record_that_will_not_delete_is_described_by_its_mode(store, monkeypatch):
-    """When the removal on the failure path itself fails (a held handle on Windows), the writer
-    warns rather than let a PermissionError replace the exception that ended the run. For an
-    ordinary kind the directory left behind has no manifest, and the warning says the store ignores
-    it. A progressive record refused before it wrote anything DOES carry its first manifest, so the
-    same sentence would be false: it names what the operator can do instead.
-    """
-    def _held(path, **kw):
-        raise PermissionError("held open by a preview pane")
-    monkeypatch.setattr(st, "_rmtree_retry", _held)
-
-    w = store.create("fdt", None, name="held")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.warns(UserWarning, match="listed as unfinished") as rec:
-        with pytest.raises(Refusal, match="below what the spectrum resolves"):
-            with w:
-                raise Refusal("the band reaches below what the spectrum resolves", field="freq_bounds")
-    assert not [r for r in rec if "has no manifest" in str(r.message)], \
-        "a progressive record keeps its first manifest; the warning must not say it has none"
-
-    with pytest.warns(UserWarning, match="it has no manifest, so the store ignores it") as rec2:
-        with pytest.raises(RuntimeError, match="the run failed"):
-            with store.create("calibration", None, name="held_cal") as w2:
-                w2.payload("results.json").write_text("{}", encoding="utf-8")
-                raise RuntimeError("the run failed")
-    # Both warnings name the caller's ``with`` line, not the store's own frames -- one removal helper
-    # now serves __enter__ and __exit__ alike, and its stacklevel is counted for that extra frame.
-    assert {Path(r.filename).name for r in [*rec, *rec2] if "could not remove" in str(r.message)} \
-        == {Path(__file__).name}
-
-
-def test_a_final_refresh_that_fails_never_replaces_the_exception_that_ended_the_run(store, monkeypatch):
-    """The failure path's final refresh runs INSIDE ``__exit__``, while the run's own exception is in
-    flight. If that write fails too, the operator must still see why the RUN stopped -- a cancel, a
-    refusal, a simulator error -- and not an OSError about a manifest; the record keeps the manifest
-    it had, and a warning names the failed refresh. The log and the manifest are written in two
-    separate attempts, so each failing is its own warning and neither is the exception the caller
-    sees.
-    """
-    w = store.create("fdt", None, name="stuck")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-
-    def _disk_full(**kw):
-        raise OSError("no space left on device")
-
-    with pytest.warns(UserWarning) as rec:
-        with pytest.raises(RuntimeError, match="the driven campaign failed"):
-            with w:
-                w.payload("data.h5").write_bytes(b"the spontaneous spectrum")
-                monkeypatch.setattr(w, "_write", _disk_full)
-                monkeypatch.setattr(w, "_write_log", _disk_full)
-                raise RuntimeError("the driven campaign failed")
-    said = [str(r.message) for r in rec]
-    assert [s for s in said if s.startswith("could not write the log of the unfinished fdt record")], said
-    assert [s for s in said if s.startswith("could not refresh the unfinished fdt record")], said
-    assert w.dir.is_dir() and store.get("fdt", w.id).body["complete"] is False
-
-
-def test_a_first_manifest_that_cannot_be_written_leaves_no_folder_behind(store):
-    """``__exit__`` never runs when ``__enter__`` raises, so a first manifest that fails would
-    otherwise leave a manifest-less folder for a run that never started -- listed as "incomplete or
-    interrupted", and refused by the sweep for RECENT_WRITE_SECONDS -- and every refused click that
-    put a bad value in the first body would add one.
-
-    Two shapes. A NaN in the settings, which ``validate`` refuses (a ManifestError, itself a
-    Refusal). And a numpy float32, which ``_check_finite`` does not see as a float, so it passes
-    validation and fails in ``json.dumps`` AFTER the log has been written: without the cleanup that
-    folder would hold log.txt alone. Each is followed by a retry under the SAME name, which enters
-    cleanly and commits.
-    """
-    import numpy as np
-    from core import runs
-
-    def _first(settings):
-        w = store.create("fdt", None, name="first")
-        w.body = {"study": "single", "settings": settings, "seed": 1, "notices": []}
-        return w
-
-    w_nan = _first({"f0": float("nan")})
-    with pytest.raises(mf.ManifestError, match="non-finite"):
-        with w_nan:
-            pass
-    assert not w_nan.dir.exists() and store.list("fdt") == []
-
-    def _float32():
-        # inside a real run, so a run log exists and log.txt IS written before the manifest fails
-        w = _first({"f0": np.float32(0.05)})
-        with pytest.raises(TypeError, match="float32"):
-            with w:
-                pass
-        return w
-
-    w32 = runs.public_entry(_float32)()
-    assert not w32.dir.exists() and store.list("fdt") == []
-
-    with _first({"f0": 0.05}) as ok:
-        pass
-    assert store.get("fdt", "first").id == ok.id and store.list("fdt")[0].finished
-
-
-def test_a_committed_record_refuses_a_refresh(store):
-    """A refresh writes ``complete: false`` and null payload hashes, so one arriving after the commit
-    would turn a finished record back into an unfinished one -- listed as not finished, and never
-    again hash-verified by ``load_fdt``, which skips a null hash as "not yet". The stages call
-    ``refresh()`` as they go; a late call must be refused, and must change nothing on disk.
-    """
-    w = store.create("fdt", None, name="done")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with w:
-        w.payload("data.h5").write_bytes(b"numbers")
-    before = (w.dir / st.MANIFEST).read_bytes()
-
-    with pytest.raises(st.StoreError, match="already committed"):
-        w.refresh()
-    assert (w.dir / st.MANIFEST).read_bytes() == before
-    assert store.list("fdt")[0].finished
-    assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5")
-
-
-def test_an_unfinished_records_log_ends_with_what_stopped_it_and_nothing_says_it_twice(store, caplog):
-    """The keep branch wrote the run's log as it stood, and nothing put the exception in it: a record
-    stopped by a refusal, a crash or an interrupt had a log.txt ending at the last progress line, so
-    the one document that says why the run stopped did not say it. The branch now ends log.txt with
-    one stamped line, ``error stopped: <Type>: <message>``, written STRAIGHT to the file -- never as a
-    logging record, which the tool's console and the window's pane would show a second time beside
-    the front end's own refusal line or box. Outside a run (no run log) it writes nothing, as
-    ``_write_log`` always has."""
-    import logging
-    import re
-    from core import runs
-
-    def _run(name, exc):
-        w = store.create("fdt", None, name=name)
-        w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-        with w:
-            logging.getLogger("core.test").info("the spontaneous campaign finished")
-            w.figure_path("Spontaneous PSD").write_bytes(b"\x89PNG")
-            raise exc
-
-    for name, exc, said in (
-            ("refused_late", Refusal("the band reaches below what the spectrum resolves",
-                                     field="freq_bounds"),
-             "Refusal: the band reaches below what the spectrum resolves"),
-            ("interrupted", KeyboardInterrupt(), "KeyboardInterrupt")):
-        caplog.clear()
-        with caplog.at_level(logging.INFO, logger="core"):
-            with pytest.raises(type(exc)):
-                runs.public_entry(lambda: _run(name, exc))()
-        text, _ = store.read_log("fdt", name)
-        lines = text.splitlines()
-        assert lines[-2].endswith("info the spontaneous campaign finished"), lines
-        assert re.fullmatch(r"\d\d:\d\d:\d\d error stopped: " + re.escape(said), lines[-1]), lines
-        assert not [r for r in caplog.records if "stopped" in r.getMessage()], \
-            "the store logged the stop as a record: every front end would show it twice"
-
-    w = store.create("fdt", None, name="no_run_log")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(RuntimeError):
-        with w:
-            w.payload("data.h5").write_bytes(b"numbers")
-            raise RuntimeError("the driven campaign failed")
-    assert w.dir.is_dir() and not (w.dir / st.LOG_FILE).exists(), "no run log, so no log.txt"
-
-
-def test_an_unfinished_record_lists_only_the_figures_on_disk_and_a_commit_lists_every_one(store):
-    """``figure_path`` records a figure when the PATH is handed out, and every manifest listed it --
-    so a run stopped between the hand-out and the save (Ctrl-C inside the Nadrowski passive check, a
-    figure that failed to draw) left an unfinished record listing a picture that was never written.
-    An unfinished manifest lists only the figures on disk. The COMMIT lists every one, as it always
-    has, so a finished record's manifest -- any kind's -- is byte-for-byte what it was."""
-    w = store.create("fdt", None, name="phantom")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(KeyboardInterrupt):
-        with w:
-            w.figure_path("Spontaneous trajectory").write_bytes(b"\x89PNG")
-            w.figure_path("Passive baseline ratio")          # handed out, never drawn
-            raise KeyboardInterrupt
-    assert store.get("fdt", w.id).figures == ["figures/spontaneous_trajectory.png"]
-
-    done = store.create("fdt", None, name="committed")
-    done.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with done:
-        done.figure_path("Drawn").write_bytes(b"\x89PNG")
-        done.figure_path("Handed out only")
-    assert store.get("fdt", done.id).figures == ["figures/drawn.png", "figures/handed_out_only.png"], \
-        "the commit's listing is unchanged: every figure handed out"
-
-
-def test_a_record_removed_while_its_run_was_writing_it_is_not_rebuilt(store):
-    """A progressive record looks exactly the same whether its run was interrupted or is still being
-    written from another window or a terminal, and nothing stops it being deleted meanwhile (there is
-    no cross-process lock). The live run then fails at its next write, and its ``__exit__`` took the
-    keep branch -- whose manifest write goes through ``_atomic_write``, which creates the parent
-    folder -- so the deleted record came BACK as a manifest-only husk, listing a figure that was
-    gone, under the id just deleted.
-
-    The keep branch now checks the folder first: gone, it keeps nothing and says so, once."""
-    import shutil
-
-    w = store.create("fdt", None, name="removed")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    w.__enter__()
-    w.figure_path("Spontaneous trajectory").write_bytes(b"\x89PNG")
-    w.refresh()
-    shutil.rmtree(w.dir)                        # `artifacts rm fdt <id>` from another process
-
-    with pytest.warns(UserWarning) as rec:
-        assert w.__exit__(RuntimeError, RuntimeError("the run's next write failed"), None) is False
-    said = [str(r.message) for r in rec]
-    assert len(said) == 1 and "was removed while its run was writing it" in said[0], said
-    assert not w.dir.exists(), "the keep branch rebuilt the folder it was told was deleted"
-    assert store.list("fdt") == []
-
-
-def test_a_refresh_outside_the_writers_with_block_is_refused_and_creates_nothing(store):
-    """``refresh`` had no lifecycle check, and its manifest write creates the parent folder -- so a
-    refresh BEFORE ``__enter__`` made the folder the later ``with`` then refused as existing, leaving
-    a permanent unfinished record, and one after a pre-spend refusal brought back the folder the
-    refusal had just removed. Both are refused now, with nothing written. (After a COMMIT the refusal
-    is the existing "already committed" one.)"""
-    w = store.create("fdt", None, name="early")
-    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(st.StoreError, match="not being written"):
-        w.refresh()
-    assert not w.dir.exists() and store.list("fdt") == []
-
-    w2 = store.create("fdt", None, name="refused")
-    w2.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-    with pytest.raises(Refusal, match="below what the spectrum resolves"):
-        with w2:
-            raise Refusal("the band reaches below what the spectrum resolves", field="freq_bounds")
-    assert not w2.dir.exists()
-    with pytest.raises(st.StoreError, match="not being written"):
-        w2.refresh()
-    assert not w2.dir.exists() and store.list("fdt") == []
-
-
-def test_the_log_up_to_a_failure_reaches_disk_even_when_the_last_manifest_cannot(store):
-    """The log up to the failure is on disk. A stage that stores a value the manifest cannot hold
-    (here a NaN in ``results``) and then fails leaves a final refresh that cannot validate. The log
-    must not depend on it: the records since the last GOOD refresh are exactly the ones that say why
-    the run stopped. The run's own exception still wins.
-    """
-    import logging
-    from core import runs
-    log = logging.getLogger("core.test")
-
-    def _run():
-        w = store.create("fdt", None, name="unvalidatable")
-        w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
-        with w:
-            log.info("X: the spontaneous campaign finished")
-            w.refresh()
-            log.info("Y: the driven campaign reached its third probe")
-            w.body["results"] = {"ratio_at_resonance": float("nan")}
-            raise RuntimeError("the driven campaign failed")
-
-    with pytest.warns(UserWarning, match="could not refresh the unfinished fdt record"):
-        with pytest.raises(RuntimeError, match="the driven campaign failed"):
-            runs.public_entry(_run)()
-    text, _ = store.read_log("fdt", "unvalidatable")
-    assert "X: the spontaneous campaign finished" in text, text
-    assert "Y: the driven campaign reached its third probe" in text, \
-        "a record emitted after the last good refresh must still reach log.txt"
-    m = store.get("fdt", "unvalidatable")
-    assert m.body["complete"] is False and m.body["results"] is None, "it keeps the manifest it had"
-
-
 def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_lost(store, tmp_path):
     """The commit runs at the END of a run that may have taken days. An input file moved or edited
     meanwhile must be recorded as unhashed (and warned about), never raise out of the writer -- losing
@@ -969,12 +578,12 @@ def test_same_second_ids_get_a_suffix(tmp_path):
 
 
 def test_two_writers_created_before_either_is_entered_get_different_ids(tmp_path):
-    """The sweep study's front end creates BOTH records before it dispatches, and create() puts
-    nothing on disk -- so an id checked only against the disk would be minted twice in one second,
-    and the second record would load as the first."""
+    """A caller may create two records before it dispatches, and create() puts nothing on disk -- so an
+    id checked only against the disk would be minted twice in one second, and the second record would
+    load as the first."""
     fixed = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
     s = st.ArtifactStore(tmp_path, clock=lambda: fixed)
-    a, b = s.create("fdt", None), s.create("fdt", None)
+    a, b = s.create("diagnostic", None), s.create("diagnostic", None)
     assert a.id != b.id and a.dir != b.dir, (a.id, b.id)
 
 
@@ -1630,9 +1239,7 @@ def test_loading_a_prior_with_no_sink_closes_its_figure(store):
     the life of the process. The BUILD branch never did: its writer's sink (ArtifactWriter.fig_sink)
     saves the PNG and closes the figure when nothing is forwarded. Now both branches close what they
     draw when given no sink, while visualize_dist and emit_figure keep their own fallback for a
-    bare-library caller. Pinned as the FDT precedent is
-    (test_tool.py::test_fdt_plot_functions_close_a_saved_figure_instead_of_show): no new open
-    figure, no non-interactive warning.
+    bare-library caller. Pinned: no new open figure, no non-interactive warning.
 
     The three fig_sink docstrings (build_prior, build_posterior, infer_and_visualize) now say the same
     one thing, and it is true of every stage. Before, one said "None => plt.show()", one said "None is
@@ -4326,92 +3933,6 @@ def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
     assert cfg.params_dict[first][0] is None and not cfg.has_ground_truth
 
 
-def test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run():
-    """``public_entry`` copies the config it is handed ONLY when that config has ``copy_for_run``
-    (core/runs.py's ``if hasattr(kwargs["cfg"], "copy_for_run")``). FDTConfig had none, so
-    decorating run_fdt would have delivered the run log and silently NOT the private copy every
-    public stage works on -- and ``cfg.omega_0 = ...`` at the top of run_fdt would have kept writing
-    on the caller's object, which is exactly what the private copy exists to prevent. The copy is a
-    plain deep copy: FDTConfig carries no cached_property, so it needs none of
-    SimConfig.copy_for_run's _CACHED popping, and this asserts that (a new cached property on
-    FDTConfig must come with the popping, as SimConfig's did).
-
-    ``sources``, ``seed`` and ``preset_name`` are DEFAULTED fields, because the reduction map shares
-    this dataclass and is deliberately left as it is: a required field would break it at every
-    construction site. Everything a run writes on -- omega_0, the four OrderedDicts, sources -- is an
-    independent equal object on the copy."""
-    from collections import OrderedDict
-    from functools import cached_property
-
-    from core.config import FDTConfig, cpu_device
-
-    assert not [n for n, v in vars(FDTConfig).items() if isinstance(v, cached_property)], \
-        "FDTConfig gained a cached_property: copy_for_run must pop it first, as SimConfig's does"
-
-    cfg = FDTConfig(model="HOPF", state_dep_drift=False, inits_dict=OrderedDict(x=0.0),
-                    params_dict=OrderedDict(sigma_x=(0.1, (0.0, 1.0))),
-                    rescale_params=OrderedDict(), force_params_dict=OrderedDict(),
-                    units_dict=("nm", "ms"), hw=cpu_device())
-    assert cfg.sources == {} and cfg.seed is None, "both default, for the reduction map's sake"
-    assert cfg.preset_name is None, "a single-cell run has no preset; only the sweep sets it"
-
-    cfg.sources["cell"] = "Cells/hopf/cell.txt"
-    cfg.seed = 7
-    cfg.preset_name = "exploratory"
-    c = cfg.copy_for_run()
-    assert isinstance(c, FDTConfig) and c is not cfg
-    assert c.sources == cfg.sources and c.sources is not cfg.sources
-    assert c.params_dict == cfg.params_dict and c.params_dict is not cfg.params_dict
-    assert c.seed == 7 and c.hw is not None
-    assert c.preset_name == "exploratory", "the preset's name travels with the run's copy"
-
-    c.omega_0 = 3.5
-    c.sources["cell"] = "elsewhere.txt"
-    assert cfg.omega_0 is None, \
-        "the caller's resonance is untouched: this is what the private copy buys run_fdt"
-    assert cfg.sources["cell"] == "Cells/hopf/cell.txt"
-
-
-def test_the_two_fdt_builders_fill_sources_and_the_manifest_has_an_fdt_branch():
-    """Every artifact names its inputs by path and hash, and an fdt record is no exception: the two
-    FDT builders fill ``sources`` so provenance.inputs_from_cfg works with no new provenance code.
-    make_reduction_config is UNTOUCHED -- it is the reduction map's builder, deliberately left as it
-    is, and the only FDTConfig in the tree not pinned to the CPU -- so this also pins that it still
-    builds a working settings object.
-
-    config_from_cfg needed a branch or store.create("fdt", cfg, ...) would raise AttributeError on
-    cfg.observation_mode, the SECOND key it reads (manifest.config_from_cfg). The branch is taken on
-    the ABSENCE of observation_mode, and it records the settings AS GIVEN TO THE BUILDER: omega_0 is
-    deliberately not in it, because the writer computes this block at create() time from the
-    caller's object while the run refines the resonance on its private copy. Every value is finite,
-    which validate() requires of the whole config block (its _check_finite on "config")."""
-    from core import cli, config, registry
-    from core.artifacts import manifest as mfm
-    from core.artifacts import provenance as provm
-
-    cell = str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
-    cfg = cli.make_fdt_config("NADROWSKI", registry.state_dep_drift("NADROWSKI"), cell)
-    assert cfg.sources == cli.cell_sources(cell, "NADROWSKI")
-    assert cfg.hw.device.type == "cpu", "the FDT path stays pinned to the CPU"
-
-    inputs = provm.inputs_from_cfg(cfg)
-    assert inputs["model"] == "NADROWSKI"
-    assert inputs["cell"]["path"] == "Cells/nadrowski/master_weak.txt"      # relative to Resources/
-    assert inputs["bounds"]["path"] == "Bounds/nadrowski/master.txt"
-    assert len(inputs["cell"]["sha256"]) == 64 and len(inputs["bounds"]["sha256"]) == 64
-
-    block = mfm.config_from_cfg(cfg)
-    assert block["model"] == "NADROWSKI" and block["n_freqs"] == 60 and block["ensemble_M"] == 256
-    assert block["freq_bounds"] == [0.1, 30.0] and block["device"] == "cpu"
-    assert block["seed"] is None and "omega_0" not in block, \
-        "the resonance the RUN discovers belongs in body.grid, not in the config block"
-    mfm._check_finite(block, "config")          # what validate() does to it on every write
-
-    red = cli.make_reduction_config(str(config.CELL_PATH / "nadrowski" / "master_spont.txt"))
-    assert red.model == "NADROWSKI" and red.params_dict, "the reduction builder still builds"
-    assert red.sources == {} and red.seed is None, "make_reduction_config is left alone"
-
-
 # ── no public entry writes on the configuration it is handed ─────────────────────────────────────
 from types import SimpleNamespace
 
@@ -4783,113 +4304,6 @@ def _leg_probe_drive(case, monkeypatch, tmp_path):
                                            store=_EntryStore(case))
 
 
-class _FdtWriter:
-    """The writer surface run_fdt touches, over a real temp directory but no store.
-
-    PROGRESSIVE, like the real one: __exit__ KEEPS the directory on an exception, so a leg that
-    refuses or booms leaves its folder behind, as an interrupted record keeps its folder. It absorbs
-    _BodyDone and nothing else, so a leg can end the measurement at its first campaign and still
-    take run_fdt's `return writer.store.load_fdt(writer.id)` line -- a success from the caller's
-    side, with no solver, no figure and no h5py."""
-
-    def __init__(self, tmp_path):
-        self.id = "20260922T000000"
-        self.dir = Path(tmp_path) / "fdt" / f"_unnamed__{self.id}"
-        self.body, self.parents, self.fingerprints, self.config = {}, {}, {}, {}
-        self.store = SimpleNamespace(load_fdt=lambda ref: SimpleNamespace(id=ref, body=self.body))
-        self.refreshed = 0
-
-    def __enter__(self):
-        self.dir.mkdir(parents=True, exist_ok=True)
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return exc_type is not None and issubclass(exc_type, _BodyDone)
-
-    def refresh(self):
-        self.refreshed += 1
-
-    def payload(self, filename):
-        return self.dir / filename
-
-    def figure_path(self, title):
-        (self.dir / "figures").mkdir(exist_ok=True)
-        return self.dir / "figures" / f"{title}.png"
-
-
-def _fdt_cfg_for_leg(case):
-    """A real HOPF FDTConfig at the smallest size that is not "too thin to trust": n_freqs and
-    ensemble_M sit exactly AT FDT_THIN_N_FREQS / FDT_THIN_ENSEMBLE_M, so the run raises no
-    PreflightWarning that this pin would leak into the gate's count. The "refusal" case deletes the
-    parameter observable_noise_prefactor needs, which is the run's own pre-spend refusal."""
-    from core import cli, config as _cfgmod
-    cfg = cli.make_fdt_config("HOPF", False, str(_cfgmod.CELL_PATH / "hopf" / "cell.txt"),
-                              n_freqs=_cfgmod.FDT_THIN_N_FREQS, ensemble_M=_cfgmod.FDT_THIN_ENSEMBLE_M)
-    if case == "refusal":
-        cfg.params_dict.pop("sigma_x")
-    return cfg
-
-
-def _leg_run_fdt(case, monkeypatch, tmp_path):
-    """run_fdt's three endings. Its own write on its working config is `cfg.omega_0 = ...` (step 1 of
-    its body) and `cfg.seed = ...`, both made before Campaign 1 -- so the seam that raises _Injected is
-    Campaign 1 itself, and "boom" therefore lands AFTER a write, which is what the pin is for."""
-    from core.FDT import fdt_pipeline
-    cfg = _fdt_cfg_for_leg(case)
-    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
-                        _raise_injected if case == "boom" else _body_done)
-    w = _FdtWriter(tmp_path)
-    return cfg, lambda: fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
-                                             writer=w, seed=11)
-
-
-def _leg_run_param_study_cli(case, monkeypatch, tmp_path):
-    """The study's three endings. Its own write on its working config is ``cfg.seed = ...`` -- the one
-    integer both records must agree on -- made before either sweep runs, so the seam that raises
-    _Injected is the first sweep. Its pre-spend refusal is the FDT normalisation check, applied to the
-    sweep for the same reason it is applied to the single run: a cell missing n or beta would
-    otherwise cost the whole first phase before anything noticed."""
-    import numpy as np
-    from core.FDT import cross_validation as cv
-    cfg = _fdt_cfg_for_leg(case)
-    cfg.model = "HOPF"
-
-    def _sweep(c, sweep_param, sweep_grid, fixed_overrides=None, *, writer):
-        if case == "boom":
-            _raise_injected()
-        return f"REC-{sweep_param}"
-
-    monkeypatch.setattr(cv, "run_fdt_param_sweep", _sweep)
-    writers = {"s": _FdtWriter(tmp_path / "s"), "temp": _FdtWriter(tmp_path / "t")}
-    return cfg, lambda: cv.run_param_study_cli(cfg, s_grid=np.array([0.0, 0.1]),
-                                               t_grid=np.array([1.0, 1.1]),
-                                               writers=writers, seed=5)
-
-
-def _leg_compare(case, monkeypatch, tmp_path):
-    """The comparison facility's leg. A comparison takes NO configuration -- it draws saved records --
-    so the watched config is one the entry never receives; the leg is here because the set is closed
-    against the scan, and what it still pins is real: the three endings, and that the refusal is the
-    entry's own (an arity it will not draw), carrying its field. A real store in tmp_path rather than
-    _EntryStore, because the writer's body is set BEFORE the `with`, which _EntryWriter answers by
-    raising _BodyDone outside any block that absorbs it."""
-    from core.artifacts import ArtifactStore
-    from core.FDT import compare as comparisons
-    from tests._fixtures import build_fdt_record
-    cfg = _nad_cfg()
-    store = ArtifactStore(tmp_path / "compare_leg")
-    ids = [build_fdt_record(store, name=f"leg_{i}") for i in range(2)]
-
-    def _stub(w, records, *, sink):
-        if case == "boom":
-            _raise_injected()
-        return {"n_records": len(records)}, []
-
-    monkeypatch.setitem(comparisons._DRAWERS, "cells", _stub)
-    refs = ids[:1] if case == "refusal" else ids
-    return cfg, lambda: comparisons.compare("cells", refs, store=store)
-
-
 def _leg_card_test(case, monkeypatch, tmp_path):
     """The card test's leg. It hands its stages its working config, so the seam is its first stage: the
     prior, standing in, writes on the config it is handed and, for "boom", raises after that write. Its
@@ -4930,9 +4344,6 @@ _UNTOUCHED_LEGS = {
     "probe_band": _leg_probe_band,
     "probe_mask": _leg_probe_mask,
     "probe_drive": _leg_probe_drive,
-    "run_fdt": _leg_run_fdt,
-    "run_param_study_cli": _leg_run_param_study_cli,
-    "compare": _leg_compare,
     "card_test": _leg_card_test,
 }
 
@@ -4961,9 +4372,6 @@ _REFUSAL_FIELDS = {
     "probe_band": "band_repeats",
     "probe_mask": "mask_num_runs",
     "probe_drive": "drive_repeats",
-    "run_fdt": "cell",                               # a cell with no FDT normalisation constant
-    "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
-    "compare": "compare_records",                    # one record, for a mode that draws at least two
     "card_test": "cell",                             # a cell that names no file, checked before the prior
 }
 
@@ -4971,9 +4379,8 @@ _REFUSAL_FIELDS = {
 def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     """Every public stage works on a private copy of its config, and that copy is kept by ONE
     decorator on exactly the functions named below: the ten stages and compositions of
-    core/orchestrator.py, the five diagnostics and the probe checks' band, mask and drive modes, core/FDT's
-    single-cell measurement, its two-record sweep study, the comparison facility's one entry,
-    core/FDT/compare.py, and the card test, core/diagnostics/card.py. Read off the source
+    core/orchestrator.py, the five diagnostics and the probe checks' band, mask and drive modes, and the
+    card test, core/diagnostics/card.py. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
     and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
@@ -4997,17 +4404,6 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     want |= {("core/diagnostics/identifiability.py", n) for n in (
         "identifiability_rotation", "identifiability_laplace", "identifiability_jacobian")}
     want |= {("core/diagnostics/probes.py", n) for n in ("probe_band", "probe_mask", "probe_drive")}
-    # The FDT measurement writes a record and must not write on the caller's FDTConfig --
-    # `cfg.omega_0 = ...` twice in its own body would otherwise land on the caller's object, and
-    # copy_for_run is what stops it reaching the panel's settings object. The sweep study writes
-    # `cfg.seed` -- the one integer its two records must agree on -- and it too must land on a
-    # private copy.
-    want |= {("core/FDT/fdt_pipeline.py", "run_fdt"),
-             ("core/FDT/cross_validation.py", "run_param_study_cli")}
-    # The comparison takes no configuration at all, but it writes a record, so its run's log belongs
-    # in log.txt like every other entry's -- and ONE entry for all four modes, so this set and
-    # its two companions name it once.
-    want |= {("core/FDT/compare.py", "compare")}
     # The card test runs four of the stages above as one step: as an entry of its own it shares one run
     # log with them, so each record it writes carries the lines since the card test began.
     want |= {("core/diagnostics/card.py", "card_test")}
@@ -5846,12 +5242,11 @@ def test_the_orchestrator_says_everything_through_its_logger():
 
 def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
     """``complete`` means "has a valid manifest"; ``finished`` means "the run finished". For six of
-    the nine kinds they are the same fact -- ``ArtifactWriter._commit`` writes the manifest LAST, so a
-    manifest exists only for a run that reached the end. For the three kinds whose body carries a
+    the eight kinds they are the same fact -- ``ArtifactWriter._commit`` writes the manifest LAST, so a
+    manifest exists only for a run that reached the end. For the two kinds whose body carries a
     ``complete`` flag they differ: ``training_checkpoint.create`` manifests the simulation cache BEFORE
-    the first batch is simulated, an fdt record is written progressively and keeps its folder when
-    the run is interrupted, and a kept training is manifested from its first saved pass. For all
-    three, ``body["complete"]`` is the field that says whether the run got to the end.
+    the first batch is simulated, and a kept training is manifested from its first saved pass. For
+    both, ``body["complete"]`` is the field that says whether the run got to the end.
 
     ``complete`` is NOT redefined: ``list``'s secondary sort puts rows without it last, and this suite
     asserts on it. The honest question goes beside it instead -- and it is the one StorePicker.refresh
@@ -5881,42 +5276,6 @@ def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
     (store.kind_dir("inference") / "leftover__20260101T000000").mkdir(parents=True)
     leftover = [r for r in store.list("inference") if not r.complete]
     assert len(leftover) == 1 and leftover[0].finished is False, "no manifest, no finished run"
-
-
-def test_an_fdt_row_carries_its_study_its_points_and_whether_it_finished(store):
-    """``finished`` used to be "True unless this is the simulation kind" -- one kind named by hand.
-    Three kinds now carry a ``complete`` flag in their body, and the branch is derived from BODY_KEYS
-    rather than restated, so a fourth can never be forgotten.
-
-    The point counts come off ``body["points"]`` in ONE manifest read, like every other Summary
-    field: a listing costs one directory scan and a browser row costs nothing. A single run and
-    a comparison have no points at all -- ``body["points"]`` is null -- and their counts stay None
-    rather than becoming a confident, false 0/0.
-    """
-    sweep = _bodies()["fdt"]
-    sweep.update(study="sweep", points={"param": "S", "planned": 12, "done": 10, "failed": 2})
-    w = _make(store, "fdt", name="a_sweep", body=sweep)
-    row = [r for r in store.list("fdt") if r.id == w.id][0]
-    assert (row.study, row.points_done, row.points_planned, row.points_failed) == ("sweep", 10, 12, 2)
-    assert row.complete and row.finished, "a committed record is finished"
-
-    single = _bodies()["fdt"]
-    w2 = _make(store, "fdt", name="a_single", body=single)
-    one = [r for r in store.list("fdt") if r.id == w2.id][0]
-    assert one.study == "single"
-    assert (one.points_done, one.points_planned, one.points_failed) == (None, None, None), \
-        "a single run has no operating points; it must not report 0 of 0"
-
-    # every other kind leaves all four alone
-    for kind in ("prior", "calibration", "diagnostic"):
-        other = _make(store, kind, name=f"o_{kind}", body=_bodies()[kind])
-        s = [r for r in store.list(kind) if r.id == other.id][0]
-        assert (s.study, s.points_done) == (None, None), kind
-        assert s.finished is True, "a kind with no ``complete`` key is finished by construction"
-
-    # the branch is DERIVED, not a hand-written pair of names
-    assert {k for k, keys in mf.BODY_KEYS.items() if "complete" in keys} == {"simulation", "fdt", "fit"}, \
-        "the three kinds whose manifest exists before the run has finished"
 
 
 def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):
@@ -6889,90 +6248,6 @@ def test_the_lineage_report_prints_the_acceptance_a_calibration_and_a_narrowing_
     assert text.count("\n  accepted: truncated\n") == 2, text
 
 
-def test_render_lineage_resolves_what_a_comparison_compared(store):
-    """A comparison names the runs it drew in its BODY, because ``parents`` is
-    a flat {key: id} map that cannot carry an arbitrary number of ids without widening the store's
-    contract for every kind -- so deleting a record a comparison used is NOT refused, and this branch
-    is the only thing that keeps the comparison's own provenance readable afterwards.
-
-    A record the store no longer holds prints MISSING with its kind and id, the same wording the
-    parents walk already uses: skipping it would make a broken chain read as a complete one, which is
-    the one thing a provenance report must never do.
-    """
-    from core.artifacts import render_lineage
-    a = _make(store, "fdt", name="cell_a", body=_bodies()["fdt"])
-    b = _make(store, "fdt", name="cell_b", body=_bodies()["fdt"])
-    comp_body = _bodies()["fdt"]
-    comp_body.update(study="comparison", seed=None, grid=None, offgrid=None, results=None,
-                     compared={"mode": "cells",
-                               "records": [{"kind": "fdt", "id": a.id, "name": "cell_a"},
-                                           {"kind": "fdt", "id": b.id, "name": "cell_b"}]})
-    c = _make(store, "fdt", name="two_cells", body=comp_body)
-
-    text = render_lineage(store, "fdt", c.id)
-    assert "  compared (cells):" in text, text
-    assert f"    fdt cell_a [{a.id}]" in text, text
-    assert f"    fdt cell_b [{b.id}]" in text, text
-    assert "MISSING" not in text, "both are on disk"
-
-    store.delete("fdt", a.id)
-    text = render_lineage(store, "fdt", c.id)
-    assert f"    MISSING fdt [{a.id}]" in text, text
-    assert str(store.kind_dir("fdt")) in text, "where it was looked for"
-    assert f"    fdt cell_b [{b.id}]" in text, "the one still there is unaffected"
-
-    # a record with no comparison says nothing extra
-    assert "compared" not in render_lineage(store, "fdt", b.id)
-
-
-def test_render_lineage_reads_a_malformed_compared_block_without_dropping_or_faking_it(store):
-    """Only a hand-edited manifest or a writer bug reaches these shapes, but the
-    lineage's two promises hold for them too: its one refusal is the head ref (the browser catches a
-    Refusal and nothing else, so any other exception is a crash), and a broken record never reads as
-    a complete one. So a malformed ``compared`` block yields a line saying WHAT is unreadable --
-    never silence (a comparison that reads as having drawn nothing), never an exception, and never a
-    ``MISSING fdt []`` made up from a value that was not an entry at all.
-    """
-    from core.artifacts import render_lineage
-    real = _make(store, "fdt", name="real_cell", body=_bodies()["fdt"])
-    made = iter(range(100))
-
-    def lineage_with(compared):
-        body = _bodies()["fdt"]
-        body.update(study="comparison", compared=compared)
-        w = _make(store, "fdt", name=f"malformed_{next(made)}", body=body)
-        return render_lineage(store, "fdt", w.id)
-
-    # a block that is there but is not a mapping: one line naming its type
-    for bad, type_name in ((["x"], "list"), ("cells", "str"), (5, "int")):
-        text = lineage_with(bad)
-        assert f"\n  compared: UNREADABLE ({type_name}, not a mapping of mode and records)\n" in text, text
-
-    # records that are not a list: the header and one line -- not a walk over characters or keys
-    for bad, type_name in ((5, "int"), (True, "bool"), ("abc", "str"), ({"id": real.id}, "dict"),
-                           (None, "null")):
-        text = lineage_with({"mode": "cells", "records": bad})
-        assert (f"\n  compared (cells):\n    UNREADABLE records ({type_name}, not a list of entries)\n"
-                in text), text
-        assert "MISSING" not in text, text
-    assert "    UNREADABLE records (null, not a list of entries)\n" in lineage_with({"mode": "cells"}), \
-        "no records key at all"
-
-    # an entry that is not a record prints its repr, so a bare id is not thrown away; an entry that
-    # names no id says so; the good entry beside them is unaffected
-    text = lineage_with({"mode": "cells", "records": [
-        {"kind": "fdt", "id": real.id, "name": "real_cell"}, "20260101T000000", None,
-        {"kind": "fdt", "name": "no_id_here"}]})
-    assert f"\n    fdt real_cell [{real.id}]\n" in text, text
-    assert "\n    UNREADABLE entry '20260101T000000' (not a mapping of kind, id and name)\n" in text, text
-    assert "\n    UNREADABLE entry None (not a mapping of kind, id and name)\n" in text, text
-    assert "\n    UNREADABLE entry {'kind': 'fdt', 'name': 'no_id_here'} (names no id)\n" in text, text
-    assert "MISSING" not in text, "nothing here was an id the store could have held"
-
-
-# ── load_observation's two payload guards ────────────────────────────────────────────────────────
-
-
 def _obs_artifact(store, cfg, *, name, x_obs, digest=None):
     """An observation artifact whose payload is exactly the row handed in: the real writer, the real
     body, ``conditioning_block(cfg)`` for the geometry, and by default the row's own digest.
@@ -7078,9 +6353,7 @@ def test_a_name_taken_during_the_run_is_refused_or_dropped_as_asked(store):
         free = store.create("posterior", None, name="free", if_name_taken="unnamed")
     assert free.name == "free" and [x for x in quiet if issubclass(x.category, PreflightWarning)] == []
     for kind, value, words in (
-            ("posterior", "later", "if_name_taken must be 'refuse' or 'unnamed', not 'later'"),
-            ("fdt", "unnamed", "if_name_taken='unnamed' does not apply to the kind 'fdt': its record is written "
-                               "as its run goes and holds its name from its first moment.")):
+            ("posterior", "later", "if_name_taken must be 'refuse' or 'unnamed', not 'later'"),):
         with pytest.raises(st.StoreError) as refused:
             store.create(kind, None, if_name_taken=value)
         assert (str(refused.value), refused.value.field) == (words, None), kind

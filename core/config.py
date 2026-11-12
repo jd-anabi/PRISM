@@ -224,15 +224,6 @@ DT_EXP_S = 1e-3        # 1000 FPS camera frame interval
 T_MIN_EXP_S = 1.0      # shortest expected recording (1 s)
 T_MAX_EXP_S = 60.0     # longest expected recording (1 min)
 
-# === FDT "TOO THIN TO TRUST" THRESHOLDS ===
-# NOT floors. Below either of these the effective-temperature measurement is still well defined and
-# still runs -- a deliberately tiny quick look is a thing the owner does on purpose -- but the run
-# raises a PreflightWarning and the sentence is recorded in the record's `notices`, so the answer
-# cannot later be read as a measurement. Floors live in the config builders and exist only where the
-# computation is otherwise undefined (core/cli.py).
-FDT_THIN_N_FREQS = 2    # one frequency is not a spectrum
-FDT_THIN_ENSEMBLE_M = 8 # the existing tiny-size end-to-end run uses exactly 8 and must stay unmarked
-
 # === SIMULATION COST CONSTANTS ===
 # CUDA Graphs for the Euler-Maruyama step loop. ~88% of solver wall-clock was CPU kernel-LAUNCH
 # overhead: measured on the real Nadrowski step, 54.87 us/step eager against 6.65 us/step replayed
@@ -703,4 +694,4 @@ def unit_registry():
 
 # The data carriers live in core/sim_config.py; re-exported here PERMANENTLY -- every
 # consumer does `from core.config import SimConfig` and this line is what keeps that true.
-from core.sim_config import SimConfig, FDTConfig  # noqa: E402
+from core.sim_config import SimConfig  # noqa: E402

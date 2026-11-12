@@ -534,55 +534,6 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
     assert changed, "a delete must emit store_changed"
 
 
-def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, monkeypatch):
-    """The confirmation hard-coded the ONE kind that could be unfinished, and the fdt kind makes a
-    second one -- an fdt record whose run was cancelled or failed keeps its folder with whatever it
-    measured inside. Deleting that behind a prompt that says only "this cannot be undone" throws away
-    hours of measurement without saying so.
-
-    There is no resume for these runs, so the sentence says that too: unlike a cache, whose batches
-    a later run continues from, this one starts again from the beginning.
-    """
-    from core.gui.screens.artifact_screen import _delete_prompt
-    from tests._fixtures import artifact_screen, asked, qt_app
-    qt_app()
-
-    w = store.create("fdt", None, name="stopped")
-    w.body = {"study": "sweep", "settings": {}, "seed": 3, "notices": [],
-              "points": {"param": "S", "planned": 12, "done": 7, "failed": 1}}
-    with pytest.raises(RuntimeError):
-        with w:
-            w.payload("data.h5").write_bytes(b"seven points' worth")
-            raise RuntimeError("the eighth point failed")
-
-    scr = artifact_screen(store)
-    _show_kind(scr, "fdt")
-    s = _select_ref(scr.table, w.id)
-    assert s.complete and not s.finished and s.points_done == 7
-
-    text, detail = _delete_prompt(s)
-    assert text == f"Delete fdt {s.label}?"
-    assert "UNFINISHED" in detail, detail
-    assert "7 of 12" in detail, "what it had measured when it stopped"
-    assert "no resume" in detail or "from the start" in detail, detail
-    assert "cannot be undone" in detail
-
-    scr._delete()                                     # exec() returns 0 -> not Yes
-    box = asked()
-    assert box.default == "No", "No must be the default"
-    assert "UNFINISHED" in box.text, box.text
-    assert store.get("fdt", w.id).id == w.id, "No must leave it on disk"
-
-    # a FINISHED record says nothing of the sort
-    done = store.create("fdt", None, name="finished_one")
-    with done as d:
-        d.body = {"study": "single", "settings": {}, "seed": 4, "notices": []}
-    scr.refresh()
-    s2 = _select_ref(scr.table, done.id)
-    assert s2.finished
-    assert "UNFINISHED" not in _delete_prompt(s2)[1], _delete_prompt(s2)[1]
-
-
 def test_deleting_an_unfinished_training_says_what_is_lost(store):
     """A kept training holds the passes a fit has made, and deleting it throws them away: the question
     says after which pass it is kept, that a new training starts from its first pass, and that its
@@ -613,79 +564,6 @@ def test_deleting_an_unfinished_training_says_what_is_lost(store):
     ended, = [r for r in store.list("fit") if r.id == ended_id]
     assert ended.finished and ended.fit_state == "finished"
     assert "This unfinished training is kept after pass 5" in _delete_prompt(ended)[1]
-
-
-def _interrupted_fdt(store, name, body):
-    """An fdt record left the way an interrupted run leaves one -- the real progressive writer, one
-    payload written, then an exception inside ``with w:`` -- returned as the Summary the listing gives
-    it."""
-    w = store.create("fdt", None, name=name)
-    w.body = body
-    with pytest.raises(RuntimeError):
-        with w:
-            w.payload("data.h5").write_bytes(b"part of a run")
-            raise RuntimeError("stopped")
-    s = next(r for r in store.list("fdt") if r.id == w.id)
-    assert s.complete and not s.finished
-    return s
-
-
-def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
-    """The delete prompt, by study. One sentence served every unfinished fdt record, and it was false
-    for several of the shapes one can take:
-
-    - a COMPARISON measures nothing -- it draws records already measured -- so "measuring again from
-      the start" is untrue; deleting one loses no measurement, and running it again redraws it;
-    - the bare body word read wrongly as a phrase ("This single record" is "this one record"), so the
-      study is named as a phrase, and an unknown study as a measurement;
-    - a single-cell run cancelled before its first figure has none, so its figures and log are
-      "any it had written", not "its";
-    - a sweep whose planned count is not recorded names its done count alone, as the table's Points
-      cell does, never "4 of ?";
-    - a record still being WRITTEN, by a run in another window or at a terminal, looks exactly like
-      an interrupted one, and nothing stops it being deleted (there is no cross-process lock) -- so
-      "the run was interrupted or it failed" was false for it, and deleting on the strength of that
-      sentence killed the live run. Every fdt branch says it may still be running, and what to do
-      first.
-    """
-    from core.gui.screens.artifact_screen import _delete_prompt
-
-    base = {"settings": {}, "seed": 5, "notices": []}
-    live = "still being written by a run in another window or at a terminal"
-
-    cmp_ = _interrupted_fdt(store, "drawn_half", {
-        **base, "study": "comparison",
-        "compared": {"mode": "cells", "records": [{"kind": "fdt", "id": "20260101T000000",
-                                                   "name": "a"}]}})
-    detail = _delete_prompt(cmp_)[1]
-    assert "UNFINISHED" in detail and "comparison" in detail, detail
-    assert "measuring again" not in detail and "no resume" not in detail, detail
-    assert "redraws it" in detail, "running the comparison again redraws it"
-    assert "cannot be undone" in detail
-    assert live in detail and "let it finish or stop it before deleting" in detail, detail
-
-    single = _interrupted_fdt(store, "cancelled_early", {**base, "study": "single"})
-    assert single.points_done is None, "a single run has no operating points"
-    detail = _delete_prompt(single)[1]
-    assert "single-cell measurement" in detail, detail
-    assert "None" not in detail, detail
-    assert "any figures and log it had written" in detail, detail
-    assert "from the start" in detail, detail
-    assert live in detail and "let it finish or stop it before deleting" in detail, detail
-
-    unplanned = _interrupted_fdt(store, "sweep_no_plan", {
-        **base, "study": "sweep",
-        "points": {"param": "T", "planned": None, "done": 4, "failed": 0}})
-    assert unplanned.points_done == 4 and unplanned.points_planned is None
-    detail = _delete_prompt(unplanned)[1]
-    assert "4 operating point(s)" in detail, detail
-    assert "?" not in detail, detail
-    assert "sweep record is UNFINISHED" in detail, detail
-
-    unknown = _interrupted_fdt(store, "no_study", {**base, "study": None})
-    detail = _delete_prompt(unknown)[1]
-    assert "This measurement record is UNFINISHED" in detail, detail
-    assert "None" not in detail, detail
 
 
 def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch):
@@ -884,9 +762,9 @@ def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
     with running():
         scr._sweep(all_kinds=True)
     assert scr.status.text().endswith("before removing leftovers."), scr.status.text()
-    # a comparison is a record of this kind, and the Kind picker says so
-    assert KIND_LABELS["fdt"] == "FDT measurements, sweeps and comparisons"
-    assert scr.kind_combo.findText(KIND_LABELS["fdt"]) >= 0
+    # the Kind picker offers every kind the store keeps, and no kind it does not
+    assert [scr.kind_combo.itemData(n) for n in range(scr.kind_combo.count())] == list(KIND_LABELS)
+    assert "fdt" not in KIND_LABELS
 
 
 def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_removed(store, monkeypatch):
@@ -897,12 +775,12 @@ def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_remove
     answered, the file survives, and the status line names it and says why."""
     from tests._fixtures import artifact_screen, asked, qt_app
     qt_app()
-    d = store.kind_dir("fdt")
+    d = store.kind_dir("diagnostic")
     d.mkdir(parents=True, exist_ok=True)
-    fresh = d / "fdt_ratio_20260924_101500.png"
+    fresh = d / "ratio_20260924_101500.png"
     fresh.write_bytes(b"a picture something may still be writing")   # NOT backdated: written just now
     scr = artifact_screen(store)
-    _show_kind(scr, "fdt")
+    _show_kind(scr, "diagnostic")
     choose(monkeypatch, other=True)
     scr._sweep(all_kinds=False)
     informative = asked().text

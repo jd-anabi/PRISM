@@ -1,7 +1,7 @@
 """Root pytest configuration.
 
-Lives at the repo root so it covers BOTH test trees named in pytest.ini (tests/ and
-core/Reduction/tests/). It runs before any test module is imported, which is the whole point:
+Lives at the repo root so it covers every test tree named in pytest.ini. It runs before any test module is
+imported, which is the whole point:
 
 * QT_QPA_PLATFORM=offscreen  -- headless Qt; a test module that imports PySide6 first would
   otherwise try to open a display.

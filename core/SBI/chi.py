@@ -8,10 +8,10 @@ batched lock-in, the [log|chi|, cos, sin] feature packing, and the feature label
 chi(omega) generalizes the single-frequency Group-G lock-in (statistics.SummaryStatistics._group_g)
 to a K-frequency CURVE. The drive is K single-tone recordings at omega_k = mult_k * Omega_0, with the
 multipliers log-spaced over config.CHI_FREQ_BOUNDS and Omega_0 the measured spontaneous peak (so the
-resonance sits in a canonical frame regardless of where t_scale puts it -- mirrors the FDT pipeline's
-data-driven grid). See config.CHI_MODE for the full rationale.
+resonance sits in a canonical frame regardless of where t_scale puts it -- the data-driven grid the
+removed effective-temperature measurement used). See config.CHI_MODE for the full rationale.
 
-Unit convention (matches the forced path + core/FDT/spectral.lock_in_chi): chi is measured on the
+Unit convention (matches the forced path and the removed measurement's lock-in): chi is measured on the
 REDIMENSIONALIZED response x_dim with the DIMENSIONAL drive amplitude F0, so chi = response/drive
 carries the physical x_scale/f_scale magnitude (like Group-G's gain), while its SHAPE over omega
 carries the ND resonance (kappa/lambda/...). Frequencies are in cell frequency units; times in cell
@@ -368,8 +368,8 @@ def peak_freq(x: torch.Tensor, dt: float, batch: int = _PEAK_FREQ_BATCH) -> torc
 def lock_in_batched(x: torch.Tensor, omega: torch.Tensor, F0, T_obs, dt: float,
                     chunk: int = _LOCK_IN_CHUNK, n_samples: torch.Tensor | None = None) -> torch.Tensor:
     """
-    Batched complex susceptibility by lock-in detection (per-sample omega), mirroring
-    core/FDT/spectral.lock_in_chi:
+    Batched complex susceptibility by lock-in detection (per-sample omega), mirroring the lock-in of
+    the removed effective-temperature measurement:
 
         chi_b = (2 / (F0_b * T_obs)) * sum_n (x_b[n] - <x_b>) * exp(i*omega_b*t_n) * dt
 

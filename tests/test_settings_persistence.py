@@ -794,10 +794,13 @@ def _panel_built_at_module_scope(tmp_path_factory):
     module in no set a run locks."""
     from PySide6.QtCore import QCoreApplication, QEvent
     from core.gui import settings as st
-    from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     seen = st._override_path
-    panel = build_part(InferPanel, screen=None)            # __init__ ends with restore_settings(st.settings())
+    # A bare page that every run locks and frees, as every page of the window is; it reads the settings as a page's
+    # own __init__ ends by doing. A step of the inference screen would not do: one outside its screen has no session,
+    # and the end of every run in this module, which frees each page still enrolled, would fail on it.
+    panel = build_run_host()
+    panel.restore_settings(st.settings())
     yield panel, seen, tmp_path_factory.getbasetemp()
     panel.deleteLater()
     QCoreApplication.sendPostedEvents(panel, QEvent.DeferredDelete)

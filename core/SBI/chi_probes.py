@@ -259,14 +259,14 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
         forcing_params = torch.zeros((B, 4), dtype=dtype, device=device)
         forcing_params[:, 0] = amp_dim
         forcing_params[:, 1] = freq_k
-        forcing_params[:, 2] = math.pi / 2.0                           # phase -> cos drive (FDT convention)
+        forcing_params[:, 2] = math.pi / 2.0                           # phase -> cos drive
         force = _pipeline.build_nondim_sin_force_tensor(forcing_params, t_fine, rescale, fidx, rescale_idx)
         if force.shape[1] < n_force_ch:
             # The sin builder emits ONE channel (fidx above declares no "amp_y"), but the model's
             # drift may index more: HopfModel reads force_step[:, 1] unconditionally, and a user
             # model reads one channel per state variable -- so chi mode used to die with an
             # IndexError on anything but Nadrowski/BP. Probe channel 0 and leave the rest at zero,
-            # which is the same convention the FDT campaigns drive (see forcing.n_force_channels).
+            # which is the convention the removed effective-temperature drives kept (forcing.n_force_channels).
             padded = torch.zeros((B, n_force_ch, force.shape[2]), dtype=force.dtype, device=force.device)
             padded[:, :force.shape[1], :] = force
             force = padded

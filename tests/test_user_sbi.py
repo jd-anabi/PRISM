@@ -675,7 +675,7 @@ def test_chi_mode_drives_every_channel_the_model_reads():
     so the builder emits ONE channel. HopfModel reads ``force_step[:, 1]`` unconditionally
     (hopf_model.py:15, :49) and a user model reads one channel per state variable, so chi mode used
     to die with an IndexError on anything but Nadrowski/BP. The probe drives channel 0 and leaves
-    the rest at zero -- the same convention the FDT campaigns use.
+    the rest at zero.
     """
     saved_k = config.CHI_N_FREQS
     try:
@@ -1677,27 +1677,6 @@ def test_summary_statistics_rejects_a_non_uniform_dt():
         raise AssertionError("a non-uniform per-sample dt must raise, but was accepted")
     except ValueError as e:
         assert "non-uniform" in str(e), f"unexpected message: {e}"
-
-
-def test_interp_log_returns_nan_off_the_psd_grid():
-    """Off-grid frequencies must come back NaN, not a linear extrapolation off the edge bins.
-
-    `eff_temp_ratio` divides by this, so widening freq_bounds past the PSD resolution used to grow a
-    smooth, plausible, entirely fabricated T_eff/T tail -- and `check_high_freq_fdt` probes exactly
-    the top of the grid, so it could pass on invented numbers.
-    """
-    from core.FDT.sanity import _interp_log
-
-    x_old = torch.logspace(0, 2, 32, dtype=torch.float64)          # 1 .. 100
-    y_old = torch.linspace(1.0, 10.0, 32, dtype=torch.float64)
-    probe = torch.tensor([0.1, 1.0, 10.0, 100.0, 500.0], dtype=torch.float64)
-    out = _interp_log(probe, x_old, y_old)
-
-    assert torch.isnan(out[0]), "below the grid must be NaN, not extrapolated"
-    assert torch.isnan(out[-1]), "above the grid must be NaN, not extrapolated"
-    assert torch.isfinite(out[1:4]).all(), "in-range points must still interpolate"
-    mid = _interp_log(torch.tensor([10.0], dtype=torch.float64), x_old, y_old)
-    assert 1.0 <= float(mid) <= 10.0, f"in-range interpolation left the data range: {float(mid)}"
 
 
 def test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity():
