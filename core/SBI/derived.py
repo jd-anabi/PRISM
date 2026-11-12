@@ -119,8 +119,8 @@ def for_simulation(cfg, params_nd: torch.Tensor,
     copy of the inferred index. ``rescale`` is never written.
 
     The two go to a force builder or ``gen_chi_raw`` together; both raise RuntimeError on an index
-    that names T and no f_scale. The simulating identifiability diagnostics, the probe checks and the
-    Simulate panel's live runner call this. The observation builder, the posterior predictive check
+    that names T and no f_scale. The simulating identifiability diagnostics and the probe checks call
+    this. The observation builder, the posterior predictive check
     and the Fisher rotation make the same substitution inline, with ``to_sim_rescale`` and
     ``cfg.sim_rescale_idx``; training, which is handed no config, with ``to_sim_rescale`` and
     ``sim_rescale_idx`` on the index it is given.

@@ -583,4 +583,3 @@ class SimConfig:
         for key in _CACHED:
             c.__dict__.pop(key, None)
         return copy.deepcopy(c)
-

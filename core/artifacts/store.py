@@ -330,9 +330,6 @@ class ArtifactWriter:
         self.parents, self.fingerprints, self.body = {}, {}, {}
         self._payloads, self._figures = [], []
         self.manifest = None
-        # True once a payload path or a figure path has been HANDED OUT: whether anything was spent,
-        # the last moment this class can observe -- what the caller then does with it is out of sight.
-        self._wrote_anything = False
         # The header blocks, computed once, at the commit. git_info runs three git subprocesses and
         # env_info imports torch.
         self._prism = None
@@ -346,7 +343,6 @@ class ArtifactWriter:
             raise StoreError(f"a payload is a file directly inside the artifact directory: {filename!r}")
         if filename not in self._payloads:
             self._payloads.append(filename)
-        self._wrote_anything = True
         return self.dir / filename
 
     def figure_path(self, title: str) -> Path:
@@ -358,7 +354,6 @@ class ArtifactWriter:
             p = figs / f"{base}-{n}.png"
             n += 1
         self._figures.append(f"figures/{p.name}")
-        self._wrote_anything = True
         return p
 
     def fig_sink(self, forward=None, *, optional: bool = False):

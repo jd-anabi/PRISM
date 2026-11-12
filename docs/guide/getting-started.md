@@ -328,7 +328,7 @@ was loaded under.
 
 ## Browsing the store
 
-**In the window**, the part Records (Ctrl+6), whose page is headed Artifacts, reads the store:
+**In the window**, the part Records (Ctrl+3), whose page is headed Artifacts, reads the store:
 
 - choose a kind, and a table lists its records;
 - select a record, and the detail pane shows its manifest and its run's log; **Save…** writes what is

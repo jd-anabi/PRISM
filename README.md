@@ -9,7 +9,7 @@ Start with the guide in [docs/guide/](docs/guide/): it explains how to use, run 
 ### Requirements
 
 - **Python 3.12** recommended (validated). The pinned stack requires Python **≥ 3.11** (e.g. NumPy 2.3, SciPy 1.16); PyTorch 2.9 supports 3.10–3.13.
-- **conda** (Miniforge / Miniconda / Anaconda) is recommended — it matches the development environment and provides the `ffmpeg` binary used for MP4 video export. A plain `venv` also works, but MP4 export then depends on a system `ffmpeg`.
+- **conda** (Miniforge / Miniconda / Anaconda) is recommended — it matches the development environment. A plain `venv` also works.
 - **git** to clone the repository.
 - **GPU note:** on Windows/Linux the default install pulls the CUDA (`+cu130`) PyTorch build for NVIDIA GPUs; on macOS it uses the CPU/MPS build (there is no CUDA on Mac). See the per-platform notes below.
 
@@ -55,12 +55,7 @@ Then follow the section for your platform.
    pip install -r requirements.txt
    ```
 
-5. _(Optional)_ **ffmpeg** for MP4 video export:
-   ```bash
-   conda install -c conda-forge ffmpeg -y
-   ```
-
-6. **Run:** `bash run.sh`
+5. **Run:** `bash run.sh`
 
 <details>
 <summary><b>Troubleshooting: step 3 printed <code>x86_64</code> instead of <code>arm64</code></b></summary>
@@ -109,8 +104,7 @@ Options:
    pip install -r requirements.txt
    ```
    This installs the CUDA build `torch==2.9.0+cu130` (from the PyTorch index configured in `requirements.txt`). It uses an **NVIDIA GPU** if present and still runs on CPU otherwise (the wheel is large because it bundles the CUDA libraries).
-3. _(Optional)_ **ffmpeg** for MP4 export: `conda install -c conda-forge ffmpeg -y`
-4. **Run:** `bash run.sh`
+3. **Run:** `bash run.sh`
 
 **CPU-only / smaller install (no NVIDIA GPU):** install the CPU PyTorch build from the CPU index instead of the bundled CUDA build:
 ```bash
@@ -132,8 +126,7 @@ The `requirements.txt` torch/torchvision lines pin `+cu130` for Linux, so for a 
    pip install -r requirements.txt
    ```
    This installs `torch==2.9.0+cu130` (CUDA build) for **NVIDIA GPUs**; it also runs CPU-only if you have no NVIDIA GPU (large download).
-3. _(Optional)_ **ffmpeg** for MP4 export: `conda install -c conda-forge ffmpeg`
-4. **Run:** double-click **`run.bat`**, or type `run.bat` in a terminal. PRISM opens in its own window, with no console window beside it. Starting it again while it is open brings that window to the front. The launcher finds the environment's Python itself: the active environment's, when it holds PRISM's libraries, else `biophys-env` in the usual Anaconda and Miniconda folders; when it finds none, a Windows message says what to do. The first time, it also puts a PRISM shortcut on the desktop. `run.bat --where` says which Python it would use, and starts nothing.
+3. **Run:** double-click **`run.bat`**, or type `run.bat` in a terminal. PRISM opens in its own window, with no console window beside it. Starting it again while it is open brings that window to the front. The launcher finds the environment's Python itself: the active environment's, when it holds PRISM's libraries, else `biophys-env` in the usual Anaconda and Miniconda folders; when it finds none, a Windows message says what to do. The first time, it also puts a PRISM shortcut on the desktop. `run.bat --where` says which Python it would use, and starts nothing.
 
 **CPU-only / smaller install:** same as Linux — install `torch` / `torchvision` from `https://download.pytorch.org/whl/cpu` first and skip those two lines in `requirements.txt`.
 
