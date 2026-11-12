@@ -1,5 +1,46 @@
 # PRISM — state
 
+**Last updated:** 2026-11-11, evening (17:05 by the clock; the weekly bar 72 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S TASK 5 IS COMPLETE, and THE OWNER CUT THE PROGRAM DOWN AND RE-PLANNED THE REST. The chat started from the
+owner's pasted prompt (`docs/superpowers/prompts/2026-11-10-window-redesign-stage-5-build-from-task-5.md`). The
+hand-off prompt for the next chat is `docs/superpowers/prompts/2026-11-11-sbi-only-cut-and-stage-5-from-task-5b.md`.
+
+- **The owner's decisions of 11 November** (the plan's section "Re-plan of 11 November 2026 (the owner's)", departure
+  468):
+  - PRISM becomes a program for inference by simulation alone: "I think I just want it to be a SBI parameter inference
+    software, I don't think the CMR of FDT stuff needs to be in it". The effective temperature (FDT, with its CrossVal
+    study, sweeps and comparisons), the Reduction map and Live simulation come out ("Yes, along with the live
+    simulation."), as Task 5b, before Task 6. That yes opens the engine for the cut alone, removes the FDT settings and
+    lets `CLAUDE.md` be edited where it describes those pages. Measured before: nothing on the inference side imports
+    `core/FDT` or `core/Reduction`; `Artifacts/fdt/` is empty; about 11,000 of some 180,000 lines and two of the five
+    slow tests go.
+  - The leaner way ("Yes, all of it"): Tasks 6 to 13 built as four (6-7, 8-9, 10-11, 12-13); one Opus builder per task,
+    two readers, the three-reader review once at the stage's end; departures written once, in the plan; `CLAUDE.md`
+    shortened to its rules; the design's stages 6 to 9 become one last stage; the code audit and the retrain right after
+    stage 5. Estimated: about half the usage per piece of work; the retrain from about late January to early December.
+- **Task 5, the Checks list, a check's page and every check's result:** `434ee3b`, `729b1cf`, `73fe79f`, departures 450
+  to 462 `be61451`; its fix round (23 rulings from three readers' 4 Important and 22 Minor) landed as the skeptic's
+  trial commit `4c433ef`, its tree checked equal to its brief's walk (no implementer: the leaner way), departures 463 to
+  467 `d93c4e0`. A result made with no parent was shown as a window of its own; every result and form is now made inside
+  its check's page. The owner's "Let it close the step" is built (450, 462), narrowed by 465: a check 3 "Not compared"
+  because its counts could not be read holds step 4 open. Re-read clean, five Minors carried. About 20 points of the
+  weekly bar the old way.
+- **The fast gate:** 3981 passed, 12 skipped, 5 deselected at `d93c4e0` (3998 collected), 42 min 00 s; the listing of
+  `Artifacts/` after equals the one before (428 entries); `PRISM.ini` unchanged. The real-screen run: 12 passed.
+- **Found and carried to Task 6-7:** labels made visible before they have a parent, at seven places (four form rows' unit
+  labels, three step pages' plan lines; fourteen shows in each display test that builds Parameter inference), are shown as windows of
+  their own when Parameter inference is first built: they flash once a launch. The cure and its standing guard are in
+  the Re-plan section.
+- **The code audit's list** gains item 13 of its stage 5 part: a page that holds a form, dropped and left to the
+  collector, ends the process (the suites never drop one; the product does not today).
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: Task 5b, the cut, in a new chat the owner starts from the prompt above, the weekly bar read first; then
+`CLAUDE.md` shortened and shown to the owner; Tasks 6-7, 8-9, 10-11, 12-13; the last review; Task 14 (the exit, with the
+owner); the code audit; the retrain from the window; one last stage for what stages 6 to 9 held.
+
+What follows is the head as the night of 10 November left it:
+
 **Last updated:** 2026-11-10, night (23:05 by the clock; the weekly bar 52 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S TASKS 3 AND 4 ARE COMPLETE, each with its review clean and its fast gate green on the same head; Tasks 0 to 4
 are done. The chat started at 09:22 from the owner's pasted prompt

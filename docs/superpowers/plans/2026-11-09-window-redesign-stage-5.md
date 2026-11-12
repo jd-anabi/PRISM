@@ -708,8 +708,16 @@ guide, the walkthrough and `README.md`.
 The card gate only if a file under `core/SBI/`, `core/Simulator/`, `core/Solvers/`, `core/Models/` or `core/diagnostics/`
 changes beyond comments.
 
-**After it, the controller** shortens `CLAUDE.md` to its rules (the owner's yes of 11 November), dropping what describes
-the removed parts, shows the owner the result, and updates `docs/STATE.md`.
+**After it, the controller** re-bases the exit's checks on Task 5b's head: `exit_fence.py`'s expected engine changes
+become Task 2's plus the files Task 5b's report lists; `stage-5/gates/digests-at-start.json` is taken again there (the
+seventeen digests of the named training code unchanged); `len(FIELDS)` becomes the count Task 5b's report states; and
+Task 14's walkthrough rows that exercise a removed page are dropped from its list. Then it shortens `CLAUDE.md` to its
+rules. The owner's yes of 11 November covers two edits: the builder's, of the sentences that describe the removed
+parts, and the controller's shortening, with the substance of every rule kept; a change to what a rule says still
+needs the owner's yes on its exact words. The card gate's block (the five command lines, run 5's drill and their pass
+criteria) stays whole, in `CLAUDE.md` or moved whole into `docs/guide/testing.md` with a pointer, since STATE's gate
+table and that page carry it verbatim and Task 14 runs it. The controller shows the owner the result and updates
+`docs/STATE.md`.
 
 ### Tasks 6 to 13 as four
 

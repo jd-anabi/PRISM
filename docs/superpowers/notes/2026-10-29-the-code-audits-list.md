@@ -529,3 +529,10 @@ From Task 4 (the pieces the later pages share), `.superpowers/sdd/2026-10-06-win
     and hidden, as the Checks list will make a check's page, and `tests/test_pages.py`'s
     `test_the_walk_of_the_whole_list_run_alone_ends_its_process_cleanly` runs that walk alone in a process of its own.
     Cure if wanted: trace it inside the toolkit, or try a later PySide6.
+13. **A page that holds a form, dropped and left to the collector, ends the process with an access violation (Task
+    5).** With a page that holds a form dropped and left to the collector, the process ends with an access violation
+    (exit 139; reproduced on `6416ee5` with the Model and options page). Check whether the window ever drops such a
+    page, and whether it is the same cause as item 12's corrupted heap of a parentless page. The window builds its pages
+    once and never drops one, so the product does not meet it today; the suites keep every replaced page until their test
+    ends (`tests/_fixtures.py`'s `build_step_page`) and hide their windows before deleting them (`tests/_built.py`).
+    Cure if wanted: as item 12's.
