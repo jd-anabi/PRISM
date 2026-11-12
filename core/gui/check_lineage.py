@@ -497,13 +497,14 @@ def no_run_passes(row: CheckRow, *, held: Held) -> bool:
     """Whether no run can pass the deciding check of ``row`` for the posterior in use, so that the row no longer holds
     the step open though it does not count as passed: the use of each part of the input for a posterior trained without
     keeping its simulations, the identifiability of one trained without the rotation, each with no record that counts,
-    and the comparison after simulating not compared, as a reading of the posterior's simulation set found it. A row
-    that passed or does not apply, a check that does not decide, and every row while no posterior is in use are none of
-    these: a load, a run or a reading lifts what they wait for."""
+    and the comparison after simulating not compared for what the posterior's simulation set is (nothing counted, or a
+    part of it), as a reading of it found it. A row that passed or does not apply, a check that does not decide, every
+    row while no posterior is in use, and the comparison whose counts could not be read, are none of these: a load, a
+    run or a reading lifts what they wait for."""
     if held.posterior is None or row.key not in DECIDING or row.state in ("Passed", "Does not apply"):
         return False
     if row.key == "comparison":
-        return row.state == "Not compared" and held.set_read
+        return row.state == "Not compared" and held.set_read and held.set_counts is not None
     return row.record is None and row.reason in CANNOT_PASS_REASONS
 
 
@@ -627,8 +628,9 @@ EARLIER_MIXED_WORDS = "mixed, as in training"
 def earlier_lines(row: CheckRow, records: Sequence[RecordRead]) -> tuple[str, ...]:
     """The earlier runs of the check of ``row``, one line each, newest first: what each read and when, why one that
     does not count does not, the cell of a frequency band, and how many driven recordings a calibration repeated at
-    fixed numbers held. A record no longer among ``records`` is passed over."""
-    by_id = {_ident(record): record for record in records if record.manifest}
+    fixed numbers held. A record no longer among ``records`` is passed over; each is looked for among the check's own
+    records, since two kinds of record may hold the same id."""
+    by_id = {_ident(record): record for record in _of_check(entry(row.key), records)}
     said = []
     for ident in row.earlier:
         record = by_id.get(ident)

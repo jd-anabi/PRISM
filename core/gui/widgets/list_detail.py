@@ -46,9 +46,11 @@ class ListAndDetail(QWidget):
     is open, it shows less of itself; and it may answer ``take_the_keyboard(detail)``, putting the keyboard on the row
     of ``detail`` and saying True, which "All checks" asks when it held the keyboard, else the list's first stop takes
     it. ``back_pressed`` is said when the link above a detail in the list's place is pressed, once the whole list
-    stands again."""
+    stands again. ``switched`` is said when the detail moves between beside the list and its place, which changes what
+    the Tab key stops at."""
 
     back_pressed = Signal()
+    switched = Signal()
 
     def __init__(self, listing: QWidget, *, beside_width: int, back_words: str = BACK_WORDS) -> None:
         super().__init__()
@@ -104,6 +106,12 @@ class ListAndDetail(QWidget):
         whole width in the list's place. The detail's least width is read as it would stand beside, told that room
         first, so that one width gives one arrangement, however the window came to it and whatever the detail was told
         before."""
+        was = self.beside()
+        self._arrange_now()
+        if self.detail is not None and self.beside() != was:
+            self.switched.emit()
+
+    def _arrange_now(self) -> None:
         detail = self.detail
         self._hold_the_list(None)
         if detail is None:

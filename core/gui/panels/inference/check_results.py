@@ -4,7 +4,9 @@ the record holds, each captioned in the window's words, in a result region; the 
 never shown. A check's page shows it; Records can host the same block.
 
 A block reads the record's figures from its folder as it is made, so it is made only while no run is live: the Checks
-page makes its blocks in its reading of the disk, never as it draws its facts.
+page makes its blocks in its reading of the disk, never as it draws its facts. A block is made inside its check's page
+(``parent``) before anything fills it: one made with no parent would be a window of its own, shown as its first words
+are said.
 """
 import re
 from collections.abc import Mapping
@@ -41,15 +43,16 @@ def figures_of(key: str, manifest: Mapping, folder: "Path | str") -> list:
     return found
 
 
-def result_block(key: str, manifest: Mapping, folder: "Path | str", *, units: Mapping[str, str] = {},
+def result_block(key: str, manifest: Mapping, folder: "Path | str", *, parent, units: Mapping[str, str] = {},
                  force_unit: str = "", others_open: int = 0, prior_words: str = "",
                  text: "str | None" = None) -> ResultRegion:
     """The result of the record of the check ``key`` whose manifest is ``manifest``, in the folder ``folder``: its
     verdict sentence as a message row with the marker of the state the record reads, its table, and its figures,
     captioned. ``units``, each parameter's unit by its name; ``force_unit``, the cell's unit of force; ``others_open``,
     for a passed calibration, how many other deciding checks that apply have not passed; ``prior_words``, the audit's
-    prior as a sentence names it; ``text``, the record's text, for what the observations can pin down."""
-    region = ResultRegion()
+    prior as a sentence names it; ``text``, the record's text, for what the observations can pin down; made inside
+    ``parent``."""
+    region = ResultRegion(parent)
     state = check_readings.read(key, manifest).state
     region.set_verdict(check_readings.STATE_MARKERS.get(state, "later"),
                        check_readings.verdict_sentence(key, manifest, others_open=others_open,
@@ -59,19 +62,19 @@ def result_block(key: str, manifest: Mapping, folder: "Path | str", *, units: Ma
     return region
 
 
-def history_block(key: str, entry_: Mapping) -> ResultRegion:
+def history_block(key: str, entry_: Mapping, *, parent) -> ResultRegion:
     """The result of a check that keeps nothing but its result, from its run ``entry_`` in the run history: its name and
-    how the run ended, with the marker of a check done, or of a run that did not finish."""
-    region = ResultRegion()
+    how the run ended, with the marker of a check done, or of a run that did not finish; made inside ``parent``."""
+    region = ResultRegion(parent)
     finished = isinstance(entry_, Mapping) and entry_.get("outcome") == "finished"
     region.set_verdict("done" if finished else "err", check_readings.run_sentence(key, entry_))
     return region
 
 
-def comparison_block(sentence: str, state: str, *, narrowed: bool = False) -> ResultRegion:
+def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = False) -> ResultRegion:
     """The comparison after simulating, which writes no record: its sentence with the marker of its state, and for a
-    posterior from a narrowing round that the audit measured the whole prior."""
-    region = ResultRegion()
+    posterior from a narrowing round that the audit measured the whole prior; made inside ``parent``."""
+    region = ResultRegion(parent)
     region.set_verdict(check_readings.STATE_MARKERS.get(state, "later"), sentence)
     if narrowed:
         region.set_sentences((Fact("info", check_readings.NARROWED_COMPARISON_TEXT),))

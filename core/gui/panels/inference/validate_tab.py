@@ -12,7 +12,7 @@ opens the first deciding check a run can still pass, or goes to Inference when n
 import random
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from core import orchestrator
@@ -93,7 +93,10 @@ class _Listing(QWidget):
 
     def set_rows(self, found) -> None:
         """Show each check's row of ``found`` (the checks' rows in the list's order; None before the first reading,
-        the names alone)."""
+        the names alone). The row the keyboard is on in each table stays the current one, by its check. A group's
+        heading is no row a click selects or the keyboard stops on."""
+        kept = {table: self.key_at.get(table.view.currentIndex().row()) for table in (self.whole, self.narrow)
+                if table.view.currentIndex().isValid()}
         by_key = {row.key: row for row in found or ()}
         whole, narrow = [], []
         self.headings, self.row_of, self.key_at = [], {}, {}
@@ -111,20 +114,32 @@ class _Listing(QWidget):
                 narrow.append([TextCell(one.name, wrap=True), state])
         for table, rows in ((self.whole, whole), (self.narrow, narrow)):
             table.set_rows(rows)
+            model = table.view.model()
             for at in self.headings:
-                table.view.setSpan(at, 0, 1, table.view.model().columnCount())
+                table.view.setSpan(at, 0, 1, model.columnCount())
+                for column in range(model.columnCount()):
+                    model.item(at, column).setFlags(Qt.NoItemFlags)
+            if kept.get(table) in self.row_of:
+                table.view.selectionModel().setCurrentIndex(model.index(self.row_of[kept[table]], 0),
+                                                            QItemSelectionModel.NoUpdate)
 
     def view(self):
         """The table in sight's view."""
         return (self.narrow if self.narrowed else self.whole).view
 
-    def select(self, key: "str | None") -> None:
-        """Select the row of the check ``key`` in both tables, its row the current one; None selects none."""
+    def select(self, key: "str | None", *, current: bool = True) -> None:
+        """Select the row of the check ``key`` in both tables, its row the current one unless ``current`` is False, when
+        the keyboard's row stays where it is; None selects none."""
         for table in (self.whole, self.narrow):
             row = self.row_of.get(key)
-            table.select_row(row)
-            if row is not None:
+            if row is None:
+                table.select_row(None)
+            elif current:
+                table.select_row(row)
                 table.view.setCurrentIndex(table.view.model().index(row, 0))
+            else:
+                table.view.selectionModel().select(table.view.model().index(row, 0),
+                                                   QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
 
     def set_narrow(self, on: bool) -> None:
         """Beside a check's page, the name and the state alone; else the whole table."""
@@ -203,6 +218,7 @@ class ValidatePanel(StepPage):
             page.hide()
         self.list_detail = ListAndDetail(self.listing, beside_width=design.scaled(CHECK_BESIDE_WIDTH))
         self.list_detail.back_pressed.connect(self._all_checks)
+        self.list_detail.switched.connect(self._switched)
         at = self._body.indexOf(self.in_use) + 1
         self._body.insertWidget(at, self.headline_block)
         self._body.insertWidget(at + 1, self.list_detail)
@@ -255,13 +271,14 @@ class ValidatePanel(StepPage):
         return held() if callable(held) else None
 
     def _next_check(self) -> "str | None":
-        """The first deciding check that applies, has not passed and that a run can still pass; with nothing read, the
-        first deciding check; None when none is left."""
+        """The first deciding check that applies, has not passed and that a run can still pass, the check open passed
+        over, since its own page stands already; with nothing read, the first deciding check that is not open; None when
+        none is left."""
         found, held = self._rows(), self._held()
         if found is None or held is None:
-            return DECIDING[0]
+            return next(key for key in DECIDING if key != self.open_key)
         for row in found:
-            if (row.key in DECIDING and row.state not in ("Passed", "Does not apply")
+            if (row.key in DECIDING and row.key != self.open_key and row.state not in ("Passed", "Does not apply")
                     and not check_lineage.no_run_passes(row, held=held)):
                 return row.key
         return None
@@ -279,7 +296,7 @@ class ValidatePanel(StepPage):
         self.headline_block.setVisible(summary is not None)
         found = self._rows()
         self.listing.set_rows(found)
-        self.listing.select(self.open_key)
+        self.listing.select(self.open_key, current=False)
         by_key = {row.key: row for row in found or ()}
         kept = getattr(self._screen, "checks_held", None)
         records = kept.records if kept is not None else ()
@@ -290,8 +307,9 @@ class ValidatePanel(StepPage):
                           source=source)
 
     def _result(self, key, row, found, kept, *, read: bool, page) -> tuple:
-        """The result the page of the check ``key`` shows for its ``row``, and what it was made from: kept when it was
-        made from the same; a record's made only at a reading."""
+        """The result the page of the check ``key`` shows for its ``row``, and what it was made from: kept when it would
+        say the same; a record's made only at a reading, from its folder with the count of the other checks still open
+        and the audit's prior, which its words say, and kept between readings while its folder decides."""
         if row is None or kept is None:
             return None, None
         if key == "comparison":
@@ -302,33 +320,44 @@ class ValidatePanel(StepPage):
             if not ran:
                 return None, None
             source = ran[-1].get("id")
-            return (page.result, source) if page.result_source == source else (history_block(key, ran[-1]), source)
+            return ((page.result, source) if page.result_source == source
+                    else (history_block(key, ran[-1], parent=page), source))
         if row.record is None:
             return None, None
-        source = row.record.folder
-        if page.result_source == source or not read:
-            return (page.result, source) if page.result_source == source else (None, None)
-        return self._record_result(key, row, found, kept), source
+        # What the block's words say beside the record: the count of the others still open, which the calibration's
+        # says, and the prior an audit was made of.
+        others = self._others_open(key, found) if key == "calibration" else 0
+        prior_words = self._audit_prior(row)
+        source = (row.record.folder, others, prior_words)
+        if page.result_source == source:
+            return page.result, source
+        if not read:
+            same_folder = isinstance(page.result_source, tuple) and page.result_source[0] == row.record.folder
+            return (page.result, page.result_source) if same_folder else (None, None)
+        return self._record_result(key, row, kept, others=others, prior_words=prior_words, page=page), source
 
-    def _record_result(self, key, row, found, kept):
-        """The result of the record that decides the row of the check ``key``."""
-        units, force_unit = self._units()
+    def _others_open(self, key, found) -> int:
+        """How many deciding checks other than ``key`` apply, have not passed and a run can still pass."""
         held = self._held()
-        others = sum(1 for one in found if one.key in DECIDING and one.key != key
-                     and one.state not in ("Passed", "Does not apply")
-                     and not (held is not None and check_lineage.no_run_passes(one, held=held)))
-        return result_block(key, row.record.manifest, row.record.folder, units=units, force_unit=force_unit,
-                            others_open=others, prior_words=self._audit_prior(row),
+        return sum(1 for one in found if one.key in DECIDING and one.key != key
+                   and one.state not in ("Passed", "Does not apply")
+                   and not (held is not None and check_lineage.no_run_passes(one, held=held)))
+
+    def _record_result(self, key, row, kept, *, others: int, prior_words: str, page):
+        """The result of the record that decides the row of the check ``key``, made inside its page."""
+        units, force_unit = self._units()
+        return result_block(key, row.record.manifest, row.record.folder, parent=page, units=units,
+                            force_unit=force_unit, others_open=others, prior_words=prior_words,
                             text=kept.texts.get(row.record.folder))
 
     def _comparison_result(self, row, found, page) -> tuple:
         """The comparison's own result, from the counts the reading found: made, or waiting for the audit; none when
         it is not compared, since its state line says why, or when it waits for a posterior or the simulations. While a
-        training or a narrowing round is live, that it is counted when the simulation ends. The one shown is kept while
-        it would say the same."""
+        training or a narrowing round is live, that it is counted when the simulation ends, where it applies. The one
+        shown is kept while it would say the same."""
         held = self._held()
         status = controller().status
-        if status.live and status.word in TRAINING_WORDS:
+        if status.live and status.word in TRAINING_WORDS and row.state != "Does not apply":
             made = (COUNTED_LATER_TEXT, "Running", False)
         elif held is None or row.state not in ("Passed", "Look closer", "Failed", "Waiting for the audit"):
             return None, None
@@ -338,12 +367,13 @@ class ValidatePanel(StepPage):
                 return None, None
             unusable, total = held.set_counts[0], held.set_counts[1]
             made = (check_readings.compared_sentence(compared, unusable=unusable, total=total,
-                                                     audit_fraction=check_lineage.audit_fraction(found)),
+                                                     audit_fraction=check_lineage.audit_fraction(found),
+                                                     prior_words=held.prior_words or "the prior in use"),
                     row.state, held.narrowed)
         if page.result_source == made:
             return page.result, made
         sentence, state, narrowed = made
-        return comparison_block(sentence, state, narrowed=narrowed), made
+        return comparison_block(sentence, state, narrowed=narrowed, parent=page), made
 
     def _audit_prior(self, row) -> str:
         """The prior an audit was made of, as its sentence names it."""
@@ -456,6 +486,11 @@ class ValidatePanel(StepPage):
             target = self.list_detail.back
         if target is not None:
             target.setFocus(Qt.OtherFocusReason)
+
+    def _switched(self) -> None:
+        """The check's page moved between beside the list and its place: the Tab key's order again, as it now stands."""
+        if self._keys_ordered:
+            self.order_the_keys()
 
     def _all_checks(self) -> None:
         """"All checks": the whole list again, its own form handed back."""

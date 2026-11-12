@@ -38,12 +38,13 @@ class NextStep:
 
 
 class ResultRegion(QWidget):
-    """A page's result after its run. ``next_pressed`` carries the ``NextStep`` whose button was pressed."""
+    """A page's result after its run, made inside ``parent``. ``next_pressed`` carries the ``NextStep`` whose button was
+    pressed. A region with no parent is a window of its own: the first words it is handed would show it as one."""
 
     next_pressed = Signal(object)
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
         self._facts: tuple = ()
         self.verdict: "MessageRow | None" = None   # a check's verdict, first in the region
         self._rows: list = []               # the message row of each fact said

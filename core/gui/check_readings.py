@@ -93,6 +93,9 @@ FIXED_AUDIT_TEXT = "Run at a fixed number of driven recordings, which does not c
 #: The comparison's sentences and messages.
 NO_AUDIT_TEXT = ("There is no audit of {} to compare with. The simulation set holds {} % unusable driven recordings. "
                  "Run the audit in step 4, Checks, when this run has ended.")
+#: The same, as the comparison's page says it afterwards, with no run live: the audit's row is the one to run.
+NO_AUDIT_AFTER_TEXT = ("There is no audit of {} to compare with. The simulation set holds {} % unusable driven "
+                       "recordings; run \"{}\" in this list to compare them.")
 NONE_COUNTED_TEXT = "Not compared: no driven recordings were counted."
 PART_TEXT = "Not compared: the count covers {} batches, not the whole simulation set."
 PART_FIRST_TEXT = ("Not compared: the count covers {} batches, not the whole simulation set; the first {} were saved "
@@ -701,9 +704,13 @@ _SENTENCES = {"band": _band_sentence, "audit": _audit_sentence, "calibration": _
               "across_prior": _across_sentence}
 
 
-def compared_sentence(compared: Comparison, *, unusable: int, total: int, audit_fraction) -> str:
-    """The comparison after simulating as its result says it once it is made: its state and the two shares with their
-    difference; else, nothing compared, waiting for the audit or a part of the set, the comparison's own sentence."""
+def compared_sentence(compared: Comparison, *, unusable: int, total: int, audit_fraction,
+                      prior_words: str = "the prior in use") -> str:
+    """The comparison after simulating as its page says it afterwards: its state and the two shares with their
+    difference; waiting for the audit, that there is none of ``prior_words`` to compare with and which check to run;
+    else, nothing compared or a part of the set, the comparison's own sentence."""
+    if compared.state == "Waiting for the audit" and isinstance(total, int) and total > 0:
+        return NO_AUDIT_AFTER_TEXT.format(prior_words, _share(unusable / total), entry("audit").name)
     if compared.difference is None or compared.state not in VERDICT_WORDS:
         return compared.sentence
     limit = COMPARISON_FINE_POINTS if compared.difference <= COMPARISON_FAILED_POINTS else COMPARISON_FAILED_POINTS

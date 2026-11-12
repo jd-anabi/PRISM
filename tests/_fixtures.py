@@ -1071,7 +1071,7 @@ def _band_point(length, multiplier, drive, *, noisy=False, captured=False):
 
 
 def _band(band_holds=True, drive_holds=True, repeats=24):
-    from core.diagnostics.probes import DRIVE_PHASE
+    from core.diagnostics.probes import CAVEATS, DRIVE_PHASE
     settings = {"lengths": [3.1, 6.2], "multipliers": [0.03, 0.1, 0.3], "drives": [0.15], "repeats": repeats,
                 "cycle_caps": [20.0], "cv_max": 0.2, "phase_max": None, "snr_min": 3.0, "sup_min": 0.5,
                 "peak_window": 0.1, "seed": 0, "drive_phase": DRIVE_PHASE, "configured": dict(_CONFIGURED)}
@@ -1090,8 +1090,15 @@ def _band(band_holds=True, drive_holds=True, repeats=24):
                "captured_in_band": [{"length_s": point["length_s"], "multiplier": point["multiplier"], "sup": point["sup"]}
                                     for point in points if point["drive"] == drive and point["sup"] < 0.5]}
               for drive in settings["drives"]]
+    # The engine's own lines, which the window never shows: its reading of the cycle ceiling's rescue, its caveats,
+    # and its summary.
+    rescue = {"failed_full": 0, "shortened": 0, "rescued": 0,
+              "reading": "no point needed the cycle ceiling: every point passes at full length"}
+    summary = ["band [0.03, 0.3] x the cell's own frequency: measurable at every length tried",
+               "drive 0.15: does not capture the cell anywhere in the band", rescue["reading"]]
     return {"settings": settings, "results": {"band_holds": band_holds, "drive_holds": drive_holds, "points": points,
-                                              "frequencies": frequencies, "drives": drives}}
+                                              "frequencies": frequencies, "drives": drives, "cap_rescue": rescue,
+                                              "wall": None, "caveats": list(CAVEATS), "summary": summary}}
 
 
 def _audit(masked_fraction=0.379, num_runs=100, invariants_hold=True, attribution_holds=True, cross_check_holds=True,
@@ -1244,7 +1251,7 @@ def _sbc(fraction_passed=1.0, repeats=10, n_cal=2000, samples=1000, chi_k_fixed=
 
 
 def _drive(oscillating=True, strongest_free_running=0.15, weakest_captured=0.8):
-    from core.diagnostics.probes import DRIVE_PHASE, _drive_picks, _drive_verdict
+    from core.diagnostics.probes import CHI_F0_NOTE, DRIVE_PHASE, _drive_picks, _drive_verdict
     force_scale, omega0, f_drive = 2.0, 0.01, 0.014
     settings = {"t_obs_s": 5.0, "repeats": 16, "detune": 1.4, "strengths": [0.05, 0.15, 0.4, 0.8], "free_min": 0.7,
                 "captured_max": 0.1, "peak_window": 0.02, "clarity_min": 3.0, "seed": 0, "drive_phase": DRIVE_PHASE,
@@ -1279,9 +1286,13 @@ def _drive(oscillating=True, strongest_free_running=0.15, weakest_captured=0.8):
     box = None if weakest is None else {
         "amp": [0.0, 3.0 * weakest["strength"] * force_scale], "freq": [omega0 / 10.0, omega0 * 10.0],
         "phase": [0.0, 6.283185307], "offset": [-50.0, 50.0]}
+    chi = next(row for row in rows if row["strength"] == _CONFIGURED["chi_f0"])     # the configured drive's row
     results = {"oscillating": oscillating, "force_scale": force_scale, "strengths": rows,
                "strongest_free_running": pick(strongest), "weakest_captured": pick(weakest),
-               "suggested_forcing": {"free_running": forcing(strongest), "captured": forcing(weakest), "box": box}}
+               "chi_f0_row": {"strength": chi["strength"], "own_peak_ratio": chi["own_peak_ratio"],
+                              "verdict": chi["verdict"], "note": CHI_F0_NOTE},
+               "suggested_forcing": {"free_running": forcing(strongest), "captured": forcing(weakest), "box": box},
+               "notes": []}
     return {"settings": settings, "results": results}
 
 
@@ -1293,7 +1304,10 @@ def _calibration(passed=True, n_cal=2000, cal_n_scales=200, samples=1000, seed=1
         "sbc": {"per_param": [{"name": name, "ks_p": p, "c2st_ranks": 0.5, "c2st_dap": 0.5}
                               for name, p in zip(names, ks)]},
         "tarp": {"atc": 0.0123, "ks_p": 0.5, "num_bins": config.TARP_NUM_BINS},
-        "informativeness": None, "kept_fraction": None, "n_cal": n_cal, "cal_n_scales": cal_n_scales,
+        "informativeness": {"total_nats": 2.31, "sem_nats": 0.05, "per_param": None, "per_direction": None,
+                            "n_used": n_cal, "n_dropped": 0,
+                            "description": "the posterior learns 2.31 nats beyond the prior, most of it on k"},
+        "kept_fraction": None, "n_cal": n_cal, "cal_n_scales": cal_n_scales,
         "num_posterior_samples": samples, "verdict": orchestrator.calibration_verdict(ks, names, [], 0.5),
         "seed": seed, "accepted": []}
     return {"results": results}

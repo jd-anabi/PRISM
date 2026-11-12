@@ -1113,10 +1113,12 @@ def test_the_first_step_reads_nothing_saved_and_says_no_reading():
 
 def test_a_rebuilt_page_keeps_no_message_box():
     """A rebuilt page asks and tells through the one shared question: neither the step page nor any page built on it,
-    nor a check's page, form or result, names the toolkit's message box, or keeps a log pane of its own."""
+    nor a check's page, form or result, names the toolkit's message box, or keeps a log pane of its own. The files read
+    are every page's built on the step page and every file of a check's beside them."""
     folder = Path(__file__).resolve().parents[1] / "core" / "gui" / "panels" / "inference"
     from tests._fixtures import step_pages
     assert sorted({file for file, _step in step_pages().values()}) == sorted(REBUILT), step_pages()
+    assert sorted(path.name for path in folder.glob("check_*.py")) == sorted(CHECK_FILES), "a check's file not read"
     for name in ("step_page.py", *REBUILT, *CHECK_FILES):
         tree = ast.parse((folder / name).read_text(encoding="utf-8"))
         named = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}

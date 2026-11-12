@@ -42,13 +42,13 @@ FORMS: dict[str, tuple[FormRow, ...]] = {
 
 
 def build_form(key: str) -> Form:
-    """The form of the check ``key``, its rows at their usual values; a check with no rows has an empty form, out of
-    sight."""
+    """The form of the check ``key``, its rows at their usual values; a check with no rows has an empty form. The page
+    that holds it shows it, or keeps an empty one out of sight, once it stands inside it: a form with no parent made
+    visible would be a window of its own."""
     form = Form()
     for row in FORMS.get(key, ()):
         form.add(row.setting, IntField(row.usual, grouped=True), row.unit, usual=row.usual, folded=row.folded,
                  help_text=row.help_text, label=row.label)
-    form.setVisible(bool(form.rows))
     return form
 
 

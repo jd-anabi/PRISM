@@ -476,7 +476,8 @@ def _with_never(states):
     made = []
     for row in _rows_of([state if state != "never" else "Not run yet" for state in states]):
         never = row.key in check_catalogue.DECIDING and states[check_catalogue.DECIDING.index(row.key)] == "never"
-        if never and row.key == "comparison":
+        unread = row.key == "comparison" and states[check_catalogue.DECIDING.index(row.key)] == "unread"
+        if (never or unread) and row.key == "comparison":
             row = CheckRow(row.key, "Not compared", "Not compared.", None, None, (), "")
         elif never:
             row = CheckRow(row.key, row.state, row.line, None, None, (), reasons[row.key])
@@ -539,7 +540,8 @@ def _cases():
 
 def test_the_headline_over_every_combination_of_states():
     """For every combination of the six deciding states, with a posterior trained with the frequency response, one
-    trained without it, and with none, and for every combination with a check no run can pass among them, the headline,
+    trained without it, and with none, and for every combination with a check no run can pass among them, or with the
+    comparison not compared because its counts could not be read, which holds the step open, the headline,
     its sentence and every field of the summary are what the rules give from the states alone: n of 6, or n of 3 with
     the three that do not apply said for a posterior trained without it; the first sentence that applies; and the first
     count of the second line."""
@@ -558,7 +560,17 @@ def test_the_headline_over_every_combination_of_states():
         assert check_lineage.headline(rows, held=held) == (want["headline"], want["sentence"]), states
         assert {name: getattr(said, name) for name in want} == want, states
         seen += 1
-    assert seen == 4 ** 6 + 4 ** 3 + 4 ** 2 + 1 + 4 * 4 * 5 * 4 * 5 * 5
+        if states[2] != "never":
+            continue
+        # The same comparison not compared because the set's counts could not be read: a reading may lift that, so it
+        # holds the step open, as a check still to pass.
+        unread = [*states[:2], "unread", *states[3:]]
+        rows, held, want = _with_never(unread), _held(set_counts=None), _expected_never(unread)
+        said = check_lineage.summary(rows, held=held)
+        assert check_lineage.headline(rows, held=held) == (want["headline"], want["sentence"]), unread
+        assert {name: getattr(said, name) for name in want} == want, unread
+        seen += 1
+    assert seen == 4 ** 6 + 4 ** 3 + 4 ** 2 + 1 + 4 * 4 * 5 * 4 * 5 * 5 + 4 * 4 * 4 * 5 * 5
     nothing = check_lineage.rows(_held(prior=None), (), ())
     said = check_lineage.summary(nothing, held=_held(prior=None))
     assert {row.state for row in nothing} == {"Waiting for a prior"}
@@ -957,6 +969,37 @@ def test_the_informing_checks_and_the_tools_read_done_from_their_own_records():
         "Not run yet"] * 4
 
 
+def test_each_earlier_run_says_its_cell_its_number_and_why_it_does_not_count():
+    """A check's earlier runs, newest first, each say what it read and when: a frequency band its cell, so that the runs
+    of two cells are told apart; one judged with other thresholds, and an audit at a fixed number of driven recordings,
+    that it does not count; a calibration repeated at fixed numbers how many driven recordings it held, or that they
+    were mixed as in training. Each is looked for among its own check's records: a record of another kind with the same
+    id is not read for it."""
+    from tests._fixtures import check_results
+    band, audit = check_results("band"), check_results("audit")
+    other = {**band, "settings": {**band["settings"], "cv_max": 0.3}}
+    fixed = {**audit, "settings": {**audit["settings"], "chi_k_fixed": 4}}
+    records = [_record("band", created=_at(13, 9, 0), cell="Cells/nadrowski/a.txt"),
+               _record("band", created=_at(12, 9, 0), cell="Cells/nadrowski/b.txt"),
+               _record("band", created=_at(11, 9, 0), cell="Cells/nadrowski/a.txt", body=other),
+               _record("audit", created=_at(13, 9, 0)), _record("audit", created=_at(12, 9, 0), body=fixed),
+               _record("fixed_number", created=_at(13, 9, 0)),
+               _record("fixed_number", created=_at(12, 9, 0), chi_k_fixed=4)]
+    rows = {row.key: row for row in check_lineage.rows(_held(), records, ())}
+
+    def lines(key):
+        return check_lineage.earlier_lines(rows[key], records)
+
+    assert lines("band") == (f"Passed, {_said(_at(12, 9, 0))}; cell b",
+                             f"Run with other thresholds, {_said(_at(11, 9, 0))}; does not count; cell a"), lines("band")
+    assert lines("audit") == (f"Run at a fixed number of driven recordings, {_said(_at(12, 9, 0))}; does not count",)
+    assert lines("fixed_number") == (f"Done, {_said(_at(12, 9, 0))}; with 4 driven recordings",), lines("fixed_number")
+    use = [_record("input_use", created=_at(13, 9, 0)), _record("input_use", created=_at(12, 9, 0), ident="shared"),
+           _record("calibration", created=_at(12, 9, 0), ident="shared", passed=False)]
+    row = _row(check_lineage.rows(_held(), use, ()), "input_use")
+    assert check_lineage.earlier_lines(row, use) == (f"Passed, {_said(_at(12, 9, 0))}",), "another kind's record was read"
+
+
 # ── before a training ──
 def test_the_pre_run_fact_for_each_state():
     """"Before you start" says "Fine." when the frequency band and the audit both passed, with their dates;
@@ -1207,6 +1250,10 @@ def test_choosing_a_check_opens_its_page_beside_the_list_or_in_its_place(factor,
                 "beside a check's page the whole table stayed in sight")
             assert [column.wrap for column in page.listing.narrow.view._columns] == [False, True], (
                 "the narrow table's state does not wrap")
+            assert page.listing.width() == design.scaled(436), (factor, page.listing.width())
+            page.read_facts()
+            assert (page.listing.narrow.selected_row(), page.listing.narrow.view.currentIndex().row()) == (
+                page.listing.row_of["calibration"],) * 2, "a reading lost the open check's row"
             assert page.list_detail.detail is calibration and calibration.isVisibleTo(page)
             assert QApplication.focusWidget() is calibration.form.rows["n_cal"].widget
             assert page.form is calibration.form, "the foot was not handed the check's form"
@@ -1429,8 +1476,11 @@ def test_the_foot_with_no_check_open_offers_the_next_check(tmp_path):
     """With no check open the foot's main button opens the first deciding check that applies, has not passed and that a
     run can still pass, named for it, and goes to Inference once none is left; it says no fact of its own, and with no
     prior in use it is greyed with the reason of a step not done. A check open reads its own button's words, and "Run
-    again" once a record of it exists."""
+    again" once a record of it exists; on the page of a check with no button of its own, the comparison's, the foot
+    passes over that check, which stands open already, to the next, or to Inference."""
     from tests._fixtures import check_results, write_diagnostic
+    from tests._runs import masked_none
+    nothing_counted = f"10:00:00 info {masked_none(WHOLE)}\n"     # a posterior whose set counted no driven recording
     with _checks_page(tmp_path, prior=False) as (_window, _screen, page, _store):
         assert (page.foot.main_button.text().replace("&", ""), page.foot.main_button.isEnabled(),
                 page.foot.reason.text()) == ("Open Frequency band", False, "Cannot start yet: needs a prior.")
@@ -1450,7 +1500,14 @@ def test_the_foot_with_no_check_open_offers_the_next_check(tmp_path):
         page.read_facts()
         assert page.foot.main_button.text().replace("&", "") == (
             "Open Unusable driven recordings: simulation set against the audit")
-        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior)
+        page.foot.main_button.click()
+        assert page.open_key == "comparison"
+        assert page.foot.main_button.text().replace("&", "") == "Open Calibration", (
+            "the comparison's page offered itself")
+        page.foot.main_button.click()
+        assert page.open_key == "calibration"
+        page.open_check(None)
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, text=nothing_counted)
         page.read_facts()
         assert _row(screen.check_rows(), "comparison").state == "Not compared"
         assert page.foot.main_button.text().replace("&", "") == "Open Calibration", (
@@ -1473,6 +1530,14 @@ def test_the_foot_with_no_check_open_offers_the_next_check(tmp_path):
         assert page.foot.main_button.text().replace("&", "") == "Run again"
         page.open_check(None)
         assert page.foot.main_button.text().replace("&", "") == "Go to Inference"
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior)    # counts not read
+        page.read_facts()
+        assert _row(screen.check_rows(), "comparison").line == (
+            "Not compared: the counts of unusable driven recordings could not be read.")
+        assert page.foot.main_button.text().replace("&", "") == (
+            "Open Unusable driven recordings: simulation set against the audit"), "counts not read closed the step"
+        page.open_check("comparison")
+        assert page.foot.main_button.text().replace("&", "") == "Go to Inference"
         page.foot.main_button.click()
         assert window.current_place() == ("inference", "infer")
 
@@ -1484,11 +1549,18 @@ def _cell_file() -> Path:
 
 
 #: What a record of each check holds that says its verdict, its reading or its reasons in the engine's own words.
-_OWN_WORDS = ("verdict", "reading", "reasons", "summary", "caveats", "description")
+#: The fields a record holds the engine's own words in: its verdicts and readings, its reasons, summary and caveats,
+#: the calibration's caveat and description, the repeated calibration's scope, the drive study's notes and the audit's
+#: dominant cause.
+_OWN_WORDS = ("verdict", "reading", "reasons", "summary", "caveats", "caveat", "description", "scope", "note", "notes",
+              "dominant_cause")
+#: The checks whose records hold none of the engine's own words: the engine writes only numbers and names for them.
+_NO_OWN_WORDS = ("pin_down", "across_prior")
 
 
 def _own_words(found, said: set) -> set:
-    """Every string a record holds under one of ``_OWN_WORDS``, at any depth."""
+    """Every string a record holds under one of ``_OWN_WORDS``, at any depth: in a list under such a field, or in a
+    field of that name inside any other, the calibration's verdict holding its caveat."""
     if isinstance(found, dict):
         for name, value in found.items():
             if name in _OWN_WORDS:
@@ -1547,28 +1619,32 @@ def test_every_result_block_says_its_record_in_the_windows_words(key, tmp_path):
     """Each check's result begins with its sentence in the window's words, a message row with the marker of the state
     its record reads: of a record, from its manifest and its folder; of the comparison, from the counts; of a check that
     keeps nothing but its result, from its run in the history. No string of the record's own verdicts, readings or
-    reasons stands in it, and a string of several words of them nowhere within its words."""
+    reasons stands in it, and a string of several words of them nowhere within its words. Each record holds such
+    words in every field the engine writes them in, so that a result that said them would be seen."""
+    from PySide6.QtWidgets import QWidget
     from core.artifacts import ArtifactStore
     from core.gui.panels.inference import check_results as blocks
     from tests._fixtures import check_results, qt_app, write_calibration, write_diagnostic
     qt_app()
+    host = QWidget()                                 # what a check's page is to its result
     if key == "comparison":
         compared = check_readings.compare(unusable=8_412, total=22_144, scope=WHOLE, audit_fraction=0.3789,
                                           batches=100)
         region = blocks.comparison_block(check_readings.compared_sentence(compared, unusable=8_412, total=22_144,
-                                                                          audit_fraction=0.3789), compared.state)
+                                                                          audit_fraction=0.3789), compared.state,
+                                         parent=host)
         said = ("Unusable driven recordings, simulation set against the audit: passed. 38.0 % in the simulation set; "
                 "the audit read 37.9 %. The difference is 0.1 points: within 3 is fine, up to 5 look closer, beyond 5 "
                 "stop.")
         assert (region.verdict.kind, region.verdict.sentence.plain_text()) == ("fine", said)
-        region.deleteLater()
+        host.deleteLater()
         return
     if key in ("timing", "card_test"):
         for outcome, marker, word in (("finished", "done", "done"), ("failed", "err", "failed")):
-            region = blocks.history_block(key, {"check": {"key": key}, "outcome": outcome})
+            region = blocks.history_block(key, {"check": {"key": key}, "outcome": outcome}, parent=host)
             assert (region.verdict.kind, region.verdict.sentence.plain_text()) == (
                 marker, f"{check_catalogue.entry(key).name}: {word}."), outcome
-            region.deleteLater()
+        host.deleteLater()
         return
     store = ArtifactStore(tmp_path / "Artifacts")
     one = check_catalogue.entry(key)
@@ -1580,17 +1656,19 @@ def test_every_result_block_says_its_record_in_the_windows_words(key, tmp_path):
                                  cell=str(_cell_file()) if key == "band" else None, **check_results(key))
     folder = store.path(one.kind, ident)
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    region = blocks.result_block(key, manifest, folder, prior_words="the prior retrain_prior", force_unit="pN")
+    region = blocks.result_block(key, manifest, folder, parent=host, prior_words="the prior retrain_prior",
+                                 force_unit="pN")
     try:
         state = check_readings.read(key, manifest).state
         assert region.verdict.kind == check_readings.STATE_MARKERS[state]
         assert region.verdict.sentence.plain_text() == _RESULT_SENTENCES[key]
         words = _block_words(region)
         own = _own_words(manifest, set())
+        assert bool(own) == (key not in _NO_OWN_WORDS), (key, own)
         assert not [mine for mine in own if mine.lower() in {word.lower() for word in words}], own
         assert not [mine for mine in own if " " in mine and any(mine.lower() in word.lower() for word in words)]
     finally:
-        region.deleteLater()
+        host.deleteLater()
 
 
 def _calibration_of(names, *, ks, assumed=(), seed=1840273, tarp=0.5, accepted=()):
@@ -1617,8 +1695,10 @@ def test_the_calibrations_result_names_its_verdict_and_its_seed(tmp_path):
     from core.artifacts import ArtifactStore
     from core.gui.panels.inference.check_results import FIGURE_CAPTIONS, result_block
     from core.artifacts.store import slug
+    from PySide6.QtWidgets import QWidget
     from tests._fixtures import qt_app, write_calibration
     qt_app()
+    host = QWidget()                                 # what the calibration's page is to its result
     store = ArtifactStore(tmp_path / "Artifacts")
     names = ["k", "lam", "f_max", "tau", "tau_c", "s", "a", "b", "c", "d", "x_scale", "t_scale", "T"]
     ident = write_calibration(store, None, posterior=POSTERIOR, prior=PRIOR,
@@ -1626,7 +1706,8 @@ def test_the_calibrations_result_names_its_verdict_and_its_seed(tmp_path):
                               figures=("SBC ranks (CDF)", "SBC ranks (histogram)", "TARP coverage"))
     folder = store.path("calibration", ident)
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    region = result_block("calibration", manifest, folder, units={"x_scale": "nm", "t_scale": "ms", "T": "K"})
+    region = result_block("calibration", manifest, folder, parent=host,
+                          units={"x_scale": "nm", "t_scale": "ms", "T": "K"})
     try:
         assert region.verdict.sentence.plain_text() == (
             "Calibration: passed. All 13 parameters pass the rank test, and the joint coverage test passes. Made on "
@@ -1655,7 +1736,7 @@ def test_the_calibrations_result_names_its_verdict_and_its_seed(tmp_path):
                                figures=("SBC ranks (CDF)", "another figure"))
     folder = store.path("calibration", twelve)
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    region = result_block("calibration", manifest, folder)
+    region = result_block("calibration", manifest, folder, parent=host)
     try:
         assert region.verdict.sentence.plain_text() == (
             "Calibration: failed. 2 of 12 parameters fail the rank test: x_scale, t_scale; the joint coverage test "
@@ -1667,7 +1748,7 @@ def test_the_calibrations_result_names_its_verdict_and_its_seed(tmp_path):
         assert [caption.text() for caption, _picture in region.pictures] == ["Rank test, cumulative",
                                                                              "Calibration, figure 2"]
     finally:
-        region.deleteLater()
+        host.deleteLater()
 
 
 def test_a_checks_result_is_made_at_the_pages_reading_and_never_as_it_draws(tmp_path, monkeypatch):
@@ -1698,6 +1779,83 @@ def test_a_checks_result_is_made_at_the_pages_reading_and_never_as_it_draws(tmp_
         page.open_check("calibration")
         page.redraw()
         assert one.result is made and calls.count("a record's figures") == read, calls
+
+
+def test_no_result_is_ever_a_window_of_its_own(tmp_path, monkeypatch):
+    """STANDING. Every result a reading makes, of each check that has one, a record's, the comparison's and a run's from
+    the history, is made inside its check's page, and each check's form stands inside its page before it is shown:
+    none is a window of its own at any moment it is shown, as a widget made with no parent is, shown on the screen as a
+    window as its first words are said. A result that is a verdict alone, the comparison's and a run's, stands in sight
+    on its page."""
+    from core.gui.run import history
+    from core.gui.widgets.form import Form
+    from core.gui.widgets.result_region import ResultRegion
+    from tests._fixtures import write_simulation_set
+    shown, forms = [], []
+    real, real_form = ResultRegion.setVisible, Form.setVisible
+
+    def recorded(region, visible):
+        if visible:
+            shown.append(region.isWindow())
+        real(region, visible)
+
+    def recorded_form(form, visible):
+        if visible:
+            forms.append(form.isWindow())
+        real_form(form, visible)
+
+    monkeypatch.setattr(ResultRegion, "setVisible", recorded)
+    monkeypatch.setattr(Form, "setVisible", recorded_form)
+    with _checks_page(tmp_path, records=_every_record) as (_window, screen, page, store):
+        folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100,
+                                      complete=True, chi_masked=[(84, 221)] * 100)
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, simulation=folder.name)
+        for at, key in enumerate(("timing", "card_test")):
+            history.write(tmp_path / "runs", {"id": f"2026100812000{at}-check", "word": "Check", "name": "",
+                                              "place": ["inference", "checks"], "records_root": str(store.root),
+                                              "started": _at(8, 12, at), "ended": _at(8, 12, at + 1),
+                                              "outcome": "finished", "check": {"key": key}})
+        page.read_facts()
+        made = sorted(key for key, one in page.check_pages.items() if one.result is not None)
+        decided = [row.key for row in screen.check_rows() if row.record is not None]
+        assert len(decided) >= 6 and made == sorted([*decided, "comparison", "timing", "card_test"]), made
+        assert shown and not any(shown), f"{shown.count(True)} results were shown as windows of their own"
+        assert forms and not any(forms), f"{forms.count(True)} forms were shown as windows of their own"
+        for key in ("comparison", "timing", "card_test"):
+            page.open_check(key)
+            _settle()
+            one = page.check_pages[key]
+            assert one.result.verdict is not None and one.result.isVisibleTo(page), key
+
+
+def test_a_kept_result_is_made_again_when_its_words_would_change(tmp_path, monkeypatch):
+    """A result is kept while it would say the same, and made again at the next reading when what its words say beside
+    its record moved: the calibration's count of the other deciding checks still open, after one of them passed, its
+    figures read again then and only then."""
+    from tests._fixtures import check_results, readings_of_a_run, write_calibration, write_diagnostic
+
+    def records(store, cfg, prior, posterior):
+        write_calibration(store, cfg, posterior=posterior, prior=prior, figures=("SBC ranks (CDF)",))
+        write_diagnostic(store, cfg, diagnostic="probes", variant="band", cell=str(_cell_file()),
+                         **check_results("band"))
+        write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                         **check_results("audit"))
+
+    alone = "Calibration alone does not show that the posterior is sound: {}"
+    with _checks_page(tmp_path, chi=False, records=records, simulation=SET) as (_window, screen, page, store):
+        one = page.check_pages["calibration"]
+        assert one.result.verdict.sentence.plain_text().endswith(alone.format("2 deciding checks are still open."))
+        calls = readings_of_a_run(monkeypatch)
+        page.read_facts()
+        assert calls.count("a record's figures") == 0, "a result that would say the same was made again"
+        posterior, prior = screen.session.posterior.id, screen.session.inf_prior.id
+        entry = check_catalogue.entry("identifiability")
+        write_diagnostic(store, screen.session.cfg, diagnostic=entry.diagnostic, variant=entry.variant,
+                         parents={"posterior": posterior, "prior": prior}, **check_results("identifiability"))
+        page.read_facts()
+        assert one.result.verdict.sentence.plain_text().endswith(alone.format("1 deciding check is still open.")), (
+            one.result.verdict.sentence.plain_text())
+        assert calls.count("a record's figures") == 1, calls
 
 
 def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_path, monkeypatch):
@@ -1766,6 +1924,68 @@ def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_p
             "the comparison was worked out while a training is live")
         assert calls == [], f"read while a training is live: {calls}"
         training.release()
+        turn_until(app, lambda: not controller().is_live())
+
+
+def test_check_3_is_counted_later_only_where_it_applies(tmp_path):
+    """While a training is live, check 3's page says it is counted when the simulation ends only where the check
+    applies: with the frequency response off it does not apply and its page says nothing more."""
+    from tests._runs import StandIn, start_run, training_spec, turn_until
+    app = qt_app()
+    with _checks_page(tmp_path, chi=False) as (window, _screen, page, _store):
+        training = StandIn(word="Training")
+        start_run(window.part("reduction"), training, spec=training_spec(place=("reduction", None)))
+        page.refresh_local_gates()
+        _settle()
+        one = page.check_pages["comparison"]
+        assert one.state_line.sentence.plain_text().startswith("Does not apply.")
+        assert one.result is None, one.result.verdict.sentence.plain_text()
+        training.release()
+        turn_until(app, lambda: not controller().is_live())
+
+
+def test_check_3_waiting_for_the_audit_says_which_check_to_run(tmp_path):
+    """With the posterior's set counted and no audit of its prior that counts, check 3's page says, with no run live,
+    that there is no audit to compare with, the set's share, and which check of the list to run; not the run's own
+    words for after its end."""
+    from tests._fixtures import write_simulation_set
+    with _checks_page(tmp_path) as (_window, screen, page, store):
+        folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100,
+                                      complete=True, chi_masked=[(84, 221)] * 100)
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, simulation=folder.name)
+        page.read_facts()
+        assert _row(screen.check_rows(), "comparison").state == "Waiting for the audit"
+        one = page.check_pages["comparison"]
+        assert one.result.verdict.sentence.plain_text() == (
+            "There is no audit of the prior retrain_prior to compare with. The simulation set holds 38.0 % unusable "
+            "driven recordings; run \"Unusable driven recordings: audit\" in this list to compare them.")
+
+
+def test_check_3_is_counted_later_during_a_narrowing_round(tmp_path):
+    """While a narrowing round is live, check 3's page says it is counted when the round's simulation ends, as during a
+    training, and nothing is worked out from the counts read before."""
+    from tests._fixtures import check_results, write_diagnostic, write_simulation_set
+    from tests._runs import StandIn, start_run, training_spec, turn_until
+
+    def records(store, cfg, prior, posterior):
+        write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                         **check_results("audit"))
+
+    app = qt_app()
+    with _checks_page(tmp_path, records=records) as (window, screen, page, store):
+        folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100,
+                                      complete=True, chi_masked=[(84, 221)] * 100)
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, simulation=folder.name)
+        page.read_facts()
+        one = page.check_pages["comparison"]
+        assert one.result.verdict.sentence.plain_text().startswith(
+            "Unusable driven recordings, simulation set against the audit: passed.")
+        round_ = StandIn(word="Narrowing round")
+        start_run(window.part("reduction"), round_, spec=training_spec("Narrowing round", place=("reduction", None)))
+        page.refresh_local_gates()
+        _settle()
+        assert one.result.verdict.sentence.plain_text() == "Counted when simulation ends."
+        round_.release()
         turn_until(app, lambda: not controller().is_live())
 
 
@@ -2036,8 +2256,9 @@ def test_the_calibrations_stop_asks_with_keep_it_running_preselected(tmp_path, m
 
 def test_the_checks_page_writes_nothing_to_the_settings_file(tmp_path, monkeypatch):
     """STANDING. The Checks page remembers nothing: shown, read, a check opened, its form edited, a check run and the
-    window closed, no value is written under a key of its own, and nothing of a check's form, the calibration's sizes
-    included."""
+    window closed, the keys written are exactly those a session that never opens the Checks page writes, whatever their
+    group: no key of its own, and nothing of a check's form, the calibration's sizes included."""
+    from tests._window_helpers import shown_off_screen
     from PySide6.QtCore import QSettings
     from core import orchestrator
     from tests._runs import StandIn, turn_until
@@ -2047,7 +2268,13 @@ def test_the_checks_page_writes_nothing_to_the_settings_file(tmp_path, monkeypat
     stand_in = StandIn(word="Check")
     monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
     app = qt_app()
-    with _checks_page(tmp_path) as (window, _screen, page, _store):
+    with _checks_page(tmp_path / "without", shown=False) as (window, _screen, _page, _store):
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "prior")
+        _settle()
+        window._save_state()
+    without, written[:] = set(written), []
+    with _checks_page(tmp_path / "with") as (window, _screen, page, _store):
         page.open_check("calibration")
         page.form.rows["n_cal"].widget.setText("40")
         page.open_check("band")
@@ -2057,9 +2284,7 @@ def test_the_checks_page_writes_nothing_to_the_settings_file(tmp_path, monkeypat
         stand_in.release()
         turn_until(app, lambda: not controller().is_live())
         window._save_state()
-    ours = [key for key in written if key.split("/")[0] in ("inference_validate", "inference_checks", "checks")
-            or any(name in key for name in ("n_cal", "cal_n_scales", "cal_scales", "cal_n"))]
-    assert ours == [], ours
+    assert without and set(written) == without, (sorted(set(written) - without), sorted(without - set(written)))
 
 
 def test_a_checks_form_is_locked_while_a_run_is_live_whichever_is_in_sight(tmp_path):
@@ -2171,10 +2396,13 @@ def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
     is shown not passed with its reason and counts in the headline's denominator, but no longer holds the step open:
     with every other deciding check passed the rail reads "Attention" with the count, Checks is no longer the step in
     hand and Home goes on to Inference, the headline's sentence names what no run can pass, and the foot goes to
-    Inference. A check a load or a run can still lift holds the step open as before: the prior of another, a record at a
-    reduced size, one that cannot be read, a comparison waiting for the audit."""
+    Inference. A check a load, a run or a reading can still lift holds the step open as before: the prior of another, a
+    record at a reduced size, one that cannot be read, a comparison waiting for the audit, a comparison whose counts
+    could not be read, a posterior just come into use."""
     from core.gui import chain
     from tests._fixtures import check_results, write_calibration, write_diagnostic
+    from tests._runs import masked_none
+    nothing_counted = f"10:00:00 info {masked_none(WHOLE)}\n"     # a posterior whose set counted no driven recording
 
     def records(store, cfg, prior, posterior):
         write_diagnostic(store, cfg, diagnostic="probes", variant="band", cell=str(_cell_file()),
@@ -2186,9 +2414,10 @@ def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
         write_diagnostic(store, cfg, diagnostic=one.diagnostic, variant=one.variant,
                          parents={"posterior": posterior, "prior": prior}, **check_results("identifiability"))
 
-    with _checks_page(tmp_path, records=records) as (window, screen, page, _store):
+    with _checks_page(tmp_path, records=records, text=nothing_counted) as (window, screen, page, _store):
         rows = {row.key: row for row in screen.check_rows()}
         assert (rows["comparison"].state, rows["input_use"].state) == ("Not compared", "Not run yet")
+        assert rows["comparison"].line == "Not compared: no driven recordings were counted."
         summary = screen.checks_summary()
         assert (summary.passed, summary.of, summary.open, summary.cannot_pass) == (4, 6, False, 2)
         assert summary.headline == "4 of 6 deciding checks passed"
@@ -2216,10 +2445,11 @@ def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
             assert not check_lineage.no_run_passes(lifted, held=held), lifted
             found = tuple(lifted if row.key == lifted.key else row for row in screen.check_rows())
             assert check_lineage.summary(found, held=held).open is True, lifted
-        for unread in (replace(held, set_read=False), replace(held, posterior=None)):
+        for unread in (replace(held, set_read=False), replace(held, posterior=None), replace(held, set_counts=None)):
             assert not check_lineage.no_run_passes(rows["comparison"], held=unread)
         kept = screen.session.posterior
-        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, ident=OTHER_POSTERIOR)
+        screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, ident=OTHER_POSTERIOR,
+                                                   text=nothing_counted)
         screen.refresh_gates()
         assert screen.checks_in_use().set_read is False, "a posterior just come into use was taken for read"
         assert not check_lineage.no_run_passes(_row(screen.check_rows(), "comparison"), held=screen.checks_in_use())
@@ -2237,10 +2467,11 @@ def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_keyboards_row_of_the_list_stays_in_view(factor, tmp_path):
     """At the window's least size the list of sixteen rows is higher than the page's view: the row the keyboard moves
-    to, down to the last and back up to the first, stands whole in the view, with its ring's room, and so does the row
-    it stands on when the Tab key brings the keyboard back to the list."""
+    to, from the first check down to the last and back up, passing over the groups' headings, stands whole in the view
+    with its ring's room, and so does the row it stands on when the Tab key brings the keyboard back to the list."""
     from PySide6.QtTest import QTest
     from core.gui import design
+    from core.gui.widgets.page import _ring_room
     from tests._window_helpers import in_front
     with text_size(factor), _checks_page(tmp_path, size=(design.scaled(900), design.scaled(600))) as (
             window, _screen, page, _store):
@@ -2248,23 +2479,28 @@ def test_the_keyboards_row_of_the_list_stays_in_view(factor, tmp_path):
         assert view.height() > port.height(), "the list was not higher than its view"
 
         def row_in_view() -> bool:
-            rect = view.visualRect(view.currentIndex())
+            room = _ring_room()
+            rect = view.visualRect(view.currentIndex()).adjusted(0, -room, 0, room)
             top = view.viewport().mapTo(port, rect.topLeft()).y()
             return 0 <= top and top + rect.height() <= port.height()
 
+        checks = len(check_catalogue.CHECKS)
         with in_front(window):
             view.setFocus(Qt.TabFocusReason)
-            view.setCurrentIndex(view.model().index(0, 0))
+            view.setCurrentIndex(view.model().index(page.listing.row_of[check_catalogue.CHECKS[0].key], 0))
             _settle()
-            for _ in range(view.model().rowCount() - 1):
+            for _ in range(checks - 1):
                 QTest.keyClick(view, Qt.Key_Down)
                 _settle()
+                assert view.currentIndex().row() in page.listing.key_at, "the keyboard stopped on a heading"
                 assert row_in_view(), view.currentIndex().row()
             assert view.currentIndex().row() == view.model().rowCount() - 1
-            for _ in range(view.model().rowCount() - 1):
+            for _ in range(checks - 1):
                 QTest.keyClick(view, Qt.Key_Up)
                 _settle()
+                assert view.currentIndex().row() in page.listing.key_at, "the keyboard stopped on a heading"
                 assert row_in_view(), view.currentIndex().row()
+            assert view.currentIndex().row() == page.listing.row_of[check_catalogue.CHECKS[0].key]
             view.setCurrentIndex(view.model().index(view.model().rowCount() - 1, 0))
             page.help_button.setFocus(Qt.TabFocusReason)
             page.scroller.verticalScrollBar().setValue(0)
@@ -2272,6 +2508,134 @@ def test_the_keyboards_row_of_the_list_stays_in_view(factor, tmp_path):
             QTest.keyClick(page.help_button, Qt.Key_Tab)
             _settle()
             assert QApplication.focusWidget() is view and row_in_view()
+
+
+def test_a_groups_heading_is_no_row_a_click_or_the_keyboard_stops_on(tmp_path):
+    """A group's heading stands in the list as its heading and nothing more: a click on it selects nothing and moves no
+    ring onto it, and the arrow keys and Home pass over it to a check's row; Space and Enter act on a check's row."""
+    from PySide6.QtTest import QTest
+    from tests._window_helpers import in_front
+    with _checks_page(tmp_path) as (window, _screen, page, _store):
+        view, headings, rows = page.listing.whole.view, page.listing.headings, page.listing.row_of
+        with in_front(window):
+            view.setFocus(Qt.TabFocusReason)
+            view.setCurrentIndex(view.model().index(rows["calibration"], 0))
+            page.listing.whole.select_row(None)
+            QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=_row_point(view, headings[1]))
+            _settle()
+            assert page.open_key is None and page.listing.whole.selected_row() is None
+            assert view.currentIndex().row() == rows["calibration"], "a click put the ring on a heading"
+            first = rows[check_catalogue.CHECKS[0].key]
+            view.setCurrentIndex(view.model().index(first, 0))
+            QTest.keyClick(view, Qt.Key_Up)
+            assert view.currentIndex().row() == first, "Up stopped on the first group's heading"
+            QTest.keyClick(view, Qt.Key_Home, Qt.ControlModifier)
+            assert view.currentIndex().row() == first, "Home stopped on the first group's heading"
+            last = max(key_row for key_row in page.listing.key_at if key_row < headings[1])
+            view.setCurrentIndex(view.model().index(last, 0))
+            QTest.keyClick(view, Qt.Key_Down)
+            assert view.currentIndex().row() == headings[1] + 1, "Down stopped on a heading"
+            QTest.keyClick(view, Qt.Key_Up)
+            assert view.currentIndex().row() == last, "Up stopped on a heading"
+            QTest.keyClick(view, Qt.Key_Return)
+            _settle()
+            assert page.open_key == page.listing.key_at[last]
+
+
+def test_a_drawing_keeps_the_keyboards_row_and_the_open_checks_row(tmp_path):
+    """The list drawn again, at a reading or as the page draws, keeps the row the keyboard is on, by its check, in the
+    whole list and beside a check's page; and beside a check's page the open check's row stays selected."""
+    from tests._window_helpers import in_front
+    with _checks_page(tmp_path, size=(1400, 820)) as (window, _screen, page, _store):
+        whole, rows = page.listing.whole.view, page.listing.row_of
+        with in_front(window):
+            whole.setFocus(Qt.TabFocusReason)
+            whole.setCurrentIndex(whole.model().index(rows["identifiability"], 0))
+            page.read_facts()
+            page.refresh_local_gates()
+            assert whole.currentIndex().row() == rows["identifiability"], "a drawing dropped the keyboard's row"
+            page.open_check("calibration")
+            _settle()
+            narrow = page.listing.narrow
+            narrow.view.setFocus(Qt.TabFocusReason)
+            narrow.view.setCurrentIndex(narrow.view.model().index(rows["band"], 0))
+            page.read_facts()
+            assert narrow.view.currentIndex().row() == rows["band"], "a drawing dropped the keyboard's row"
+            assert narrow.selected_row() == rows["calibration"], "a drawing dropped the open check's row"
+
+
+def test_the_tab_key_follows_a_checks_page_moved_by_a_resize(tmp_path):
+    """A check opened, then the window made narrower and wider across the width where its page moves between beside the
+    list and its place: each time the Tab key goes from the heading's button on as the page now stands, to "All
+    checks" with the page in the list's place, to the list beside the page."""
+    from PySide6.QtTest import QTest
+    from core.gui import design
+    from tests._window_helpers import in_front
+    with _checks_page(tmp_path, size=(design.scaled(1400), design.scaled(820))) as (window, _screen, page, _store):
+        page.open_check("band")
+        _settle()
+        assert page.list_detail.beside()
+        with in_front(window):
+            for width, beside, after in ((900, False, page.list_detail.back), (1400, True, page.listing.narrow.view),
+                                         (900, False, page.list_detail.back)):
+                window.resize(design.scaled(width), design.scaled(820))
+                _settle()
+                assert page.list_detail.beside() is beside, width
+                page.help_button.setFocus(Qt.TabFocusReason)
+                QTest.keyClick(page.help_button, Qt.Key_Tab)
+                _settle()
+                assert QApplication.focusWidget() is after, (width, QApplication.focusWidget())
+
+
+def test_a_checks_button_reads_run_again_once_any_record_of_it_exists(tmp_path):
+    """The calibration's button reads "Run again" once a record of it exists, one at a reduced size that does not count
+    among them; with none, its own words."""
+    from tests._fixtures import check_results, write_calibration
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        page.open_check("calibration")
+        assert page.foot.main_button.text().replace("&", "") == "Run the calibration"
+
+    def records(store, cfg, prior, posterior):
+        write_calibration(store, cfg, posterior=posterior, prior=prior,
+                          results=check_results("calibration", n_cal=40)["results"])
+
+    with _checks_page(tmp_path / "reduced", records=records) as (_window, screen, page, _store):
+        assert _row(screen.check_rows(), "calibration").state == "Not run yet"
+        page.open_check("calibration")
+        assert page.foot.main_button.text().replace("&", "") == "Run again"
+
+
+def test_a_checks_page_tells_its_form_the_width_it_stands_in(tmp_path):
+    """A check's page, told the width it stands in beside the list or in its place, tells its form the same, so that a
+    form that lays itself out by its width is laid out for it."""
+    from core.gui import design
+    with _checks_page(tmp_path, size=(design.scaled(1400), design.scaled(820))) as (window, _screen, page, _store):
+        one = page.check_pages["calibration"]
+        told, page_fit = [], one.fit
+        one.fit = lambda width: (told.append(width), page_fit(width))[1]
+        page.open_check("calibration")
+        _settle()
+        assert told and one.form._width == told[-1], (told, one.form._width)
+        window.resize(design.scaled(900), design.scaled(820))
+        _settle()
+        assert one.form._width == told[-1] == page.list_detail._width, (told, one.form._width)
+
+
+def test_the_two_readings_of_the_checks_are_made_only_where_they_are_needed(tmp_path, monkeypatch):
+    """At a reading, the label of the prior the posterior was trained on is read only when the engine refuses the pair,
+    and of the checks' records only the text of the one that decides what the observations can pin down is read."""
+    from core.gui import check_lineage as lineage
+    from core.gui.screens import inference_screen
+    with _checks_page(tmp_path, records=_every_record) as (_window, screen, page, _store):
+        labels, texts = [], []
+        real_label, real_text = inference_screen.prior_label, lineage.read_text
+        monkeypatch.setattr(inference_screen, "prior_label", lambda *args: (labels.append(args), real_label(*args))[1])
+        monkeypatch.setattr(lineage, "read_text", lambda folder: (texts.append(folder), real_text(folder))[1])
+        page.read_facts()
+        decides = _row(screen.check_rows(), "pin_down").record.folder
+        records = {record.folder for record in screen.checks_held.records}
+        assert labels == [], "the label was read with the pair taken"
+        assert [folder for folder in texts if folder in records] == [decides], texts
 
 
 def test_each_checks_page_is_made_inside_the_list_out_of_sight_and_reading_nothing(tmp_path, monkeypatch):
@@ -2306,7 +2670,8 @@ def test_the_checks_lists_walk_run_alone_ends_its_process_cleanly(tmp_path):
     that process as a test run ends. Twelve check pages, each with a form, stand in the window: a page with a form made
     with no parent and never shown, standing while the program's style sheet was changed and put back and let go after
     its window, once corrupted the process's memory as the test ended (the exit 0xC0000374). The process sees the card
-    as the run that starts it does."""
+    as the run that starts it does. It is a canary of that crash and no more: it does not make the crash happen, and
+    the rule that every check's page is made inside the list is held by the test of how the pages are made."""
     import os
     import subprocess
     root = Path(__file__).resolve().parents[1]
