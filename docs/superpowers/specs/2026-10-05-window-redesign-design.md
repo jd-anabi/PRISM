@@ -402,6 +402,8 @@ green after each:
 | 8 | Help and the first-time opening's help. | none |
 | 9 | The engine's sentences reworded; the guide pages; the owner's walkthrough rows; the final gates. | E11 |
 
+**Re-planned by the owner on 11 November 2026** (the stage-5 plan's section "Re-plan of 11 November 2026 (the owner's)" and its departure 468): Effective temperature, Live simulation and the Reduction map are taken out of the program; of stage 7, Your own models stays; stages 6 to 9 become one last stage, after the code audit and the retrain.
+
 **Tests** (part 13.1). Today 322 tests hold the window, by attribute name, by wording, by the
 dialog mechanism and in about thirty places by source text. Each gets a stated fate: a pin on
 behaviour (what a click does, what is refused, what is written, what is never remembered, stop and

@@ -255,6 +255,7 @@ The hand lists the standing tests read (`PAGES`, `EDITED`, `WALKED`, `REBUILT`, 
 
 ## How to run this plan
 
+- **Re-planned by the owner on 11 November 2026.** From Task 5b on, the section "Re-plan of 11 November 2026 (the owner's)", just before Task 6, overrides what this section says of the execution order, the preparation, the per-task loop, the departures and the hand-over (departure 468).
 - **The plan is committed when it is written**, with the design's rows 398 onward, for the owner's approval; a change the owner asks for, and any later correction, is its own commit. Nothing is built before the owner approves it; the tree is clean before Task 0.
 - **Execution order:** 0, 1, 2, 3, …, 14, one task at a time, as "The task outline" orders them and says why.
 - **Controller tasks** (0 and 14) are run by the controller. The rest are built by one fresh implementer each (sonnet), from ONE brief.
@@ -345,6 +346,7 @@ Rows 1 to 397 stand (section 8 of the design; this plan's predecessors). From 39
 | 465 | ROW 462 NARROWED: CHECK 3 NOT COMPARED FOR COUNTS THAT COULD NOT BE READ HOLDS THE STEP OPEN. Of check 3's "Not compared" rows, those for what the posterior's set is ("Not compared: no driven recordings were counted.", and a count of part of the set) stay rows no run can pass, once read; one because the counts could not be read ("Not compared: the counts of unusable driven recordings could not be read.", `Held.set_counts` None) is one a reading can lift, since a failed reading of a set may be passing, and it holds the step open, its reason said, as any open check does (`check_lineage.no_run_passes`). The test of every combination of states holds such a row open (1,600 combinations more), and the faults show it both ways. | The owner's question was about checks no run can ever pass; a reading that failed once is not that, and the stricter side keeps the step open. | A posterior whose set's counts can never be read keeps step 4 open, its reason said on check 3's row, until the counts are read or another posterior is in use. To be told to the owner at the stage's exit beside 450 and 462. | controller |
 | 466 | THE PIECES AS BUILT IN THE FIX ROUND, AMENDING ROW 451. A check's result is made inside its check's page before anything fills it: `check_results.result_block(key, manifest, folder, *, parent, units={}, force_unit="", others_open=0, prior_words="", text=None)`, `history_block(key, entry, *, parent)` and `comparison_block(sentence, state, *, parent, narrowed=False)`, `parent` required; `ResultRegion(parent=None)`. A record's result is kept while it would say the same: its source is its folder with the count of the other deciding checks still open (the calibration's) and the audit's prior words; a reading whose count or words moved makes it again, its figures read again then only, and between readings it is kept while its folder decides. `ListAndDetail` says `switched` when its detail moves between beside the list and its place, and the Checks page orders the Tab key again then. The list's group headings are no rows a click selects or the keyboard stops on (their cells carry no item flags); the row the keyboard is on is kept across a drawing, by its check, in both tables, and the open check's row is selected again without moving it (`_Listing.select(key, *, current=True)`). A check's earlier runs are looked for among that check's own records. | Each is a ruling of the round: a region made with no parent is a window of its own, shown on the screen as its first words are said; the "alone" sentence must agree with the headline at every reading (456); the Tab key's order follows what the page stands; a heading is no check; a drawing must not take the keyboard's place; two kinds of record may hold one id. | A later task that makes a result for a check's page passes its page; one that keeps a result keys it on all its words say. | controller |
 | 467 | ON A CHECK'S PAGE WITH NO BUTTON OF ITS OWN, THE FOOT PASSES OVER THAT CHECK. Check 3 has no button: on its page the foot is the list's, and it offers the next deciding check that applies, has not passed and that a run can still pass other than the one open ("Open Calibration"), else "Go to Inference"; it never offers the page it stands on. | The page stands open already; offering it again was a button that did nothing. This keeps 417 and 458: the list's foot says what is next. | None beyond one press less to the next check. | controller |
+| 468 | THE OWNER'S RE-PLAN OF 11 NOVEMBER 2026. The effective temperature (FDT, with its CrossVal study, sweeps and comparisons), the Reduction map and Live simulation are taken out of the program (Task 5b); Tasks 6 to 13 are built as four; from Task 5b each task has one builder and two readers, and the stage's last review three; departures are written in this table only; the design's stages 6 to 9 become one last stage, after the code audit and the retrain. The section "Re-plan of 11 November 2026 (the owner's)", before Task 6, holds it all. | The owner: "I think I just want it to be a SBI parameter inference software"; the redesign was taking too long. | Stage 7's three pages and the code behind them are gone (git keeps them; each can come back as a script); a fault a task's two readers miss is found at the stage's last review or on the owner's screen, in a larger fix round. | owner |
 
 ## The task outline
 
@@ -608,6 +610,125 @@ Rules the brief must hold:
 - [ ] **Step 4: Words of the walkthrough rows.** G30 as 13.4 writes it. G26's first half: "Open 'Checks'; read the headline and the list. Open 'Calibration'; read its page." expects "One list of the twelve checks in four groups, each with its role, a state word with its marker and its last run; the headline reads '0 of 6 deciding checks passed'. Choosing 'Calibration' opens its page beside the list in a wide window and in its place in a narrow one, with 'All checks' to return." (its second half is Task 6's).
 - [ ] **Step 5: Verify.** `tests/test_checks.py`, `tests/test_pages.py`, `tests/test_applied_and_pending.py -k "rebuilt or check"`, `tests/test_nav_and_gating.py -k "calibration or old_tab or refusal_key or every_field_key"`, `tests/test_shell.py -k "foot or stop or stand_in or part_that_fails"`, `tests/test_step_chain.py`, `tests/test_settings_persistence.py -k "builds_a_window or science or written_keys"`, `tests/test_run_states.py -k "starts_a_run or hidden"`, `tests/test_nav_and_gating.py -k help_entry`, `tests/test_source_hygiene.py`; the 150 % test in its own process.
 - **Commits:** `The Checks list and a check's page, read from the records that count`; `Every check's result in the window's words`; `What a check's page never shows`. **Count:** +23 functions (one display-marked), 1 replaced, 1 retired, 1 renamed (about 82 items); from this task the gate reads 12 skipped.
+
+## Re-plan of 11 November 2026 (the owner's)
+
+On 11 November 2026, during Task 5's fix round, the owner said they were unhappy with how long the redesign was taking
+and how broad the program had grown: "I think I just want it to be a SBI parameter inference software, I don't think
+the CMR of FDT stuff needs to be in it". Asked whether to take out the effective temperature (FDT) and the Reduction map
+right after Task 5, they answered "Yes, along with the live simulation." Asked in their own words how else to speed the
+work up ("Can we combine stages and tasks and be more efficient?") and offered six changes, they answered "Yes, all of
+it."
+
+This section overrides "How to run this plan" from Task 5b on: its execution order, its preparation of every building
+task, its per-task loop, its departures rule and its hand-over rule. Everything else in this plan stands: the Global
+Constraints (except that Task 5b opens the engine for itself alone, by the owner's yes), the Review Focus, the registry,
+the real-screen run, the usage rule, the checks after each gate and every rule of "Every agent".
+
+### The order
+
+Tasks 0 to 5 done, then 5b (the cut), then four tasks built from the eight sections that are left (Task 6-7, Task 8-9,
+Task 10-11, Task 12-13), then the last review, then Task 14 (the exit) as written. After this stage: the code audit
+(its list, less what the cut removes), the retrain from the window, then ONE last stage for what the design's stages 6
+to 9 held (Records, Your own models, Help and the first-time opening's help, the engine's sentences, the guide pages, the
+owner's walkthrough rows, the final gates), planned then, with Help and the rewording trimmed to what is needed.
+
+### The loop from Task 5b
+
+- **One builder** (opus), fresh for each task, works in the repository from this plan's sections for the task, the items
+  carried to it and the controller's dispatch. It reads the code, writes each test first and sees it red for its stated
+  reason, builds, commits by logical step (each commit's suites green), and writes its report. Where a section leaves a
+  choice a person would meet, or the builder finds the plan wrong, it writes a short note and stops for the controller's
+  ruling before it builds that part. No skeptic's trial, no brief written out block by block, no separate implementer.
+- **On DONE:** the one-process fast gate in the background and, at the same moment, two readers. One (sonnet) reads the
+  sections against what was built: completeness, the counts, the words, the rule that nothing shippable cites the working
+  record. One (opus) reads the product before against after on the real devices, drawn where it draws, and the tests for
+  the faults they would miss; it runs faults only where a test looks unable to fail, and only after the gate has exited.
+- **One fix round** through the builder, resumed, with the controller's rulings written in the ledger, then a re-read by
+  one reader (sonnet) while a fresh gate runs on the final head. A task is complete when its review is clean and its gate
+  is green on the same head. What the re-read leaves open is ruled, carried to a named task, or brought to the owner.
+- **The last review** keeps its three readers, seat three's fault runs and one fix wave, over the whole stage.
+- **Departures:** one row each in this plan's table, with its cost and who decided; not in the design's section 8. A
+  ruling is a ledger line; there are no rulings files.
+- **Hand-over:** at the end of a task when the usage rule says stop, or when the chat's room runs low; not by a count of
+  tasks.
+
+### Task 5b: SBI only (the owner's cut)
+
+**Goes.**
+- The effective-temperature measurement with its CrossVal study, its sweeps and its comparisons: `core/FDT/` whole;
+  `core/Helpers/fdt.py` unless something kept uses it; `core/tool/fdt.py` and the subcommands `fdt`, `crossval` and
+  `compare` (`cells`, `repeats`, `renormalise`, `sweeps`); the `fdt` record kind in `core/artifacts/` and wherever the
+  tool, the window and the Records screen name, list, show or compare it; the Effective temperature place
+  (`core/gui/panels/fdt_panel.py`, `crossval_panel.py`, `core/gui/screens/temperature_screen.py`,
+  `core/gui/widgets/compare_list.py`, the parts of `core/gui/panels/record_view.py` that serve it); the FDT settings
+  (`FDTConfig` in `core/sim_config.py`, the FDT constants in `core/config.py`, `cli.make_fdt_config`) and every entry in
+  the refusals, the fields tables, the registry, the seeds and the help defaults that serves only them.
+- The Reduction map: `core/Reduction/` whole with its tests, `core/gui/panels/reduction_panel.py`, its place.
+- Live simulation: `core/gui/panels/simulate_panel.py`, `simulate_runner.py`, `simulate_export.py`, its place, and what
+  only it uses (`core/gui/widgets/live_hair_bundle.py`, a video export, a figure helper), with `tests/test_simulate.py`.
+- Their tests in the other suites (`tests/test_fdt_user.py`, `tests/test_fdt_compare.py`; the FDT, CrossVal and compare
+  tests of `tests/test_tool.py`, two of them the slow set's `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` and
+  `test_fdt_and_crossval_run_at_tiny_size`; the `fdt` kind's tests in `tests/test_artifact_store.py` and
+  `tests/test_artifact_browser.py`; the removed places in `tests/test_shell.py`, `tests/test_nav_and_gating.py`,
+  `tests/test_step_chain.py`, `tests/test_settings_persistence.py` and the rest) and the shared stand-ins that serve only
+  them (`build_fdt_record`, `compare_preflight_refusals` in `tests/_fixtures.py`). A standing test that walks every place
+  or every kind keeps walking what is left; it is not deleted.
+- Their words in `docs/guide/` (pages and sentences), Help, Home, the first-time page, `README.md`, and the rows of
+  `docs/checklists/display-walkthrough.md` that exercise a removed page (marked retired with the date, not deleted).
+
+**Stays.** Everything the inference uses: `core/Simulator/`, `core/Solvers/`, `core/Models/`, `core/SBI/`,
+`core/diagnostics/`, `core/forcing.py`, `cli.parse_cell` and all that Your own models uses; Records, less the `fdt`
+kind. `Resources/` is not touched, and no package leaves `requirements.txt` (one that only removed code used is named in
+the report). Comments in kept files that name removed code are rewritten to say the same in words, except inside a
+function of `core.SBI.fit_state.FIT_CODE`, which stay as they are.
+
+**What must not change, each held by a test or a check written in the report.**
+1. The simulation set's identity: `SimulationIdentity`, `_canonical`, `identity_digest` and `resolve_dir` unchanged, and
+   the finished set `Artifacts/simulations/eda5c2a1e468` still recognised: its manifest read (read only) and its identity
+   recomputed equal, before and after.
+2. No function of `core.SBI.fit_state.FIT_CODE` touched: `test_the_named_training_code_is_as_recorded` green.
+3. `core/config.py`: only the FDT constants go; every other line byte for byte. `SimConfig` untouched.
+4. Anything on disk under `Artifacts/`: nothing is deleted, moved or written there. A store root holding an `fdt/`
+   folder (empty, as the owner's is, and one holding a record) lists, loads and cleans as before without touching it.
+5. The settings file: keys a removed page wrote, in a scratch `PRISM.ini`, are ignored at launch, never restored and
+   never deleted.
+6. The command line: `python -m core --help` lists no removed subcommand, and `docs/guide/command-line.md` agrees
+   (`tests/test_docs.py`).
+7. The window: the rail, Home, Help, the keys and the first-time page name no removed place; every remaining place opens;
+   the Records screen offers no `fdt` kind.
+8. A standing scan: no file under `core/`, `tests/`, `docs/guide/`, nor `README.md`, `conftest.py`, `run.bat` or
+   `run.sh`, imports or names a removed module or file; `tests/test_source_hygiene.py`'s allowlist loses the entries
+   that only removed files needed.
+
+**Commits** (each with its tests, each green): the window's pages; the command line, the engine and the store; the
+guide, the walkthrough and `README.md`.
+
+**Gates.** The fast gate on the final head (its new count stated), the slow set (three tests left), the display tests.
+The card gate only if a file under `core/SBI/`, `core/Simulator/`, `core/Solvers/`, `core/Models/` or `core/diagnostics/`
+changes beyond comments.
+
+**After it, the controller** shortens `CLAUDE.md` to its rules (the owner's yes of 11 November), dropping what describes
+the removed parts, shows the owner the result, and updates `docs/STATE.md`.
+
+### Tasks 6 to 13 as four
+
+- **Task 6-7:** Task 6's and Task 7's sections (the forms and runs of every check), with the items carried to both.
+- **Task 8-9:** Task 8's and Task 9's sections.
+- **Task 10-11:** Task 10's and Task 11's sections.
+- **Task 12-13:** Task 12's and Task 13's sections.
+
+Each builder reads both sections. Where a section names a file, test, place, key or walkthrough row that Task 5b removed
+(for example `tests/test_simulate.py`, `tests/test_fdt_user.py`, Live simulation's boxes, the five FDT keys in Task 7's
+set with no control), that part falls away and any count it states is counted again.
+
+**Carried into Task 6-7: labels shown as windows of their own** (found by Task 5's fix round on the real screen; older
+code). Fourteen labels in each display test that builds Parameter inference are shown as windows of their own before
+they have a parent: `core/gui/widgets/form.py`, `Row.__init__` (the unit label, `self.unit.setVisible(...)`) and
+`core/gui/panels/inference/step_page.py`'s constructor (`self.plan_line.setVisible(...)`). They flash once a launch in
+the real program. The cure: a parent first, then the visibility. Its test is a standing one, the cheap guard Task 5's
+fix round measured (a wrapper over `setVisible` and `show` during the builders, no event filter): no widget the window's
+builders make is shown as a window of its own, except the window itself and the dialogs the guards already record.
 
 ## Task 6: The forms and runs of the deciding checks
 
