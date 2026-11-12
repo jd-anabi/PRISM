@@ -12,16 +12,13 @@ walks through the inference tabs once, in order.
 
 ## Screens
 
-The window always opens on Home. Home offers five sections (`core.gui.screens.home_screen.SECTIONS`);
+The window always opens on Home. Home offers two sections (`core.gui.screens.home_screen.SECTIONS`);
 a back arrow under the PRISM title returns to Home from any of them. A gear at the bottom left of
 every screen opens the appearance menu and, through **Full settings…**, the Settings screen.
 
 | section | its tabs (`core.gui.main_window.MainWindow`) | what it is for |
 |---|---|---|
-| Reduction Map | NWK → Hopf reduction map | the Nadrowski model reduced to a Hopf normal form; analytical, with no stochastic simulation |
-| FDT Analysis | FDT analysis; Sweep study cross-validation | the effective-temperature measurement for one cell, and the parameter-sweep study over S and T_a/T; their runs write `fdt` records, and each tab's comparison box compares saved ones |
 | Parameter Inference | Config, Prior, Posterior, Validate, Infer, TSNPE | the inference chain, described below |
-| Simulate | Live simulation | a live view of a cell's hair-bundle motion, streamed as it is simulated, which **Save video…** writes to an animation |
 | Artifacts | none: one screen | browses the record store, as [Browsing the store](getting-started.md#browsing-the-store) describes |
 
 Two more screens are not on Home: the gear's **Full settings…** opens Settings, and Settings opens
@@ -310,10 +307,6 @@ an older build wrote and this one does not read is ignored, never restored.
 | Validate | nothing | both boxes; the seed is drawn for each run |
 | Infer | the mode; the Cell picker; the three T_obs boxes; the Spontaneous, Forced and Passive paths; Drive F₀ (N) | the drive boxes and the probe table, which are built from the configuration; the cell's value grid; **Run on a different observation** |
 | TSNPE | the Observation picker; Batches; Max rows per batch | HPD level and Directions truncated; the new-simulation tick |
-| Live simulation | the model, the cell, T_obs, Steps / frame, Max FPS | nothing |
-| FDT analysis | the model, the cell, the Saved run picker, n_freqs, M_ensemble, freqs / batch, F0 | Seed, Record name, Note; the two ticks, Skip sanity checks and Proceed to the production sweep after sanity; the Compare saved runs box |
-| Sweep study cross-validation | the preset, the cell, the Saved sweep picker, F0, freqs / batch, and each grid's number of points | n_freqs and M_ensemble, which come from the preset; each grid's ends, which come from the cell; Seed, Record name, Note; the Compare saved sweeps box |
-| NWK → Hopf reduction map | the cell and F0 | nothing |
 | Artifacts | the kind and the table's sort | nothing |
 | the window | its size and position, each panel's splitter positions, the appearance | the screen: it always opens on Home |
 
@@ -326,20 +319,17 @@ every other setting opens at its default on every launch. The reasons, one per r
   from saved settings on every launch and trained a run of about five days on the old band. The
   window now neither writes nor reads the band or the drive amplitude, and the stages refuse a band
   or amplitude that differs from `core/config.py`'s.
-- **A consent is never remembered**: the new-simulation tick, **Run on a different observation**
-  and the FDT analysis tab's two ticks are answered by the session that runs, so a yes given once
-  cannot silence a later refusal.
+- **A consent is never remembered**: the new-simulation tick and **Run on a different observation**
+  are answered by the session that runs, so a yes given once cannot silence a later refusal.
 - **A seed is never remembered**: a remembered seed would silently make every run a repeat of the
   last one.
 - **A record name and a note are never remembered**: a remembered name would be refused as taken at
   the next launch's first run.
-- **The comparison boxes are never remembered**: a remembered list would name records that a later
-  session may have deleted.
 - **The VRAM ceiling is never remembered**: a forgotten ceiling does not fail, it makes every later
   run split its batches and take several times longer, with nothing in the log to explain it.
-- **Grid ends and hand-edited grids are re-derived**: the cross-validation grids' ends come from the
-  cell, and the bounds and cell value grids start from the selected file, because a value saved
-  against another cell or model would be a wrong bound or a mis-bound parameter.
+- **Hand-edited grids are re-derived**: the bounds and cell value grids start from the selected
+  file, because a value saved against another cell or model would be a wrong bound or a mis-bound
+  parameter.
 
 ## Supported models
 
@@ -349,15 +339,8 @@ appears in every model list, but not every screen accepts it.
 
 | screen | built-in models | user models | on the command line |
 |---|---|---|---|
-| Live simulation | all three | all | none: the tool has no live simulation |
 | Parameter Inference | all three | only one with no forcing and at least one non-dimensional parameter (`core.registry.is_sbi_user_model`); for any other, **Apply model & options** is greyed and the log says why | `prior`, `train`, `validate`, `infer`, `tsnpe`, `smoke`, `sbc`, `identifiability`, `ablation` and `probes`, under the same rule, refused in `core.tool.config_args.make_cfg`; `probes drive` also needs a bounds file with a Forcing section ([probes drive](command-line.md#probes-drive)) |
-| FDT analysis | all three | only one whose observable, its first variable, has additive, non-zero noise, and which has no forcing of its own (`core.registry.fdt_support`); for any other, **Run FDT analysis** is greyed and the log says why | `fdt`, under the same check; `compare cells`, `compare repeats` and `compare renormalise` compare saved records |
-| Sweep study cross-validation | Nadrowski only (`_MODEL` in `core.gui.panels.crossval_panel`) | none | `crossval`, Nadrowski only; `compare sweeps` compares saved sweeps |
-| Reduction Map | Nadrowski only (`_MODEL` in `core.gui.panels.reduction_panel`): the map is a property of that model's equations | none | none |
 | Artifacts | all | all | `artifacts` |
-
-FDT refuses a user model with forcing of its own because it drives the observable itself to measure
-the response, and the model's own drive would be silently replaced.
 
 The inference pipeline is tuned on the Nadrowski model. It runs the whole chain for an eligible user
 model too, but calibration is not pre-tuned for user models: validate such a posterior before you

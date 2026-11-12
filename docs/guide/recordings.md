@@ -139,7 +139,7 @@ together with a first bounds, cell and units file for the model
 
 **A file's model is its folder.** A cell or bounds file belongs to the model its parent folder
 names: `Cells/nadrowski/` holds Nadrowski cells. The inference chain takes the model from the bounds
-file's folder, the FDT analyses from the cell's, and `--model` overrides either
+file's folder, and `--model` overrides it
 ([Configuration flags](command-line.md#configuration-flags)).
 
 ## Run plans
@@ -210,10 +210,9 @@ the run writes read as made from a changed tree.
 
 ## How a cell finds its bounds file
 
-Some runs are handed a cell and no bounds file, and find one themselves: the FDT analysis and the
-sweep study (in the window and as `fdt` and `crossval`), the reduction map, and the Live simulation.
-Each looks in the bounds folder of the cell's model (`core.cli.resolve_bounds_for_cell`, called from
-`core.cli.parse_cell` and `core.gui.panels.simulate_runner.build_stream_config`):
+No run is handed a cell alone any more, but the folders keep the rule by which a cell finds its
+bounds file in the bounds folder of its model (`core.cli.resolve_bounds_for_cell`, called from
+`core.cli.parse_cell`):
 
 1. a bounds file with the cell's own name: `Cells/nadrowski/master_spont.txt` finds
    `Bounds/nadrowski/master_spont.txt`;
@@ -221,8 +220,8 @@ Each looks in the bounds folder of the cell's model (`core.cli.resolve_bounds_fo
    `Bounds/nadrowski/master.txt`.
 
 So several cells can share one box, and a cell that needs a box of its own gets one from a bounds
-file of the same name. When neither exists, the Live simulation refuses the cell, and the FDT paths
-fall back to an older format that carries the bounds and units inside the cell file itself.
+file of the same name. When neither exists, `parse_cell` falls back to an older format that carries
+the bounds and units inside the cell file itself.
 
 The inference chain never looks. Every inference, diagnostic and probe command takes `--bounds`
 ([Configuration flags](command-line.md#configuration-flags)), and in the window step 2, Prior,
@@ -231,10 +230,9 @@ cell given to `infer --cell`, to `probes` or to step 5, Inference, is checked ag
 not against the one it would find.
 
 The tier-1 cell `master_spont_tier1.txt` is for the inference chain, with
-`--bounds Resources/Bounds/nadrowski/master_tier1.txt`. No bounds file carries its name, so the runs
-that find a bounds file themselves find `master.txt` for it, and refuse it: `master.txt` declares
-`f_scale`, and a tier-1 cell has none (`core.cli._merge_vals_bounds` on the FDT paths, and
-`SimConfig.inject_ground_truth` in the Live simulation).
+`--bounds Resources/Bounds/nadrowski/master_tier1.txt`. No bounds file carries its name, so the rule
+would find `master.txt` for it, which would refuse it: `master.txt` declares `f_scale`, and a tier-1
+cell has none (`core.cli._merge_vals_bounds`).
 
 ## Observation modes
 
@@ -501,8 +499,8 @@ Full settings…) with Open model builder, or with Edit on a saved model
    bounds file by its name ([How a cell finds its bounds file](#how-a-cell-finds-its-bounds-file)).
 
 Training, the prior's stability sweep and the Fisher rotation start a user model from the initial
-conditions its definition declares; Simulate, FDT and a simulated observation start it from its cell
-file's (`core.registry`). So an edit to the cell file's initial conditions does not reach training.
+conditions its definition declares; a simulated observation starts it from its cell file's
+(`core.registry`). So an edit to the cell file's initial conditions does not reach training.
 
 The rules the builder keeps (`core.Models.user_model.parse_user_model`,
 `core.Helpers.model_store.save_user_model`), which a hand edit can break:
@@ -518,10 +516,9 @@ The rules the builder keeps (`core.Models.user_model.parse_user_model`,
   first variable's equation, then its noise, then the next variable's. The builder writes the bounds
   file's non-dimensional section in that order, and the simulator binds values to parameters by
   position, so a bounds file in another order would run every simulation with its values in the
-  wrong places, and no error. Never reorder that section by hand. The prior stage, `probes mask` and
-  the Live simulation refuse a bounds file whose order has drifted from the model's
-  (`core.SBI.run_guards._assert_user_model_in_sync`,
-  `core.gui.panels.simulate_runner.build_stream_config`); saving the model again rewrites it.
+  wrong places, and no error. Never reorder that section by hand. The prior stage and `probes mask`
+  refuse a bounds file whose order has drifted from the model's
+  (`core.SBI.run_guards._assert_user_model_in_sync`); saving the model again rewrites it.
 - **A save is committed by its JSON.** The three text files are written first and the JSON last.
   PRISM knows a model by its JSON alone, so a save that fails part-way leaves at most stray text
   files, which the next save overwrites, and never a model with a file missing. Deleting a model

@@ -9,15 +9,14 @@ pages in the order that reader needs them.
 ## What PRISM is
 
 PRISM is a research tool built around a simulated inner-ear hair bundle: a stochastic model of the
-bundle's motion. It serves two lines of work.
+bundle's motion. It does simulation-based inference: it trains a neural posterior on simulated
+bundles, calibrates it, and runs it on a recording, either simulated from a cell whose parameters are
+known or measured at the bench, to infer the model parameters that produced it.
 
-- **The generalised fluctuation-dissipation theorem (GFDT).** PRISM measures how far a simulated
-  bundle's spontaneous fluctuations and its response to a small drive depart from the equilibrium
-  fluctuation-dissipation relation, expressed as an effective temperature, for one cell or across a
-  sweep of model parameters.
-- **Simulation-based inference.** PRISM trains a neural posterior on simulated bundles, calibrates
-  it, and runs it on a recording, either simulated from a cell whose parameters are known or measured
-  at the bench, to infer the model parameters that produced it.
+PRISM once also measured a bundle's effective temperature (how far its fluctuations and its response
+to a small drive depart from the equilibrium fluctuation-dissipation relation), reduced the Nadrowski
+model to a Hopf normal form, and showed a live simulation. Those three were taken out on 12 November
+2026, so that PRISM does parameter inference and nothing else; git history keeps them.
 
 Three models are built in (Nadrowski, Hopf and BP), and a user can define more.
 
@@ -33,8 +32,7 @@ PRISM has two front ends over one core.
   prompts. `python -m core --help` lists the subcommands; its `artifacts` family is the command-line
   twin of the Records screen.
 
-Both front ends call the same stages (`core.orchestrator`) and the same FDT analysis (`core.FDT`);
-the diagnostics (`core.diagnostics`) are reached from the tool alone. Every setting either front end
+Both front ends call the same stages (`core.orchestrator`); the diagnostics (`core.diagnostics`) are reached from the tool alone. Every setting either front end
 offers reaches its stage as an argument, never as an edit to `core.config`, except the window's
 memory limit. That one is kept in the window's Settings, under This computer, is remembered for the
 computer it was set on, and changes only how a batch is planned in memory, never what is simulated
@@ -91,7 +89,7 @@ You will maintain and extend the code.
 1. [Getting started](getting-started.md): launching, the two roots, and the store's records, names
    and ids.
 2. [Architecture](architecture.md): the module map, the stages and the compositions that chain them,
-   the store, both front ends, the solver, memory planning and the FDT pipeline.
+   the store, both front ends, the solver and memory planning.
 3. [Rules and traps](rules-and-traps.md): the rules the code keeps, among them that a bad input is
    refused before anything is spent, as a `core.refusals.Refusal` that names the setting at fault by
    a key each front end maps to its own control or flag, and that every setting travels as an
@@ -133,8 +131,8 @@ You want to judge what a trained model can claim, and check it for yourself.
   recording lengths, the chi assumptions, and defining a model of your own.
 - [The science behind the settings](science.md): the reasoning behind each setting, what the last
   retrain measured, and the open questions.
-- [Architecture](architecture.md): how the code is put together, from the module map to the FDT
-  pipeline.
+- [Architecture](architecture.md): how the code is put together, from the module map to memory
+  planning.
 - [Rules and traps](rules-and-traps.md): the rules the code keeps, the narrowing-round safety rules,
   and the traps that still bite.
 - [Testing](testing.md): the environment, the test gates and markers, and the checks on the graphics

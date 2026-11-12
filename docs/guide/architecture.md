@@ -13,8 +13,7 @@ setting has its value.
 ## Module map
 
 Every module under `core/`, one line each, grouped by package. A package's `__init__.py` is left out
-when it holds nothing but a docstring, and so is the reduction map's own test folder,
-`core/Reduction/tests`.
+when it holds nothing but a docstring.
 
 ### Entry points
 
@@ -32,12 +31,12 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 
 - `config.py`: the constants every default comes from, device detection (`detect_device`,
   `cpu_device`), the inputs root and the records root, the memory-budget reading
-  (`memory_budget_elements`) and the allocator policy; it re-exports `SimConfig` and `FDTConfig`.
-- `sim_config.py`: the `SimConfig` and `FDTConfig` data carriers: the box, the observation mode, the
-  simulator's rescale index, the tier-1 helpers and `copy_for_run`.
-- `cli.py`: the configuration builders both front ends share (`make_sim_config`, `make_fdt_config`,
-  `make_param_sweep_config`, `make_reduction_config`), cell parsing (`parse_cell`), the bounds file a
-  cell resolves to (`resolve_bounds_for_cell`) and the sweep presets (`SWEEP_PRESETS`).
+  (`memory_budget_elements`) and the allocator policy; it re-exports `SimConfig`.
+- `sim_config.py`: the `SimConfig` data carrier: the box, the observation mode, the simulator's
+  rescale index, the tier-1 helpers and `copy_for_run`.
+- `cli.py`: the configuration builder both front ends share (`make_sim_config`), cell parsing
+  (`parse_cell`) and the bounds file a cell resolves to (`resolve_bounds_for_cell`), which no run
+  calls now that every run is handed its bounds file.
 - `orchestrator.py`: the stages and the compositions that chain them
   ([Stages and compositions](#stages-and-compositions)).
 - `plans.py`: run plans (`read_plan`, `plan_text`, `Plan`, `PlanRefusal`): the reader of the text
@@ -54,7 +53,7 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `logging_root.py`: the one root-logger handler both front ends install, so a library's record is
   shown once and a `core` record is never shown twice.
 - `registry.py`: the model registry: the three built-in models, the user models loaded from the
-  inputs root, and which screens accept a user model (`is_sbi_user_model`, `fdt_support`).
+  inputs root, and whether the inference chain accepts a user model (`is_sbi_user_model`).
 - `forcing.py`: the drive builders (`build_nondim_force_tensor`, `build_nondim_sin_force_tensor`,
   `build_user_force_tensor`), the zero drive, the drive-channel rule (`n_force_channels`) and the
   check that raises `RuntimeError` on an inferred rescale index (`require_simulator_index`).
@@ -178,7 +177,6 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `diagnostics.py`: `sbc`, `identifiability` and `ablation`.
 - `probes.py`: the `probes` family.
 - `smoke.py`: `smoke`, every stage end to end at tiny sizes.
-- `fdt.py`: `fdt`, `crossval` and `compare`.
 - `browse.py`: the `artifacts` family: read, annotate and tidy the store.
 - `config_args.py`: the shared flag groups, the configuration builder (`build_cfg`), `knobs`, the
   figure sink and the success line.
@@ -195,8 +193,8 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   remembered for this computer (`memory_limit.apply_remembered`) before the window is made, so no
   batch is planned without it.
 - `main_window.py`: `MainWindow`: the rail and, beside it, the page of the part in sight (Home,
-  Parameter inference, Effective temperature, Live simulation, Reduction map, Records, Your own
-  models, Settings and Help), each part but Home built the first time it is opened; `go_to` moves
+  Parameter inference, Records, Your own models, Settings and Help), each part but Home built the
+  first time it is opened; `go_to` moves
   between them (the inference screen's `navigate` signal asks it to open another place), and a close it accepts
   saves the panels' state. It carries out Home's presses that do more than open a place: "Continue
   with these" and the reopening's offers (`_action`), reads the room again when the window moves to
@@ -212,8 +210,6 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   are changed and not applied (`pending`), the plan in use (`plan_source`, `take_plan`), the chain
   of loads (`load_chain`), the offers a reopened window makes (`read_offers`, `continue_from`,
   `resume_kept`) and Home's "Continue with these" (`continue_with`).
-- `screens/temperature_screen.py`: Effective temperature: the row of its two pages' names, One cell
-  and Sweep study, over the page shown.
 - `screens/artifact_screen.py`: the part Records, over `core.artifacts`.
 - `screens/models_screen.py`: Your own models: the list of the user models, and the model builder.
 - `screens/model_builder_screen.py`: the user-model builder.
@@ -255,13 +251,6 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `panels/inference/tsnpe_tab.py`: step 6, Narrowing round, which dispatches `tsnpe_round`.
 - `panels/inference/help_text.py`: the steps' help text, keyed by field.
 - `panels/inference/rows.py`: the chi band and probe rows.
-- `panels/fdt_panel.py`: Effective temperature's page One cell: the measurement on one cell.
-- `panels/crossval_panel.py`: Effective temperature's page Sweep study.
-- `panels/record_view.py`: reads an `fdt` record back onto its panel.
-- `panels/reduction_panel.py`: the Reduction map's page.
-- `panels/simulate_panel.py`: the Live simulation's page.
-- `panels/simulate_runner.py`: the live simulation's worker side, which streams frames to the page.
-- `panels/simulate_export.py`: the live simulation's video export, on a worker.
 - `run/controller.py`: the one run of the process (`controller()`): its start, its worker, the lock on
   every panel, its two files, its stop, its tries and its end.
 - `run/model.py`: a run as the window reads it (`RunModel`): its state, sentence, stage line, time
@@ -379,23 +368,9 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `widgets/labeled_inputs.py`: the typed numeric fields and file pickers.
 - `widgets/source_toggle.py`: a switch between a file and typed values.
 - `widgets/help_badge.py`: the "?" badge beside a setting.
-- `widgets/live_hair_bundle.py`: the live simulation's trace and heat map.
-- `widgets/compare_list.py`: the list the comparison controls hold.
 - `widgets/field_row.py`: labelled fields in one row.
 - `widgets/forms.py`: the one place a form layout is built.
 - `widgets/adaptive_stack.py`: a stacked widget sized to the visible page, not the tallest.
-
-### `core/FDT`
-
-- `fdt_pipeline.py`: `run_fdt`, the effective-temperature measurement for one cell.
-- `campaigns.py`: the two simulation campaigns: spontaneous fluctuations to a power spectrum, and
-  driven responses to χ(ω).
-- `spectral.py`: `psd_welch`, `lock_in_chi`, `eff_temp_ratio`, the frequency grid and the peak finder.
-- `sanity.py`: the five sanity checks (`run_all_sanity`).
-- `cross_validation.py`: the parameter-sweep study (`run_param_study_cli`, `run_fdt_param_sweep`).
-- `cross_validation_plots.py`: the sweep study's 3D figures.
-- `compare.py`: `compare`, which compares saved `fdt` records.
-- `plots.py`: the single-cell figures.
 
 ### `core/Helpers`
 
@@ -408,21 +383,7 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   and `emit_figure`.
 - `plot_colours.py`: the four named colours every figure the engine draws takes a colour from; it
   imports nothing.
-- `fdt.py`: two old torch helpers (`gen_freqs`, `force`) above a disabled block of numpy spectrum
-  and lock-in helpers; nothing in `core` imports it.
 - `model_helpers.py`: rescaling helpers; nothing in `core` imports it.
-
-### `core/Reduction`
-
-- `__init__.py`: the public names (`reduce_nwk_to_hopf`, `sweep_f_max`, `run_reduction_map`).
-- `reduce.py`: one Nadrowski point reduced to its Hopf normal form (`ReductionRecord`).
-- `fixed_point.py`: the fixed point.
-- `linear.py`: the linear part.
-- `cubic.py`: the cubic Lyapunov coefficient.
-- `projection.py`: the drive and the noise projected onto the normal form.
-- `rescaling.py`: from the Nadrowski model's units to the Hopf form's, and the dimensional factors.
-- `sweep.py`: the sweep, and the Reduction panel's entry (`run_reduction_map`).
-- `plots.py`: the reduction map's figures.
 
 ### Two notes
 
@@ -447,7 +408,6 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   suites patch there) and in `core/diagnostics/rng.py`. Deleting one of those fails loudly too, with
   one exception: Help reads `core/gui/panels/inference_tabs.py`'s `HELP` by string path and skips
   it when it is absent.
-- **Reduction is not used by inference.** Only the Reduction Map panel imports `core.Reduction`.
 
 ## Stages and compositions
 
@@ -462,7 +422,7 @@ bounds + units -> cli.make_sim_config (a bounds-only configuration) -> build_pri
 A cell's truth enters only where it is needed, through `cli.load_and_validate_gt`: inside
 `simulated_inference` (which takes hand-entered values through `SimConfig.inject_ground_truth`
 instead), in the tool's `build_cfg(load_gt=True)` (the Laplace and Jacobian identifiability checks
-and the probe checks' `band` and `drive`), and in the live simulation's runner. A narrowing round
+and the probe checks' `band` and `drive`). A narrowing round
 puts back its observation's recorded truth (`LoadedObservation.install`), which it uses only to
 report whether the truth lies inside the region. The training rows never depend on the cell.
 
@@ -514,8 +474,8 @@ them spends anything.
 A composition looks its stages up in the module's globals at call time, so a patched stage takes
 effect inside it.
 
-**`core.runs.public_entry`.** Every public stage, composition and diagnostic, and the three FDT
-entries, carries this decorator, and nothing else does
+**`core.runs.public_entry`.** Every public stage, composition and diagnostic carries this
+decorator, and nothing else does
 (`test_the_public_entries_carry_public_entry_and_nothing_else_does` in
 `tests/test_artifact_store.py` pins the set).
 
@@ -549,8 +509,8 @@ call, `runs._RunLogHandler` for the record's `log.txt`, and `core.logging_root`'
 library records. A judgement or a count that must not stop the run is a Python warning (a
 `PreflightWarning` among them, or the masked-probe notice), and the run log captures those too. The
 only prints left under `core` are the command-line tool's own output (its banner, record and success
-lines, and the `artifacts` family's listings), the two asset build scripts under `core/gui/assets`,
-and the reduction map's report (`Reduction.sweep`).
+lines, and the `artifacts` family's listings) and the two asset build scripts under
+`core/gui/assets`.
 
 **The force scale on a tier-1 box.** A bounds file that declares temperature in place of the force
 scale puts T in the force scale's column, and the force scale is derived from it
@@ -559,8 +519,7 @@ Everything that simulates must hand the simulator the derived block and the simu
 names that column `f_scale`.
 
 - `derived.for_simulation(cfg, params_nd, rescale)` is the one call that the simulating
-  diagnostics (`identifiability`), the probe checks and the live simulation's runner
-  (`core.gui.panels.simulate_runner`) use.
+  diagnostics (`identifiability`) and the probe checks use.
 - Training, the observation builder, the posterior predictive check and the Fisher rotation make the
   same substitution inline, with `derived.to_sim_rescale` and the simulator's index,
   `cfg.sim_rescale_idx`. `gen_training_data`, which is handed index dictionaries rather than a
@@ -600,7 +559,7 @@ names that column `f_scale`.
 
 ## The artifact store
 
-What a record is, the nine kinds, names and ids, and where each run saves are in
+What a record is, the eight kinds, names and ids, and where each run saves are in
 [The artifact store](getting-started.md#the-artifact-store) on the getting-started page. This section
 is how the store is built, in `core/artifacts/`.
 
@@ -616,8 +575,8 @@ is how the store is built, in `core/artifacts/`.
   observation's conditioning geometry is `conditioning_block`.
 - **Writing.** `ArtifactStore.create` refuses a taken name and returns an `ArtifactWriter`. The writer
   creates the directory on entry and hands out payload and figure paths (`payload`, `figure_path`);
-  at the commit it hashes the payloads, writes `log.txt`, then the manifest, last and atomically. For
-  every kind but `fdt`, any exception removes the directory. A directory with no manifest is
+  at the commit it hashes the payloads, writes `log.txt`, then the manifest, last and atomically.
+  Any exception removes the directory. A directory with no manifest is
   therefore incomplete by definition, and it is the only record directory a sweep removes. Every
   sweep also clears the loose files inside the kind directories it covers (`remove_loose`); the
   all-kinds sweep alone also clears the legacy `crossval/` directory, which sits beside the kind
@@ -626,11 +585,9 @@ is how the store is built, in `core/artifacts/`.
 - **Saving is a rename.** `ArtifactStore.rename` rewrites the manifest's name, then renames the
   directory. A directory rename that Windows refuses is tolerated, because the manifest is what
   resolves.
-- **`fdt` records are progressive** (`PROGRESSIVE_KINDS`). The writer writes a first manifest on
-  entry, with every body key present, the unknown ones null, and `complete` false; `refresh()`
-  rewrites the manifest and the log as the run goes; an exception keeps the directory, marked
-  unfinished. The exception is a `Refusal` raised before any payload or figure path was handed out,
-  which removes the directory, so a pre-spend refusal leaves no empty record behind.
+- **A folder an older build left is no kind.** A folder `fdt/` beside the kind directories, where an
+  older PRISM kept its effective-temperature records, is neither a kind nor a legacy directory: no
+  listing, load or sweep reads, names or removes it.
 - **The simulation cache** has no writer. `gen_training_data` commits it through
   `training_checkpoint.save` at its cadence (every 50 batches by default), at the end of generation,
   and on the way out of a cancel or a crash, and `store.write_simulation_manifest` keeps its
@@ -739,8 +696,7 @@ is how the store is built, in `core/artifacts/`.
   back through its parents (`render_lineage`), for both front ends. Both are pure functions of the
   manifests, deterministic, and written to files, never stored as a kind.
 - **The default store.** Every stage that writes a record takes `store=` and starts with
-  `resolve_store(store)`; the two FDT measurements (`run_fdt`, `run_param_study_cli`) are handed
-  writers the front end created instead. The tool
+  `resolve_store(store)`. The tool
   passes the store at every call inside `use_store`, which puts the previous default back on exit;
   nothing calls `set_default_store` in a run.
 
@@ -750,8 +706,7 @@ is how the store is built, in `core/artifacts/`.
 This section is how `core/tool/` is put together.
 
 - **One module per family**, each with a `register` function that `core.tool.build_parser` calls:
-  `stages`, `diagnostics`, `probes`, `smoke`, `fdt` (for `fdt`, `crossval` and `compare`) and
-  `browse` (for `artifacts`). `config_args`, `fields`, `help_defaults` and `logging_console` are
+  `stages`, `diagnostics`, `probes`, `smoke` and `browse` (for `artifacts`). `config_args`, `fields`, `help_defaults` and `logging_console` are
   shared.
 - **Parsers are built torch-free.** Each handler imports its heavy modules inside its own body;
   `fields` imports nothing, and `help_defaults` only `core.refusals` and `fields`; `main` loads the
@@ -786,10 +741,9 @@ This section is how `core/tool/` is put together.
 - **`smoke` has its own store root**, keyed on `args.temp_store_root`, a property only `smoke`'s
   parser sets. Without `--store-root` it makes a fresh temporary root per run
   (`tempfile.mkdtemp`), and a failed run's root that is still empty is removed with `rmdir`, which
-  cannot remove anything that was written. `fdt` and `crossval` take `--store-root` too, but default
-  to the `PRISM_ARTIFACTS` root, and `main` must never make a temporary root for them or `rmdir`
-  theirs, which is why the key is `smoke`'s own property and neither the flag's presence nor the
-  subcommand's name.
+  cannot remove anything that was written. The key is `smoke`'s own property rather than the
+  flag's presence or the subcommand's name, so that no other command's root is ever made or removed
+  by it.
 
 ## The window
 
@@ -866,8 +820,8 @@ stage without freezing, shows its output and stops it.
   - A figure is rendered to PNG on the worker (`base_panel._png_fig_sink`), and pickled for the
     pop-out window; the GUI thread shows the image and never paints a figure built on the worker,
     which deadlocks on matplotlib's global lock. A run that saves its figures to disk instead is shown
-    through `plot_watcher`, which watches the folder the run writes its figures into: an `fdt`
-    record's `figures/`, or the Reduction map's own folder.
+    through `plot_watcher`, which watches the folder the run writes its figures into; no page of
+    the window runs one today.
   - `core.gui.__main__.main` switches matplotlib to its Agg backend before it imports the window, and
     so before any module that draws, so a stray `plt.show()` in a stage is a no-op on a worker thread.
 - **Stream routing.** `streams.redirect_streams` swaps `sys.stdout` and `sys.stderr` for two
@@ -984,7 +938,7 @@ stage without freezing, shows its output and stops it.
   would see a zero-length step.
 - **Seeding.** `core.rng.seeded(seed, device)` seeds torch and numpy for a block and restores both
   afterwards; `smoke`, every diagnostic that draws (SBC, the Laplace and Jacobian checks, the probe
-  checks), the FDT measurement and a seeded calibration run inside it. A run is seeded once and its
+  checks) and a seeded calibration run inside it. A run is seeded once and its
   streams run on: seeding each stage would start draws that must be independent from the same state.
   A seeded calibration derives its own seed (`calibration_seed`), so it never replays the strata of a
   training run seeded with the same number.

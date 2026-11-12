@@ -391,13 +391,6 @@ REMOVED_NAMES_KEPT = {
 }
 
 
-def _removed_scan_files() -> list[Path]:
-    """Every file the reference rule covers but the reader pages and the README, whose words follow in a change of
-    their own."""
-    return [path for path in scanned_files()
-            if _rel(path) != "README.md" and not _rel(path).startswith(READER_DOCS_DIR + "/")]
-
-
 def _imports_of(path: Path, rel: "str | None" = None) -> list[tuple[int, str]]:
     """``(line, module)`` for every module a Python file imports, relative imports resolved from the file's own
     package (``rel``, its path from the repository, read off the file when not handed), and for
@@ -428,7 +421,7 @@ def test_no_file_imports_or_names_a_module_the_program_no_longer_has():
         where = _REPO / module.replace(".", "/")
         assert not where.exists() and not where.with_suffix(".py").exists(), f"{module} is still on disk"
     imported, named, kept = [], [], set()
-    for path in _removed_scan_files():
+    for path in scanned_files():
         rel = _rel(path)
         if path.suffix == ".py":
             imported += [f"{rel}:{line} imports {module}" for line, module in _imports_of(path)

@@ -82,14 +82,13 @@ and the session guards).
 - **The full run** is `python -m pytest`; budget about an hour and a half, and log it to a file.
   `python -m pytest -m slow --collect-only -q` lists the slow set, the real simulations the fast gate
   leaves out.
-- **The slow set**, `python -m pytest -m slow`, is five tests:
-  `tests/test_user_sbi.py::test_chi_mode_full_sbi_pipeline`, in `tests/test_tool.py`
-  `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` and `test_fdt_and_crossval_run_at_tiny_size`,
+- **The slow set**, `python -m pytest -m slow`, is three tests:
+  `tests/test_user_sbi.py::test_chi_mode_full_sbi_pipeline`,
   `tests/test_tier1.py::test_smoke_runs_every_stage_on_the_tier1_box` and
   `tests/test_diagnostics.py::test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin`.
-  At commit e17f1ec it ran in 1 h 0 min 49 s: the chi pipeline 1528 s, the tier-1 `smoke` 1142 s,
-  the Nadrowski sanity path 612 s, the FDT and crossval run at tiny size 349 s and the probes'
-  twin-cell check 7 s.
+  At commit e17f1ec, when the set had two more tests (of the effective-temperature analysis, since
+  removed), it ran in 1 h 0 min 49 s, and these three took 1528 s (the chi pipeline), 1142 s (the
+  tier-1 `smoke`) and 7 s (the probes' twin-cell check).
 - **The markers**, registered in `pytest.ini` and turned into skips by the root `conftest.py`:
   - `slow`: left out of the fast gate;
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
@@ -330,7 +329,7 @@ What each run checks, and what passing looks like:
 
 **Why `--bounds` names the master box.** `smoke` always takes `--bounds`, and the choice matters:
 the cell `master_spont.txt` also has a bounds file of its own name, the 12-parameter spontaneous box,
-which the runs that find a bounds file from the cell alone would pick
+which the rule by which a cell finds its bounds file would pick
 ([How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file)). Named here, that
 box would, in chi mode, report the same mode and the same conditioning width, and drop `f_scale`
 without a word.
@@ -455,8 +454,7 @@ Then delete the scratch folder, as the recipe says.
 - **Stand-ins, not real simulations.** The fast gate has little headroom under its target, so a new
   fast test uses stand-ins. `tests/_fixtures.py` holds them: `stubbed_training` (a training stage that
   stops before the network), `stub_calibration_battery` (everything a calibration simulates or
-  samples), `stand_in_gen_obs` (a cheap simulator of the right shape) and `build_fdt_record` (an fdt
-  record in seconds); and `build_tiny_run`, behind the `tiny_run` fixture, when a test needs a real
+  samples) and `stand_in_gen_obs` (a cheap simulator of the right shape); and `build_tiny_run`, behind the `tiny_run` fixture, when a test needs a real
   prior and posterior at tiny size.
 - **A run in a window test is the stand-in run** of `tests/_runs.py` (`StandIn`, `start_run`,
   `running`): a plain function the real worker runs through a page's real `dispatch`, saying what

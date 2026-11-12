@@ -38,9 +38,9 @@ corner==2.2.3
 hdbscan==0.8.41
 PySide6==6.9.3
 pyqtgraph==0.13.7
-# The Simulate section's "Save video…": GIF needs only Pillow (transitive via matplotlib); MP4 additionally
-# needs an ffmpeg binary that pip cannot supply -- in the biophys-env it comes from the conda `ffmpeg`
-# package (resolved by imageio-ffmpeg under Library\bin), NOT this wheel.
+# imageio and imageio-ffmpeg wrote the live simulation's videos (a GIF, or an MP4 through an ffmpeg binary
+# that in the biophys-env came from the conda `ffmpeg` package). The live simulation was taken out of PRISM,
+# and nothing in PRISM uses either package now; they stay pinned so that the environment is unchanged.
 imageio==2.37.0
 imageio-ffmpeg==0.6.0
 # Test runner. Fast gate: pytest -m "not slow"; full: pytest.

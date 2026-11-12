@@ -1,6 +1,6 @@
 # PRISM
 
-Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**PRISM**) has two front ends over one core: a PySide6 desktop GUI and the command-line tool `python -m core`.
+Research tool for inferring, by simulation-based inference, the parameters of a simulated biophysical model of the inner-ear hair-cell bundle. The application (**PRISM**) has two front ends over one core: a PySide6 desktop GUI and the command-line tool `python -m core`.
 
 Start with the guide in [docs/guide/](docs/guide/): it explains how to use, run and maintain PRISM, with a reading path for each kind of reader.
 
@@ -194,7 +194,7 @@ Four groups of flags mean the same wherever they appear:
 Four environment variables, the ones `python -m core --help` names; the last two are never flags: they change how a batch is planned in memory, or how often memory is reported, and never the rows it produces ([details](docs/guide/command-line.md#environment-variables)):
 
 - `PRISM_RESOURCES`: the inputs root (default `<repo>/Resources`).
-- `PRISM_ARTIFACTS`: the records root (default `<repo>/Artifacts`). Every subcommand writes there except `smoke`, and `fdt` and `crossval` given `--store-root`.
+- `PRISM_ARTIFACTS`: the records root (default `<repo>/Artifacts`). Every subcommand writes there except `smoke`.
 - `PRISM_VRAM_CEILING_GIB`: the GiB one simulation batch may plan to occupy; 0 or unset is automatic; read afresh for every batch plan.
 - `PRISM_MEM_LOG_EVERY`: the batches between memory log lines; read once, when the simulation pipeline is first imported.
 
@@ -218,14 +218,6 @@ python -m core artifacts summary inference demo_inference
 ```bash
 python -m core probes band  --bounds Resources/Bounds/nadrowski/master.txt --cell Resources/Cells/nadrowski/master_spont.txt --name spont_band
 python -m core probes drive --bounds Resources/Bounds/nadrowski/master.txt --cell Resources/Cells/nadrowski/master_spont.txt --name spont_drive
-```
-
-**An FDT run twice, then compared.** Each run draws and records a seed of its own, so the two are independent repeats of one cell. The sizes here (4 drive frequencies, 8 trajectories each, no sanity checks) show the commands working and mean nothing more; a real run takes the defaults, 60 frequencies of 256 trajectories after the sanity checks, and is long, on the CPU only.
-
-```bash
-python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_a
-python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_b
-python -m core compare repeats --record spont_fdt_a --record spont_fdt_b --name spont_fdt_repeats
 ```
 
 [The command-line page](docs/guide/command-line.md) lists every subcommand, mode and flag with what each writes, refuses and prints. `python -m core <subcommand> --help` (`python -m core <family> <mode> --help` for a mode) lists a command's flags with their defaults, imports no torch and needs no graphics card.

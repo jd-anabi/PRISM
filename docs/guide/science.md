@@ -1237,31 +1237,3 @@ count should be lower is still to decide.
 **Correcting the −log P(A) inflation.** A narrowed posterior's informativeness is inflated by
 −log P(A), which is printed and never subtracted ([Narrowing rounds](#narrowing-rounds)); whether to
 subtract it has not been decided.
-
-**The FDT passive baseline's Ω₀.** The FDT analysis's passive-baseline check
-(`core.FDT.sanity.check_passive_baseline`) sets s = 0 and temp = 1, which puts the bundle's
-displacement and adaptation in thermal equilibrium. That process is reversible, so its spectrum has
-no peak at a finite frequency, and the check's "resonance" is always the first bin of its search
-band. The verdict stays meaningful, since 18 of its 20 probes still test the ratio, but the reported
-Ω₀ misleads, and the other two, low probes that fall off the spectrum's grid, are simulated and then
-dropped, at about 37 % of the check's 466 s. The options: anchor on the configured Ω₀, report "no
-peak", clip the probes to the resolved span, or relabel the line.
-
-**The FDT ratio at resonance, and the sign of χ″.** An FDT run's summary reads the
-effective-temperature ratio at the probe nearest the natural frequency (`ratio_at_resonance`), which
-on a two-frequency grid can be a decade away. And no test pins the sign of the lock-in's χ″: the
-end-to-end sanity-check test accepts a failing passive baseline, so a flipped sign would pass the
-suite. Whether to pin it is still to decide.
-
-**A NaN bin as the FDT peak.** `core.FDT.spectral.find_spectral_peak` takes a NaN bin as the peak,
-which moves ω₀ for a spectrum that is NaN in some bins; correcting it would shift two counts the
-tests pin. It is left for a pass over the FDT science.
-
-**The FDT band for the Hopf model.** At the default band the FDT analyses refuse the shipped Hopf
-cell. The Welch segment's cap of 2^14 samples fixes the spectrum's first bin at 0.0383 in
-non-dimensional units, and at the shipped settings a cell is refused exactly when its spontaneous
-peak lies below 0.3835. One band for every model, or a preset per model, is still to decide.
-
-**The tier-1 cell in the FDT pickers.** `master_spont_tier1.txt` has no bounds file of its own name,
-so it resolves to `master.txt` and is refused there for lacking f_scale, yet the FDT and CrossVal
-screens both offer it. Fix the cell, add a same-named bounds file, or leave it out of their pickers.

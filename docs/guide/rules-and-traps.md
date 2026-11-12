@@ -39,7 +39,7 @@ silently.
   `UserModel` as one tuple after the compiled definition, and raises a plain `RuntimeError`.
 - The observable is state column 0 on every path: most `core.SBI.pipeline.gen_obs` callers ask for
   `var_idx=0`, so that only that variable is copied; the identifiability Jacobians take row 0 of the
-  full result; and the FDT measurements and the prior screens index row 0 of what
+  full result; and the prior screens index row 0 of what
   `Simulator.simulate` returns. A user model's first variable is its observable.
 - The solver is Itô Euler–Maruyama and derives its step from the time grid; nothing passes it one
   ([The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility)).
@@ -63,8 +63,9 @@ conditions only; the units file declares what the numbers mean and never convert
 model is its folder's name (`core.cli.parse_cell`). `SimConfig.inject_ground_truth`
 (`core.sim_config`) refuses a cell that lacks an inferred parameter the bounds file declares, or puts
 one outside its box (field `cell`), and ignores and reports the values the bounds file does not
-declare, so one cell serves several bounds files. Every inference command is given its bounds file;
-only the runs handed a cell alone look one up (`core.cli.resolve_bounds_for_cell`). The formats and
+declare, so one cell serves several bounds files. Every inference command is given its bounds file,
+and no run looks one up from a cell alone (`core.cli.resolve_bounds_for_cell` keeps the rule a lookup
+would follow). The formats and
 the lookup are in [Input files](recordings.md#input-files) and
 [How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file). Pinned by
 `tests/test_artifact_consistency.py::test_bounds_resolution_prefers_a_sibling_then_falls_back_to_master`
@@ -107,10 +108,9 @@ pipeline also reads two environment variables of its own
 `tests/test_settings_persistence.py::test_the_limit_in_force_is_the_planners_own_answer_over_a_table_of_texts`.
 
 **Every public entry works on a private copy of its configuration.** `core.runs.public_entry` hands
-every public stage, composition and diagnostic, and the FDT measurement and sweep study,
-`cfg.copy_for_run()`, so the caller's configuration is unchanged whether the run succeeds, is
-refused or crashes; the FDT comparison (`core.FDT.compare.compare`) takes no configuration and
-carries the decorator for its run log alone. No stage mutates what it is handed: a caller that
+every public stage, composition and diagnostic `cfg.copy_for_run()`, so the caller's
+configuration is unchanged whether the run succeeds, is refused or crashes. No stage mutates what it
+is handed: a caller that
 wants what a stage produced reads the record, or the `Loaded*` wrapper the stage returns. Pinned by
 `tests/test_artifact_store.py::test_every_public_entry_leaves_the_callers_config_untouched` and
 `tests/test_artifact_store.py::test_the_public_entries_carry_public_entry_and_nothing_else_does`.
@@ -131,7 +131,7 @@ exception, never a refusal. Known gaps, which are not the rule, include:
 - a store lookup's error for a reference that resolves to no record carries no field in the loaders
   (`core.artifacts.store.ArtifactStore.load_prior`, `load_posterior`, `load_observation`,
   `load_calibration`, `load_inference`, `load_diagnostic`) and in `get`, `path` and `rename`;
-  `set_note`, `delete`, `read_log` and `load_fdt` name the field `artifact`;
+  `set_note`, `delete` and `read_log` name the field `artifact`;
 - a units-file refusal carries the field `units`, which no flag answers;
 - the four keys of a run plan (`plan`, `chi_mode`, `reparam_rotate`, `expected_epochs`) map to no flag
   in the tool's table (`--chi` sets chi mode, but no refusal of the tool's carries the key): the tool
@@ -290,10 +290,6 @@ How `core/gui/` runs a stage off the GUI thread is in [The window](architecture.
   a run now: the window writes its figure settings once, as the application is built, and the tool
   writes none. Guard: `core.Helpers.visualizers.save_figure` pins the save to the figure's own
   colours, for anything that ever changes them.
-  Not yet followed: the FDT figures (`core.FDT.plots`: `plot_eff_temp_ratio`,
-  `plot_spontaneous_trajectory`, `plot_psd`, `plot_chi_components`; and
-  `core.FDT.cross_validation_plots.plot_fdt_3d_vs_param`) and the reduction map's
-  (`core.Reduction.plots.plot_sweep_summary`, `plot_cross_validation_3d`) still call `savefig`.
   Pinned by `tests/test_figures.py::test_a_theme_flip_between_build_and_save_cannot_split_a_figure`.
 - **Give a table cell an explicit background, never `"none"`.** A transparent cell shows the figure's
   background behind text coloured for the axes, and once left the best-fit table blank. Guard:
@@ -375,14 +371,7 @@ What the window remembers, and why, is in
 [The Parameter Inference tabs](window.md#the-parameter-inference-tabs).
 
 - **The restore order.** A picker's saved key re-applied before its folder is rescanned is wiped by
-  the rescan. Guard: `ArtifactPicker.repoint` points, rescans, then re-applies. A panel restoring a
-  model combo sets it first and calls its `_on_model_changed` explicitly, because
-  `currentTextChanged` does not fire when the value is already the default
-  (`FdtPanel.restore_settings`).
-- **The sweep study's grid ends are never persisted.** A value saved against another cell would be a
-  wrong bound. Guard: `CrossValPanel.save_settings` and `restore_settings`, which re-derive the ends
-  from the cell. Pinned by
-  `tests/test_settings_persistence.py::test_crossval_does_not_persist_cell_derived_bounds`.
+  the rescan. Guard: `ArtifactPicker.repoint` points, rescans, then re-applies.
 - **A picker's key is its relative path, restored with a missing-item guard.** An index shifts as
   files are added, and restoring a vanished entry would blank the combo. Guard: `ArtifactPicker.key`
   and `ArtifactPicker.restore_key`. Pinned by
@@ -489,33 +478,6 @@ What the window remembers, and why, is in
   module's `HELP`, so text written only into a call shows as a badge and never reaches that
   reference. No guard: the panels follow the convention.
 
-### Simulate and video export
-
-The live simulation drives the solver itself (`core.gui.panels.simulate_runner`), outside the
-simulator's own guards.
-
-- **A frame of m steps needs m + 1 grid points, and emits all but the first.** The solver derives
-  its step from the point count, so m points would change the step without a word; the first point
-  repeats the previous frame's last. Guard: `simulate_runner.frame_time_grid`.
-- **Wrap the loop in `torch.no_grad()`.** The solver has no autograd guard of its own; it lived in
-  the simulator, which this path bypasses. Guard: `simulate_runner.run_simulation_stream`.
-- **Cancel between frames.** A cancel raised inside a tqdm redraw would leak its write lock. Guard:
-  `run_simulation_stream` polls `should_stop` once per frame and raises between frames.
-- **Set the model's drive directly.** Assigning the simulator's `force` rebuilds the whole model.
-  Guard: each frame sets `sim.sde.force` (`run_simulation_stream`).
-- **Pin the CPU.** The batch-of-one loop is fastest there, and the direct drive assignment moves
-  nothing to another device. Guard: `simulate_runner.build_stream_config`.
-- **Export frames contiguous, with even dimensions.** A frame's RGB slice is a non-contiguous view,
-  and H.264 needs even sides. Guard: `core.gui.panels.simulate_export.export_animation`, which also
-  removes a cancelled or failed export's partial file in a `finally`, closing the writer under its
-  own guard.
-- **GIF durations are in milliseconds, and MP4 needs ffmpeg.** Guard: `simulate_export._open_writer`
-  passes milliseconds, and `SimulatePanel._save_video` checks for ffmpeg on the GUI thread before it
-  dispatches anything.
-- **Import imageio after torch.** Imported first, it loads a second OpenMP runtime and the process
-  aborts with OMP Error #15 and no traceback. Guard: `simulate_export._open_writer` imports it only
-  when a writer opens.
-
 ### Labels and units
 
 These are conventions, and no guard enforces them.
@@ -527,9 +489,6 @@ These are conventions, and no guard enforces them.
 - **`SimConfig.inferred_labels` returns LaTeX**, which matplotlib renders; Qt cannot, so the window's
   own labels use `labels.pretty_gui`'s rich text, and a log line that prints a parameter's label
   shows the raw `$...$`.
-- **In pyqtgraph, a displacement unit goes in the label text**, never in `units=`, which pyqtgraph
-  prefixes as an SI unit and would mangle "nm"; time keeps `units="s"`
-  (`core.gui.widgets.live_hair_bundle.LiveHairBundleView`).
 - **Most figures are non-dimensional** and say "(ND)"; only the dimensional trace axes carry units.
 
 ### User-defined models
@@ -543,8 +502,8 @@ The rules themselves are in
   `core.Models.user_model._identifiers`.
 - **`E` is an ordinary parameter; `pi` is the only constant.** Guard: `user_model._CONSTANTS`.
 - **The model's parameter order must equal its bounds file's.** Otherwise every value binds to the
-  wrong parameter with no error. Guard: `core.SBI.run_guards._assert_user_model_in_sync` and
-  `simulate_runner.build_stream_config` refuse a drifted file.
+  wrong parameter with no error. Guard: `core.SBI.run_guards._assert_user_model_in_sync` refuses a
+  drifted file.
 - **A save commits with its JSON.** The registry knows a model by its JSON alone, so a save that
   failed part-way must never leave a JSON behind. Guard: `core.Helpers.model_store.save_user_model`
   writes the bounds, cell and units files first and the JSON last.

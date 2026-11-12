@@ -77,7 +77,7 @@ PRISM keeps its inputs apart from the records its runs generate.
   cell file and units file for that model into `Bounds/`, `Cells/` and `Units/`
   (`core.Helpers.model_store.save_user_model`). [Bringing recordings](recordings.md#input-files)
   describes each format.
-- **Records**, what every stage, diagnostic and FDT run writes, live under the records root
+- **Records**, what every stage and diagnostic writes, live under the records root
   (`Artifacts/` unless overridden), one directory per record:
   `<records root>/<kind directory>/<name>__<id>/`. [The artifact store](#the-artifact-store) below
   describes them, and the few outputs that are not records.
@@ -97,7 +97,6 @@ Which records root a run writes to:
 - **`smoke`**: the root `--store-root` names; without it, a fresh temporary directory made for that run,
   whose path the first `[smoke]` line prints and which is left on disk unless the run failed before
   writing anything;
-- **`fdt` and `crossval`**: the root `--store-root` names; without it, the `PRISM_ARTIFACTS` root;
 - **every other subcommand**, the `artifacts` family included: the `PRISM_ARTIFACTS` root, and no
   other (`core.tool.main`).
 
@@ -246,8 +245,8 @@ mode and the bounds file it was trained with. At its defaults `train` is a full-
 
 ## The artifact store
 
-Every record belongs to one of nine kinds, the keys of `core.artifacts.store.KIND_DIRS`. A kind is
-named in the singular; eight have a plural directory, and `fdt` keeps its own name.
+Every record belongs to one of eight kinds, the keys of `core.artifacts.store.KIND_DIRS`. A kind is
+named in the singular, and its directory in the plural.
 
 | kind | directory under the root | written by the tool | written by the window |
 |---|---|---|---|
@@ -258,16 +257,13 @@ named in the singular; eight have a plural directory, and `fdt` keeps its own na
 | `calibration` | `calibrations/` | `validate` | step 4, Checks |
 | `inference` | `inferences/` | `infer` | step 5, Inference |
 | `diagnostic` | `diagnostics/` | `sbc`, `identifiability`, `ablation`, `probes` | none |
-| `fdt` | `fdt/` | `fdt`, `crossval`, `compare` | Effective temperature |
 | `fit` | `fits/` | `train`, `tsnpe` | steps 3 and 6, Training and Narrowing round |
 
 `smoke` writes the first six kinds into its own root; it writes a simulation cache only with
 `--checkpoint`. A few things are saved outside the kinds, with no manifest:
 
-- the Reduction map writes plain files into `reduction/` under the records root
-  (`core.config.artifacts_root()`);
-- Live simulation's **Save video…**, a figure window's **Save As…**, Records' **Save…** and **Lineage
-  report…**, and `artifacts summary --out` each write where you choose;
+- a figure window's **Save As…**, Records' **Save…** and **Lineage report…**, and `artifacts summary
+  --out` each write where you choose;
 - the model builder writes into the inputs root, as described under
   [Inputs and records](#inputs-and-records).
 
@@ -278,11 +274,11 @@ named in the singular; eight have a plural directory, and `fdt` keeps its own na
   its results;
 - `log.txt`: the run's records, one per line, stamped `HH:MM:SS info`, `HH:MM:SS warning` or
   `HH:MM:SS error`, with every Python warning raised meanwhile (`core.runs`);
-- its payload files, such as `prior.pt`, `posterior.pt`, `results.json` or `data.h5`, and a
+- its payload files, such as `prior.pt`, `posterior.pt` or `results.json`, and a
   `figures/` folder of its figures.
 
 A record is written when its run completes. A run that fails or is stopped leaves no record, with
-three exceptions:
+two exceptions:
 
 - **The simulation cache** holds a training run's simulated rows. Its directory is named by a
   12-character digest of the run's identity, it is committed batch by batch, and a training run with
@@ -290,8 +286,10 @@ three exceptions:
 - **A kept training** (`fit`) is a training saved after every pass while its rows are in a kept
   simulation set; one that stops or fails partway stays kept at its last saved pass, to be resumed,
   and it is removed once its posterior is written.
-- **An `fdt` record is progressive**: its directory and a first manifest exist from the moment the
-  run starts and are rewritten as it goes, so a stop or a crash keeps the folder, marked unfinished.
+
+A folder `fdt/` beside the kind directories is where an older PRISM kept its effective-temperature
+records. PRISM no longer measures the effective temperature, and the folder is no kind: nothing lists,
+reads or removes it, and what it holds stays as it is until you move or delete it yourself.
 
 **Names and ids.**
 
@@ -355,7 +353,7 @@ any other process, cannot be deleted (`core.SBI.fit_state.running`).
 
 | command | what it does |
 |---|---|
-| `python -m core artifacts list [<kind>]` | one line per record of a kind, or of all nine kinds under headings |
+| `python -m core artifacts list [<kind>]` | one line per record of a kind, or of all eight kinds under headings |
 | `python -m core artifacts show <kind> <ref>` | the record's manifest and its run's log |
 | `python -m core artifacts note <kind> <ref> --note TEXT` | sets the note; `--note ''` clears it |
 | `python -m core artifacts rm <kind> <ref>` | deletes one record; refused while anything depends on it |
