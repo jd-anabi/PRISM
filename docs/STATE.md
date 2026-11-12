@@ -1,5 +1,15 @@
 # PRISM — state
 
+**Last updated:** 2026-11-12, afternoon (15:08 by the clock; the weekly bar 78 %, resetting on 15 November at 04:00
+UTC): TASK 6-7 WAITS FOR THE RESET. A chat started at 14:59 from
+`docs/superpowers/prompts/2026-11-12-window-redesign-stage-5-from-task-6-7.md`, read the ground (all as handed over)
+and judged that 78 % plus Task 6-7's expected 10 points or more ends too near 90 %. Its builder's dispatch is written, with the controller's rulings R1 to R12 (the ledger's
+line of 15:06): `.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-06-07-builder-dispatch.md`. Nothing is
+built or running. NEXT: after the reset, dispatch that builder (in that chat, on the owner's word, or a new chat from the
+same prompt and this dispatch), then the loop as the Re-plan section has it.
+
+What follows is the head as 14:22 left it:
+
 **Last updated:** 2026-11-12, afternoon (14:22 by the clock; the weekly bar 77 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S TASK 5B, THE OWNER'S CUT, IS COMPLETE: PRISM is a program for inference by simulation alone. The chat started
 at 09:08 from the owner's pasted prompt (`docs/superpowers/prompts/2026-11-11-sbi-only-cut-and-stage-5-from-task-5b.md`)
