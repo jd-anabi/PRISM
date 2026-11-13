@@ -3760,3 +3760,48 @@ def test_no_widget_a_checks_reading_or_a_runs_end_makes_is_shown_as_a_window_of_
             monkeypatch.setattr(QWidget, name, method)
     assert made >= 6, made
     assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"
+
+
+# ── the two checks that keep nothing but their result ──
+@pytest.mark.parametrize("ending", ["finished", "failed", "stopped", "refused once", "never goes"])
+def test_the_scratch_folder_is_removed_however_the_check_ends(ending, tmp_path, monkeypatch, caplog):
+    """A scratch store is a folder of its own among the computer's temporary files, and goes however its block ends:
+    finished, failed, or stopped as a run is stopped; a removal Windows refuses once is tried again after its pause
+    and the folder goes; one that never goes is tried as often as the rule says, then said once, as a warning that
+    names the folder, and the block's own end passes on unchanged."""
+    import shutil
+    import tempfile
+    from core.gui import check_scratch
+    from core.gui.streams import WorkerCancelled
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    real, tries, pauses = shutil.rmtree, [], []
+
+    def rmtree(path, *args, **kwargs):
+        tries.append(Path(path))
+        if ending == "never goes" or (ending == "refused once" and len(tries) == 1):
+            raise PermissionError(13, "held open by another program", str(path))
+        real(path, *args, **kwargs)
+    monkeypatch.setattr(shutil, "rmtree", rmtree)
+    raised = {"failed": RuntimeError("the fit broke"), "stopped": WorkerCancelled()}.get(ending)
+    seen = {}
+    with caplog.at_level("WARNING", logger="core.gui.check_scratch"):
+        try:
+            with check_scratch.scratch_store(pause=pauses.append) as store:
+                seen["folder"] = folder = Path(store.root)
+                assert folder.parent == tmp_path and folder.name.startswith(check_scratch.SCRATCH_PREFIX), folder
+                (folder / "posteriors").mkdir()
+                (folder / "posteriors" / "posterior.pt").write_bytes(b"held")
+                if raised is not None:
+                    raise raised
+        except (RuntimeError, WorkerCancelled) as caught:
+            assert caught is raised
+    folder = seen["folder"]
+    said = [record for record in caplog.records if record.name == "core.gui.check_scratch"]
+    if ending == "never goes":
+        assert folder.exists() and len(tries) == check_scratch.RMTREE_TRIES, tries
+        assert pauses == [check_scratch.RMTREE_PAUSE_S] * (check_scratch.RMTREE_TRIES - 1), pauses
+        assert [record.levelname for record in said] == ["WARNING"] and str(folder) in said[0].getMessage()
+        real(folder)
+    else:
+        assert not folder.exists() and said == [], said
+        assert (len(tries), pauses) == ((2, [check_scratch.RMTREE_PAUSE_S]) if ending == "refused once" else (1, []))
