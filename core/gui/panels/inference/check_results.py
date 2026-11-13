@@ -106,12 +106,13 @@ def card_block(run: Mapping, *, parent, earlier: "Mapping | None" = None) -> Res
 
 
 def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = False, table=None, accept=None,
-                     accept_greyed: bool = False, kept: str = "") -> ResultRegion:
+                     accept_greyed: str = "", kept: str = "") -> ResultRegion:
     """The comparison after simulating, which writes no record: its sentence with the marker of its state; for a
     posterior from a narrowing round, that the audit measured the whole prior; ``kept``, the answer to keep training
     beyond the last band, with its moment ("" for none); its ``table``, the set's and the audit's shares (None for
-    none); and in the band to look closer at, "Accept this difference", pressed into ``accept``, or greyed, with why,
-    for a set no run history names (``accept_greyed``). Made inside ``parent``."""
+    none); and in the band to look closer at, "Accept this difference", pressed into ``accept``, or greyed with why,
+    ``accept_greyed`` (for a set no run history names, or one whose trainings kept no comparison). Made inside
+    ``parent``."""
     region = ResultRegion(parent)
     region.set_verdict(check_readings.STATE_MARKERS.get(state, "later"), sentence)
     said = ([Fact("info", check_readings.NARROWED_COMPARISON_TEXT)] if narrowed else []) + (
@@ -125,5 +126,5 @@ def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = Fals
         if accept is not None:
             button.clicked.connect(accept)
         button.setEnabled(accept is not None)
-        region.add_action(button, "" if accept is not None else check_readings.NO_HISTORY_TEXT)
+        region.add_action(button, "" if accept is not None else accept_greyed)
     return region

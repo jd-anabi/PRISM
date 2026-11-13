@@ -395,6 +395,8 @@ NARROWED_COMPARISON_TEXT = "The audit measured the whole prior; this round simul
 ACCEPT_WORDS = "Accept this difference"
 NO_HISTORY_TEXT = ("This simulation set was made outside the window: there is no run history to keep the acceptance "
                    "in.")
+NO_COMPARISON_TEXT = ("The trainings of this simulation set ran before the window kept their comparison with the audit, "
+                      "so there is none to accept the difference into.")
 KEPT_TRAINING_TEXT = "You chose to keep training on {}."
 #: The comparison's table: the simulation set and the audit, each its share, the driven recordings counted, the batches
 #: and the median and the range of the share across its batches.
@@ -755,12 +757,17 @@ def _per_batch(shares) -> tuple:
             RANGE_TEXT_POINTS.format(f"{min(shares):.1f}", f"{max(shares):.1f}"))
 
 
-def comparison_table(*, unusable: int, total: int, batches, audit: "Mapping | None") -> TableWords:
-    """The comparison's table: the simulation set's share, the driven recordings counted and its batches; and the
-    audit's, from its record's manifest (``audit``), with the median and the range of its share across its batches.
-    Never raises on what a record holds: what cannot be read is said as nothing."""
+def comparison_table(*, unusable: int, total: int, batches, audit: "Mapping | None",
+                     spread=(None, None, None)) -> TableWords:
+    """The comparison's table: the simulation set's share, the driven recordings counted and its batches, with the
+    median and the range of its share across its batches, ``spread`` (the median, the lowest and the highest, in per
+    cent, as its first total said them; nothing for what is not known); and the audit's, from its record's manifest
+    (``audit``), with the same of its share. Never raises on what a record holds: what cannot be read is said as
+    nothing."""
+    median, low, high = (_number(value) for value in spread)
     rows = [(SET_ROW, f"{_share(unusable / total)} %" if total else "", number_text(total),
-             number_text(batches) if _is_whole(batches) else "", "", "")]
+             number_text(batches) if _is_whole(batches) else "", "" if median is None else f"{median:.1f} %",
+             "" if low is None or high is None else RANGE_TEXT_POINTS.format(f"{low:.1f}", f"{high:.1f}"))]
     try:
         body = _body(audit)
         results, settings = body["results"], body["settings"]

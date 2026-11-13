@@ -234,11 +234,16 @@ class Message:
 class Masked:
     """The first total of unusable driven recordings a training or a narrowing round says, as the engine counts it:
     the ``unusable`` of the ``total`` driven recordings, over ``batches`` batches, of the ``scope`` it names (whole
-    as written, a semicolon of its own among it); a total that counted none, nought of nought over nought batches."""
+    as written, a semicolon of its own among it), and the share across its batches, the lowest, the highest and the
+    median, in per cent (None for a total that counted none); a total that counted none, nought of nought over nought
+    batches."""
     unusable: int
     total: int
     batches: int
     scope: str
+    low: float | None = None
+    high: float | None = None
+    median: float | None = None
 
 
 @dataclass(frozen=True)
@@ -820,7 +825,8 @@ class RunModel:
             self._chi_seen = True
             if name != "chi_batch" and self._masked is None and self.spec.word in TRAINING_WORDS:
                 # the first total alone: a later one (a calibration's, a resumed fit's) changes nothing
-                self._masked = (Masked(values["masked"], values["total"], values["batches"], values["scope"])
+                self._masked = (Masked(values["masked"], values["total"], values["batches"], values["scope"],
+                                       values["low"], values["high"], values["median"])
                                 if name == "chi_total" else Masked(0, 0, 0, values["scope"]))
                 compared = self.comparison()
                 if compared is not None and compared.message:

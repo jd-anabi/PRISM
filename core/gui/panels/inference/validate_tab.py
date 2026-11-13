@@ -503,7 +503,8 @@ class ValidatePanel(StepPage):
             # the live training's own comparison, from its run's model in memory: nothing is read
             masked = model.masked()
             made = (compared.sentence, compared.state, False,
-                    (masked.unusable, masked.total, masked.batches, None if audit is None else audit.manifest),
+                    (masked.unusable, masked.total, masked.batches, None if audit is None else audit.manifest,
+                     (masked.median, masked.low, masked.high)),
                     "live" if compared.state == "Look closer" else "",
                     check_readings.kept_training_words(model.answers().get("keep_training")))
         elif held is None or row.state not in ("Passed", "Look closer", "Failed", "Waiting for the audit"):
@@ -518,20 +519,24 @@ class ValidatePanel(StepPage):
                                                         prior_words=held.prior_words or "the prior in use")
             said = check_readings.accepted_words(compared, check_lineage.acceptance(held, found))
             answered = held.answered if isinstance(held.answered, dict) else {}
-            accepts = ("after" if held.set_in_history and answered.get("run") else "none") if (
-                compared.state == "Look closer") else ""
+            # accepted into the newest training of the set that keeps its comparison; greyed for a set no run of the
+            # history names, and for one whose trainings ran before the window kept comparisons
+            accepts = ("" if compared.state != "Look closer" else "after" if answered.get("run")
+                       else "older" if held.set_in_history else "none")
+            spread = tuple(answered.get(name) for name in ("batch_median", "batch_low", "batch_high"))
             made = (f"{sentence} {said}".rstrip(), row.state, held.narrowed,
-                    (unusable, total, batches, None if audit is None else audit.manifest), accepts,
+                    (unusable, total, batches, None if audit is None else audit.manifest, spread), accepts,
                     check_readings.kept_training_words(answered.get("kept_training")))
         if page.result_source == made:
             return page.result, made
         sentence, state, narrowed, counts, accepts, kept = made
         table = (check_readings.comparison_table(unusable=counts[0], total=counts[1], batches=counts[2],
-                                                 audit=counts[3]) if counts is not None and state == "Look closer"
-                 else None)
+                                                 audit=counts[3], spread=counts[4])
+                 if counts is not None and state == "Look closer" else None)
+        greyed = {"none": check_readings.NO_HISTORY_TEXT, "older": check_readings.NO_COMPARISON_TEXT}.get(accepts, "")
         return comparison_block(sentence, state, narrowed=narrowed, parent=page, table=table,
                                 accept=self._accept_difference if accepts in ("live", "after") else None,
-                                accept_greyed=accepts == "none", kept=kept), made
+                                accept_greyed=greyed, kept=kept), made
 
     def _accept_difference(self) -> None:
         """"Accept this difference": while the training is live, its run is answered so; after it, the history of the

@@ -1585,7 +1585,7 @@ def _comparison_entry(model, audit) -> dict | None:
     answers = model.answers()
     accepted = answers.get("accepted")
     return {"unusable": masked.unusable, "total": masked.total, "scope": masked.scope, "batches": masked.batches,
-            "audit": audit.get("id"), "audit_fraction": audit.get("fraction"), "difference": compared.difference,
+            "batch_median": masked.median, "batch_low": masked.low, "batch_high": masked.high, "audit": audit.get("id"), "audit_fraction": audit.get("fraction"), "difference": compared.difference,
             "state": compared.state,
             "accepted": None if accepted is None else {"at": accepted, "audit": audit.get("id"),
                                                         "difference": compared.difference},

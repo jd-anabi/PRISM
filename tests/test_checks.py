@@ -4398,10 +4398,11 @@ def _audit_ids(store) -> list:
     return [summary.id for summary in reversed(store.list("diagnostic"))]
 
 
-def _a_set_of(tmp_path, store, screen, *, masked=92, named=True, compared=None) -> Path:
+def _a_set_of(tmp_path, store, screen, *, masked=92, named=True, compared=None, comparison=True) -> Path:
     """The posterior in use trained on a simulation set whose batches each counted ``masked`` of 221 driven
     recordings unusable (92: 41.6 %, 3.7 points from the audit's 37.9 %), and, when ``named``, the history of the
-    training that made it, which keeps ``compared`` as its comparison with the audit."""
+    training that made it, which keeps ``compared`` as its comparison with the audit (none at all without
+    ``comparison``, as a history written before runs kept one)."""
     from core.gui.run import history
     from tests._fixtures import write_history, write_simulation_set
     folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100, complete=True,
@@ -4409,13 +4410,13 @@ def _a_set_of(tmp_path, store, screen, *, masked=92, named=True, compared=None) 
     screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, simulation=folder.name)
     if named:
         entry = {name: None for name in history.COMPARISON_FIELDS}
-        entry.update({"unusable": masked * 100, "total": 22_100, "scope": WHOLE, "batches": 100, "state": "Look closer",
-                      **(compared or {})})
+        entry.update({"unusable": masked * 100, "total": 22_100, "scope": WHOLE, "batches": 100, "batch_median": 41.0,
+                      "batch_low": 35.5, "batch_high": 47.2, "state": "Look closer", **(compared or {})})
         from core.gui.panels.inference.base import TRAINING_STAGES
         write_history(tmp_path / "runs", id=_TRAINED, word="Training", started=_at(2, 8, 10), ended=_at(3, 9),
                       outcome="finished", records_root=str(store.root), simulation_set={"folder": str(folder)},
                       stages=[[stage.name, list(stage.begins), stage.counts] for stage in TRAINING_STAGES],
-                      health={"failed": 0, "simulated": 22_100, "comparison": entry})
+                      health={"failed": 0, "simulated": 22_100, **({"comparison": entry} if comparison else {})})
     return folder
 
 
@@ -4436,7 +4437,8 @@ def test_an_acceptance_is_written_into_the_training_history_during_and_after_the
         page.open_check("comparison")
         one = page.check_pages["comparison"]
         assert _row(screen.check_rows(), "comparison").state == "Look closer"
-        assert one.result.table_words().rows[0][:4] == ("Simulation set", "41.6 %", "22,100", "100")
+        assert one.result.table_words().rows[0] == ("Simulation set", "41.6 %", "22,100", "100", "41.0 %",
+                                                    "35.5 to 47.2 %")
         assert one.result.table_words().rows[1][:2] == ("The audit", "37.9 %")
         button, = one.result.actions()
         assert (button.text(), button.isEnabled()) == ("Accept this difference", True)
@@ -4498,6 +4500,23 @@ def test_accept_is_greyed_for_a_set_with_no_history(tmp_path):
         assert not button.isEnabled() and NO_HISTORY_TEXT in _texts(one.result)
         assert NO_HISTORY_TEXT == ("This simulation set was made outside the window: there is no run history to keep "
                                    "the acceptance in.")
+        assert one.result.table_words().rows[0][4:] == ("", ""), "the set's figures by batch were made up"
+
+
+def test_accept_is_greyed_for_a_set_whose_trainings_kept_no_comparison(tmp_path):
+    """For a simulation set the run history names, whose trainings ran before the window kept their comparison with the
+    audit, "Accept this difference" is greyed with a sentence true of that set: there is no comparison to accept into.
+    Its table claims no figure by batch the history does not hold."""
+    from core.gui.check_readings import NO_COMPARISON_TEXT, NO_HISTORY_TEXT
+    with _checks_page(tmp_path, records=_an_audit) as (_window, screen, page, store):
+        _a_set_of(tmp_path, store, screen, comparison=False)
+        page.read_facts()
+        page.open_check("comparison")
+        one = page.check_pages["comparison"]
+        button, = one.result.actions()
+        said = _texts(one.result)
+        assert not button.isEnabled() and NO_COMPARISON_TEXT in said and NO_HISTORY_TEXT not in said, said
+        assert one.result.table_words().rows[0][4:] == ("", "")
 
 
 def test_the_answer_to_keep_training_is_shown_on_the_comparisons_page(tmp_path):

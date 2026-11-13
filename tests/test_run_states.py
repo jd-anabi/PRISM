@@ -6744,8 +6744,9 @@ def test_the_run_keeps_the_first_masked_record_with_its_scope():
     run = RunModel(_compared(), clock=clock)
     assert (run.masked(), run.comparison()) == (None, None)
     _feed(run, masked_line(1201, 3000, 3, scope_part(90)), masked_line(5, 3000, 3, SCOPE_WHOLE))
-    assert run.masked() == Masked(1201, 3000, 3, scope_part(90)), run.masked()
+    assert run.masked() == Masked(1201, 3000, 3, scope_part(90), 31.2, 48.9, 40.0), run.masked()
     assert ";" in run.masked().scope and run.comparison().state == "Not compared"
+    assert (run.masked().low, run.masked().high, run.masked().median) == (31.2, 48.9, 40.0), "the share by batch"
     round_ = RunModel(_compared("Narrowing round"), clock=clock)
     _feed(round_, masked_none(SCOPE_PROCESS), masked_line(1201, 3000, 3, SCOPE_WHOLE))
     assert round_.masked() == Masked(0, 0, 0, SCOPE_PROCESS)
@@ -6884,10 +6885,10 @@ def test_the_comparison_reads_the_audit_that_counted_when_the_run_started(tmp_pa
         stand_in = StandIn()
         start_run(build_run_host(), stand_in, spec=spec)
         assert stand_in.started.wait(5)
-        calls = readings_of_a_run(monkeypatch)
+        # an audit written while the run is live, before the readings of a run are counted from
         write_diagnostic(store, _nad_cfg(chi_mode=True), diagnostic="probes", variant="mask",
                          parents={"prior": prior.id}, **check_results("audit", masked_fraction=0.45))
-        calls.clear()                        # the record written meanwhile; from now on nothing is read
+        calls = readings_of_a_run(monkeypatch)
         stand_in.say(masked_line(401, 1000, 3, SCOPE_WHOLE))
         turn_until(app, lambda: held.model.comparison() is not None)
         assert held.model.comparison().state == "Passed" and calls == [], calls
@@ -6963,7 +6964,32 @@ def test_above_five_points_the_run_needs_you_until_one_answer_is_chosen(tmp_path
     assert entry["kept_training"] == _at(8, 12, 1).isoformat() and entry["accepted"] is None, entry
     assert (entry["state"], entry["audit"], entry["audit_fraction"], entry["unusable"], entry["total"]) == (
         "Failed", _AUDIT["id"], _AUDIT["fraction"], 450, 1000), entry
+    assert (entry["batch_median"], entry["batch_low"], entry["batch_high"]) == (40.0, 31.2, 48.9), entry
     assert tuple(entry) == history.COMPARISON_FIELDS
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live(), 10.0)
+
+
+def test_the_comparison_asks_for_no_one_while_its_run_stops(tmp_path):
+    """With the comparison beyond its last band unanswered, a stop asked lifts what the run asks of someone while it
+    stops: the status, which the rail's foot and Home read, says no "needs you", and the two answers under the health
+    table go."""
+    from dataclasses import replace
+    from core.gui.run import ends
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import SCOPE_WHOLE, Clock, StandIn, masked_line, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 0)))
+    host, stand_in = build_run_host(), StandIn(takes_stops=False)
+    start_run(host, stand_in, spec=replace(_compared(), stop_button="Stop training…"))
+    assert stand_in.started.wait(5)
+    stand_in.say(masked_line(450, 1000, 3, SCOPE_WHOLE))
+    turn_until(app, lambda: held.status.needs_you is not None)
+    assert "needs you" in ends.foot(held.status, held.now())[1]
+    held.request_stop()
+    turn_until(app, lambda: held.status.state == "stopping")
+    assert held.status.needs_you is None and "needs you" not in ends.foot(held.status, held.now())[1]
+    assert host.run_view.answers.isHidden()
     stand_in.release()
     turn_until(app, lambda: not held.is_live(), 10.0)
 

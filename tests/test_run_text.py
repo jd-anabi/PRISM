@@ -1393,7 +1393,8 @@ def _accept(record) -> None:
 
 def test_the_history_of_an_ended_run_is_amended_through_one_public_call(tmp_path):
     """The history of a run the controller no longer holds is amended through its one public call: the change made to
-    its record, the file written whole by replace and handed back; a file gone, one torn, one of another run and a
+    its record, the file written whole by replace, the record before with the one change and nothing else, and handed
+    back; a file gone, one torn, one of another run and a
     change that raises are each None, nothing written and nothing raised."""
     from core.gui.run import history
     from core.gui.run.controller import controller
@@ -1403,9 +1404,14 @@ def test_the_history_of_an_ended_run_is_amended_through_one_public_call(tmp_path
     folder = tmp_path / "runs"
     write_history(folder, id="20261003T080000-training", word="Training", started=_at(3, 8), outcome="finished",
                   health={"failed": 0, "simulated": 1000, "comparison": dict(_COMPARED)})
+    import copy
+    before = history.read(folder / "20261003T080000-training.json")
     made = held.amend("20261003T080000-training", _accept)
     on_disk = history.read(folder / "20261003T080000-training.json")
     assert made["health"]["comparison"]["accepted"] == _ACCEPTED == on_disk["health"]["comparison"]["accepted"]
+    wanted = copy.deepcopy(before)
+    _accept(wanted)
+    assert on_disk == wanted == made, "the amendment wrote more, or less, than its one change"
     assert list(folder.glob("*.tmp")) == []
     (folder / "20261004T080000-training.json").write_text('{"id": "20261004T08', encoding="utf-8")
     write_history(folder, id="20261005T080000-training", word="Training", started=_at(5, 8), outcome="finished")

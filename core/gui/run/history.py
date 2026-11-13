@@ -86,11 +86,12 @@ TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batch
 #: What ``check`` holds.
 CHECK_FIELDS = ("key", "sizes", "seconds", "stages", "result")
 #: What ``health["comparison"]`` holds: the first total of unusable driven recordings (its counts, its scope, its
-#: batches), the audit it was compared with (its id and its share), the difference and the state the comparison read,
-#: and the two answers to it, each None until given: the acceptance of the difference (when, of which audit, the
-#: difference accepted) and when the person chose to keep training.
-COMPARISON_FIELDS = ("unusable", "total", "scope", "batches", "audit", "audit_fraction", "difference", "state",
-                     "accepted", "kept_training")
+#: batches, and the median, the lowest and the highest share of a batch, in per cent), the audit it was compared with
+#: (its id and its share), the difference and the state the comparison read, and the two answers to it, each None until
+#: given: the acceptance of the difference (when, of which audit, the difference accepted) and when the person chose to
+#: keep training. A file written before one of them was kept holds none of it, which is no information.
+COMPARISON_FIELDS = ("unusable", "total", "scope", "batches", "batch_median", "batch_low", "batch_high", "audit",
+                     "audit_fraction", "difference", "state", "accepted", "kept_training")
 #: How many times in all, and how many seconds apart, a rename refused while another program holds the file open is
 #: tried before the refusal is raised.
 REPLACE_TRIES = 5
