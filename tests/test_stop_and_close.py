@@ -1728,3 +1728,32 @@ def test_a_figure_handed_over_after_the_window_is_gone_cannot_remove_a_finished_
     finally:
         visualizers.save_figure = real
     assert plt.fignum_exists(fig.number) is False and len(store.list("calibration")) == 3
+
+
+def test_stop_training_from_the_comparison_asks_the_usual_question(tmp_path):
+    """The stop under the health table, beside "Keep training" while the comparison with the audit is beyond its last
+    band, is the run's own: it asks the question the stop button asks, in its words, once; left unanswered, nothing is
+    stopped and the run still asks for an answer."""
+    from tests._runs import SCOPE_WHOLE, masked_line
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host, stand_in = _controller_on(tmp_path, clock), build_run_host(), StandIn()
+    text = RunText(held)
+    spec = _training(facts={"model": "NADROWSKI", "observation": "chi", "narrowed": False, "network": (256, 10),
+                            "cadence": 50, "audit": {"id": "20261002T081500", "fraction": 0.379, "batches": 100}})
+    start_run(host, stand_in, spec=spec)
+    _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+    _say(app, stand_in, text, masked_line(450, 1000, 3, SCOPE_WHOLE))
+    turn_until(app, lambda: held.status.needs_you is not None)
+    view = host.run_view
+    forget_asked()
+    view.stop_button.click()
+    usual = asked()
+    forget_asked()
+    view.comparison_stop_button.click()
+    question = asked()
+    assert (question.title, question.sentence, question.answers) == (usual.title, usual.sentence, usual.answers)
+    assert len(all_asked()) == 1 and held.is_live() and not held.status.stop_requested
+    assert held.status.needs_you == "The comparison with the audit needs an answer."
+    stand_in.release()
+    _ended(app, held)

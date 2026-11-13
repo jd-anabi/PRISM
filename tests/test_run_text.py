@@ -1378,3 +1378,118 @@ def test_the_estimate_before_the_first_epoch_reads_the_timing_check(tmp_path):
     write_history(folder, id="20261006T120000-training", word="Training", started=_at(6), outcome="finished",
                   fit={"network": [256, 10], "simulations": 20_480_000, "seconds_per_epoch": 3780.0})
     assert history.estimate(folder, word="Training", per="epoch", size=size)[0] == 3780.0
+
+
+#: A training's comparison with the audit as its history keeps it, and the acceptance an amendment writes into it.
+_COMPARED = {"unusable": 417, "total": 1000, "scope": "every committed batch of the simulation cache", "batches": 3,
+             "audit": "20261002T081500", "audit_fraction": 0.379, "difference": 3.8, "state": "Look closer",
+             "accepted": None, "kept_training": None}
+_ACCEPTED = {"at": "2026-10-03T09:14:00-07:00", "audit": "20261002T081500", "difference": 3.8}
+
+
+def _accept(record) -> None:
+    record["health"]["comparison"]["accepted"] = dict(_ACCEPTED)
+
+
+def test_the_history_of_an_ended_run_is_amended_through_one_public_call(tmp_path):
+    """The history of a run the controller no longer holds is amended through its one public call: the change made to
+    its record, the file written whole by replace and handed back; a file gone, one torn, one of another run and a
+    change that raises are each None, nothing written and nothing raised."""
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from tests._fixtures import write_history
+    from tests._runs import Clock, at, controller_on
+    held = controller_on(tmp_path, Clock(at(8, 12, 0)))
+    folder = tmp_path / "runs"
+    write_history(folder, id="20261003T080000-training", word="Training", started=_at(3, 8), outcome="finished",
+                  health={"failed": 0, "simulated": 1000, "comparison": dict(_COMPARED)})
+    made = held.amend("20261003T080000-training", _accept)
+    on_disk = history.read(folder / "20261003T080000-training.json")
+    assert made["health"]["comparison"]["accepted"] == _ACCEPTED == on_disk["health"]["comparison"]["accepted"]
+    assert list(folder.glob("*.tmp")) == []
+    (folder / "20261004T080000-training.json").write_text('{"id": "20261004T08', encoding="utf-8")
+    write_history(folder, id="20261005T080000-training", word="Training", started=_at(5, 8), outcome="finished")
+    (folder / "20261005T080000-training.json").rename(folder / "20261006T080000-training.json")
+
+    def broken(_record):
+        raise KeyError("health")
+    for run, change in (("20261009T080000-training", _accept), ("20261004T080000-training", _accept),
+                        ("20261006T080000-training", _accept), ("20261003T080000-training", broken)):
+        assert held.amend(run, change) is None, run
+    assert history.read(folder / "20261003T080000-training.json") == on_disk
+    assert controller() is held
+
+
+def test_an_amendment_of_a_run_the_controller_holds_stands_when_its_end_is_seen(tmp_path):
+    """An acceptance written into the history of the ended run the controller still holds stands through every later
+    write of that run's end: its end seen, then the training its stop kept discarded. A run still live is answered on
+    its page, never amended."""
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import SCOPE_WHOLE, Clock, StandIn, at, controller_on, masked_line, note, start_run
+    from tests._runs import training_spec, turn_until
+    app = qt_app()
+    held = controller_on(tmp_path, Clock(at(8, 12, 0)))
+    spec = training_spec(facts={"model": "NADROWSKI", "observation": "chi", "narrowed": False, "network": (256, 10),
+                                "cadence": 50, "audit": {"id": "20261002T081500", "fraction": 0.379, "batches": 100}})
+    stand_in = StandIn()
+    stand_in.kept_fit = note("20261008T120500")
+    start_run(build_run_host(), stand_in, spec=spec)
+    assert stand_in.started.wait(5)
+    run = held.status.run
+    stand_in.say(masked_line(417, 1000, 3, SCOPE_WHOLE))
+    turn_until(app, lambda: held.model.comparison() is not None)
+    assert held.amend(run, _accept) is None, "a run still live was amended"
+    held.request_stop()
+    turn_until(app, lambda: not held.is_live(), 10.0)
+    assert held.amend(run, _accept)["health"]["comparison"]["accepted"] == _ACCEPTED
+    held.acknowledge(run)
+    held.discard(run)
+    record = history.read(tmp_path / "runs" / f"{run}.json")
+    assert record["acknowledged"] is True and record["fit"]["discarded"] is True, record
+    assert record["health"]["comparison"]["accepted"] == _ACCEPTED
+    assert record["health"]["comparison"]["state"] == "Look closer"
+
+
+def test_a_sets_runs_are_found_by_its_id_whatever_its_folders_spelling(tmp_path):
+    """The runs of a simulation set are found by the set's id, oldest first, however the folder was spelled: its
+    slashes either way, a slash at its end, another drive and its letter in another case; a run of another set, or of
+    none, is not among them."""
+    from core.gui.run import history
+    from tests._fixtures import write_history
+    folder = tmp_path / "runs"
+    for day, held in ((3, r"C:\Users\J\PRISM\Artifacts\simulations\eda5c2a1e468"),
+                      (4, "c:/Users/J/PRISM/Artifacts/simulations/eda5c2a1e468/"),
+                      (5, r"D:\elsewhere\eda5c2a1e468"), (6, r"C:\Users\J\PRISM\Artifacts\simulations\3f9a2c1d7b04"),
+                      (7, None)):
+        write_history(folder, id=f"2026100{day}T080000-training", word="Training", started=_at(day, 8),
+                      outcome="finished", simulation_set=None if held is None else {"folder": held})
+    assert [one["id"] for one in history.runs_for_set_id(folder, "eda5c2a1e468")] == [
+        "20261003T080000-training", "20261004T080000-training", "20261005T080000-training"]
+    assert history.runs_for_set_id(folder, "000000000000") == [] and history.runs_for_set_id(folder, "") == []
+    assert [one["id"] for one in history.runs_for(folder, r"C:\Users\J\PRISM\Artifacts\simulations\eda5c2a1e468")] \
+        == ["20261003T080000-training"], "the whole path's match changed"
+
+
+def test_a_second_training_on_one_set_still_hears_the_first(tmp_path):
+    """A second training on one simulation set hears the failed simulations the first counted, through the set's runs
+    as the set's folder names them: its health counts them over both runs."""
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, at, controller_on, start_run, training_spec, turn_until, writing
+    app = qt_app()
+    held = controller_on(tmp_path, Clock(at(8, 12, 0)))
+    folder = r"C:\Users\J\PRISM\Artifacts\simulations\eda5c2a1e468"
+    total = ("[patho] run total: 2,000 pathological of 100,000 simulated trajectories (2.0000%) -- 2,000 non-finite, 0 "
+             "exactly constant, 0 over 1e+15")
+    for lines in ((writing(folder), total), (writing(folder),)):
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=training_spec())
+        assert stand_in.started.wait(5)
+        for line in lines:
+            stand_in.say(line)
+        turn_until(app, lambda: held.model.simulation_folder() == folder and len(held.model.health()) > 0)
+        turn_until(app, lambda: lines[-1] != total or held.model.failed() is not None)
+        heard = held.model.health()[0]
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live(), 10.0)
+    assert heard.now == "2.0 % over 2 runs", heard

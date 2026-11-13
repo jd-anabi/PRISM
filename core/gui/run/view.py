@@ -69,6 +69,8 @@ HEALTH_TEXT = "Training health"
 MESSAGES_TEXT = "Messages"
 #: The stop button's words for a run whose page names none.
 STOP_TEXT = "Stop"
+#: The answer to a comparison with the audit beyond its last band that keeps the fit going.
+KEEP_TRAINING_TEXT = "Keep training"
 #: The lines of the full text in sight at once, at the ordinary text size.
 FULL_TEXT_LINES = 16
 #: The lines of a failure's full error in sight at once, at the ordinary text size.
@@ -798,6 +800,20 @@ class RunView(QWidget):
         self._health_head_gap, self._health_gap = QWidget(), QWidget()
         self._health_head_gap.setFixedHeight(design.scaled(design.GAP["head_table"]))
         self._health_gap.setFixedHeight(design.scaled(design.GAP["block"]))
+        # under the health table, while the comparison with the audit is beyond its last band and unanswered: the run's
+        # own stop, which asks its usual question, and the answer that keeps the fit; the window never stops it itself
+        self.answers = QWidget()
+        answers = QHBoxLayout(self.answers)
+        answers.setContentsMargins(0, design.scaled(design.GAP["head_table"]), 0, 0)
+        answers.setSpacing(design.scaled(design.GAP["action"]))
+        self.comparison_stop_button = QPushButton(STOP_TEXT)
+        self.comparison_stop_button.clicked.connect(self._stop)
+        self.keep_training_button = QPushButton(KEEP_TRAINING_TEXT)
+        self.keep_training_button.clicked.connect(self._keep_training)
+        answers.addWidget(self.comparison_stop_button)
+        answers.addWidget(self.keep_training_button)
+        answers.addStretch(1)
+        self.answers.setVisible(False)
         self.loss = LossCurve()
         self._loss_gap = QWidget()                  # the gap after the curve, which comes and goes with it
         self._loss_gap.setFixedHeight(design.scaled(design.GAP["block"]))
@@ -812,8 +828,8 @@ class RunView(QWidget):
         self._figures = QVBoxLayout(self.figures)
         self._figures.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         self.figures.setMinimumHeight(design.scaled(FIGURES_LEAST_H))
-        for part in (self.end, self._end_gap, self.health_head, self._health_head_gap, self.health, self._health_gap,
-                     self.loss, self._loss_gap, self.messages_head, self._messages_gap, self.messages, self.figures):
+        for part in (self.end, self._end_gap, self.health_head, self._health_head_gap, self.health, self.answers,
+                     self._health_gap, self.loss, self._loss_gap, self.messages_head, self._messages_gap, self.messages, self.figures):
             column.addWidget(part)
         self.body = Scroller(body)
 
@@ -902,6 +918,7 @@ class RunView(QWidget):
         self.folder_button.setEnabled(self._folder is not None)
         self.title.setText(f"{spec.word} {spec.name}".strip())
         self.stop_button.setText(spec.stop_button or STOP_TEXT)
+        self.comparison_stop_button.setText(spec.stop_button or STOP_TEXT)
         self.full_text.clear_lines()
         self.find_field.clear()
         self.find_field.setVisible(False)
@@ -953,7 +970,7 @@ class RunView(QWidget):
         return [self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button, self.stop_trying_button,
                 self.back_button, self.keep_button, self.discard_button, self.command_line, self.failure_message,
                 self.full_error_button, self.full_error, self.continue_button, self.resume_button,
-                self.discard_kept_button, self.body]
+                self.discard_kept_button, self.comparison_stop_button, self.keep_training_button, self.body]
 
     def say(self, text: str) -> None:
         """Say ``text`` on the page, under its sentence, in place of what it said before ("" says nothing)."""
@@ -1022,12 +1039,23 @@ class RunView(QWidget):
             if (isinstance(stage, list) and len(stage) == 3 and isinstance(stage[0], str)
                     and isinstance(stage[1], list) and (stage[2] is None or isinstance(stage[2], str))):
                 stages.append(Stage(stage[0], tuple(str(begins) for begins in stage[1]), stage[2]))
+        health = record.get("health") if isinstance(record.get("health"), dict) else {}
+        compared = health.get("comparison") if isinstance(health.get("comparison"), dict) else {}
+        kept_set = isinstance(record.get("simulation_set"), dict)
+        # the comparison with the audit as the run made it: the audit it was handed, and the answers its history keeps
+        facts = {"audit": {"id": compared.get("audit"), "fraction": compared.get("audit_fraction")},
+                 "cadence": 1 if kept_set else 0} if compared else {}
         spec = RunSpec(str(record.get("word") or ""), tuple(place) if isinstance(place, list) and len(place) == 2
-                       else None, name=str(record.get("name") or ""), stages=tuple(stages))
+                       else None, name=str(record.get("name") or ""), stages=tuple(stages), simulation_set=kept_set,
+                       facts=facts)
         entries = [] if text is None else _entries(text)
         written = [entries[0][0] if entries else _local_now()]           # the moment of the line read now
         self.begin(spec, text=text, folder=None if text is None else Path(text).parent, clock=clock)
         model = RunModel(spec, clock=lambda: written[0])
+        accepted = compared.get("accepted") if isinstance(compared.get("accepted"), dict) else {}
+        for answer, moment in (("accepted", accepted.get("at")), ("keep_training", compared.get("kept_training"))):
+            if moment:
+                model.answer(answer, moment)
         for moment, level, said in entries:
             written[0] = moment
             model.feed([(said, level)])
@@ -1154,6 +1182,8 @@ class RunView(QWidget):
         withdraws = (live and not retrying and self._stopping and self._model is not None
                      and self._model.spec.stop_asks)
         keeps = self._keeps()
+        asks = (live and full and bool(self._shown_health) and self._model is not None
+                and self._model.comparison_asks())
         closing, notice = self._closing and live, bool(self.notice.text())
         keeps_open = closing and not self._stopping          # a close that waits for a save, no stop asked
         self.closing_line.setText(questions.CLOSING_SAVED_TEXT if keeps_open else questions.CLOSING_TEXT)
@@ -1189,7 +1219,8 @@ class RunView(QWidget):
         going = ((self.stop_button, stops), (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
                  (self.keep_button, keeps), (self.discard_button, keeps), (self.stop_trying_button, retrying),
                  (self.continue_button, continues), (self.resume_button, resumes),
-                 (self.discard_kept_button, past == "resume"))
+                 (self.discard_kept_button, past == "resume"), (self.comparison_stop_button, asks),
+                 (self.keep_training_button, asks))
         if any(focus is widget and not stays for widget, stays in going):
             self._hand_on(stops, withdraws, keeps, retrying)
         for widget, on in shown:
@@ -1205,6 +1236,7 @@ class RunView(QWidget):
         health = bool(self._shown_health) and full
         for part in (self.health_head, self._health_head_gap, self.health, self._health_gap):
             part.setVisible(health)
+        self.answers.setVisible(asks)
         self.loss.setVisible(full and self._fit_shown)
         self._loss_gap.setVisible(full and self._fit_shown)
         messages = bool(self._message_rows) and full
@@ -1301,6 +1333,11 @@ class RunView(QWidget):
                                             beneath=question.beneath or None):
             return
         held.request_stop()
+
+    def _keep_training(self) -> None:
+        """"Keep training": the fit goes on, and the comparison beyond its last band is answered so."""
+        from .controller import controller
+        controller().answer_comparison("keep_training")
 
     def _withdraw(self) -> None:
         """"Don't stop after all": the stop asked for is withdrawn, and the close that waits for it."""

@@ -56,6 +56,7 @@ at every change the model hears and at each look; the run's full text reaches it
 loads a record is handed no page: it never takes the page's place, nor the page of a run that shows there. Nothing
 here draws: a figure a run hands over goes to its page's stack of pictures as the picture it already is.
 """
+import copy
 import json
 import logging
 import math
@@ -875,19 +876,49 @@ class RunController(QObject):
     def _rewrite(folder: Path, run: str, change) -> dict | None:
         """The history of an ended run that the controller no longer holds -- one set aside, or of an earlier launch
         -- read back from its file in ``folder`` and written again with ``change`` made to it alone, as
-        ``_write_ended`` makes it. The record now in the file is handed back; None when the file cannot be read
-        back as the run's, and then nothing is written. A file that cannot be written is left as it is."""
-        record = history.read(folder / f"{run}.json")
-        if record is None or record.get("id") != run:
-            return None
-        changed = change(record) if callable(change) else {**record, **change}
-        if changed == record:
-            return record
-        try:
-            history.write(folder, changed)
-        except Exception:                        # noqa: BLE001 -- an older run's file that cannot be written stays
-            return record
-        return changed
+        ``_write_ended`` makes it, through the history's own amendment (``history.amend``). The record now in the file
+        is handed back; None when the file cannot be read back as the run's, and then nothing is written. A file that
+        cannot be written is left as it is."""
+        def made(record: dict) -> None:
+            new = change(record) if callable(change) else {**record, **change}
+            record.clear()
+            record.update(new)
+        return history.amend(folder, run, made)
+
+    def amend(self, run: str, change) -> dict | None:
+        """The one way to change the history of a run that has ended (an acceptance of a difference, the answer "Keep
+        training"): ``change``, handed the run's record, changes it in place. For the run the controller still holds,
+        once its end is written, the change is made to the history it holds and written as its end's writes are, so
+        that a later write of that run's end (its end seen, its kept training discarded) keeps it; for any other run,
+        to its file in the folder of runs (``history.amend``). The history now held is handed back; None for a run
+        still live, which is answered on its run's page, and for a file that is gone or cannot be read. Never
+        raises."""
+        held = self._run
+        if held is not None and held.id == run:
+            if held.record is None:
+                return None
+            def made(record: dict) -> dict:
+                new = copy.deepcopy(record)
+                try:
+                    change(new)
+                except Exception:                # noqa: BLE001 -- an amendment never stops what asked for it
+                    return record
+                return new
+            return self._write_ended(held, made)
+        return history.amend(self.folder(), run, change)
+
+    def answer_comparison(self, answer: str) -> None:
+        """An answer to the live run's comparison of its unusable driven recordings with the audit: "keep_training",
+        from its run's page, beyond the last band; "accepted", from the comparison's page in Checks, in the band to look
+        closer at. Held on the run, with its moment, it lifts what the run asked of someone, and the run's history
+        keeps it. Nothing for no run live, or for a run with no comparison yet."""
+        run, model = self._run, self._model
+        if run is None or model is None or not self.is_live() or model.comparison() is None:
+            return
+        model.answer(answer, (self._clock or _local_now)())
+        self._write(run)
+        self._refresh()
+        self._draw()
 
     def recall(self, records_root: str) -> None:
         """As a window is opened with no run live and no end waiting to be seen: the newest run of the records folder
@@ -1484,7 +1515,8 @@ class RunController(QObject):
                        "reopen": run.reopen}
         peak, split = model.memory_peak(), model.batches_split()
         lacked = run.outcome == "failed" and run.failure_kind == "out of memory"     # a try's lack is not the run's end
-        known = failed is not None or peak is not None or split or lacked
+        compared = _comparison_entry(model, spec.facts.get("audit"))
+        known = failed is not None or peak is not None or split or lacked or compared is not None
         failed = failed or (None, None)
         done = model.batches_done()
         tries = list(run.attempts)               # each try that failed and was tried again
@@ -1515,7 +1547,8 @@ class RunController(QObject):
                     "folder": folder, "batches": budget.get("batches"), "at_start": run.at_start, "at_end": done,
                     "per_batch": budget.get("rows"), "seconds_per_batch": model.seconds_per_batch()},
                 "health": None if not known else {"failed": failed[0], "simulated": failed[1], "memory_peak": peak,
-                                                  "batches_split": split, "out_of_memory": lacked},
+                                                  "batches_split": split, "out_of_memory": lacked,
+                                                  "comparison": compared},
                 "fit": fit, "check": _check_entry(spec.check, model, run.ended, run.check_result),
                 "result": None if run.result is None else dict(zip(("kind", "id", "name"), run.result),
                                                                asked=run.asked),
@@ -1538,6 +1571,25 @@ def _check_entry(check, model, ended, result=None) -> dict | None:
     return {"key": check.get("key"), "sizes": check.get("sizes"),
             "seconds": None if ended is None else (ended - model.started).total_seconds(),
             "stages": stages, "result": dict(result) if isinstance(result, dict) else {}}
+
+
+def _comparison_entry(model, audit) -> dict | None:
+    """A training's comparison of its first total of unusable driven recordings with the audit it was handed, as
+    its history keeps it, of history.COMPARISON_FIELDS, names and numbers: the total, the audit, the difference and
+    the state, and the two answers, each None until given (an acceptance with its moment, its audit and the difference
+    accepted; the moment the person chose to keep training). None before the total, and for any other run."""
+    masked, compared = model.masked(), model.comparison()
+    if masked is None or compared is None:
+        return None
+    audit = audit if isinstance(audit, dict) else {}
+    answers = model.answers()
+    accepted = answers.get("accepted")
+    return {"unusable": masked.unusable, "total": masked.total, "scope": masked.scope, "batches": masked.batches,
+            "audit": audit.get("id"), "audit_fraction": audit.get("fraction"), "difference": compared.difference,
+            "state": compared.state,
+            "accepted": None if accepted is None else {"at": accepted, "audit": audit.get("id"),
+                                                        "difference": compared.difference},
+            "kept_training": answers.get("keep_training")}
 
 
 def _discarded(record: dict) -> dict:

@@ -2681,7 +2681,8 @@ def test_the_health_of_a_run_is_written_whole(tmp_path):
     """A run's history holds its whole health once any part of it is known: the failed and the simulated counts, the
     largest memory peak its lines said (not the last, not what was reserved, not the card's size), the batches split,
     each once however often it was halved and by either way of halving (the line of a batch that failed after both
-    splits is no split), and whether it ended for lack of memory. A run that said none of it holds none; a run that said
+    splits is no split), whether it ended for lack of memory, and the comparison with the audit (None for a run that
+    said no total of unusable driven recordings). A run that said none of it holds none; a run that said
     some of it holds that, the rest None, nought or False. A run that ran out of memory and was tried again did not end
     for lack of memory unless it ended so: finishing, stopped or failing otherwise afterwards, it holds no such end;
     ended by "Stop trying", it does; and its file says no such thing during the pause. What its tries met stays: a try's
@@ -2695,7 +2696,8 @@ def test_the_health_of_a_run_is_written_whole(tmp_path):
     text = RunText(held)
     other_rows = _LINES["oom_split_rows"].replace("6151", "6152")
     other_simulation = _LINES["oom_split_simulation"].replace("6151", "6153")
-    nothing = {"failed": None, "simulated": None, "memory_peak": None, "batches_split": 0, "out_of_memory": False}
+    nothing = {"failed": None, "simulated": None, "memory_peak": None, "batches_split": 0, "out_of_memory": False,
+               "comparison": None}
 
     def health(*lines, ending=None):
         stand_in = StandIn()
@@ -2714,7 +2716,8 @@ def test_the_health_of_a_run_is_written_whole(tmp_path):
     assert health(_memory_line(3.25), _memory_line(5.4), _memory_line(4.75), _LINES["oom_split_simulation"],
                   _LINES["oom_split_rows"], _LINES["batch_failed"], other_rows, other_simulation, _LINES["patho_total"],
                   ending=lack) == {
-        "failed": 30_720, "simulated": 20_480_000, "memory_peak": 5.4, "batches_split": 3, "out_of_memory": True}
+        "failed": 30_720, "simulated": 20_480_000, "memory_peak": 5.4, "batches_split": 3, "out_of_memory": True,
+        "comparison": None}
     assert health() is None
     assert health(ending=ValueError("a failure of another kind")) is None
     assert health(_memory_line(5.4), ending=ValueError("a failure of another kind")) == {
@@ -6917,3 +6920,49 @@ def test_the_window_never_stops_a_fit_on_the_comparison(band, tmp_path, monkeypa
     stand_in.release()
     turn_until(app, lambda: not held.is_live(), 10.0)
     assert held.status.outcome == "finished"
+
+
+def test_above_five_points_the_run_needs_you_until_one_answer_is_chosen(tmp_path, windows_asked):
+    """Beyond 5 points the run needs someone until one answer is chosen: under the health table its own stop, in its
+    stop button's words, and "Keep training"; its status says why, the taskbar is flashed once, and "Keep training"
+    lifts it, hides the two and is kept in its history with its moment. Within the other bands neither shows."""
+    from dataclasses import replace
+    from core.gui.run import history
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import SCOPE_WHOLE, Clock, StandIn, masked_line, start_run, turn_until
+    app = qt_app()
+    clock = Clock(_at(8, 12, 0))
+    held = _controller_on(tmp_path, clock)
+    host, stand_in = build_run_host(), StandIn()
+    start_run(host, stand_in, spec=_compared())
+    assert stand_in.started.wait(5)
+    view = host.run_view
+    stand_in.say(masked_line(401, 1000, 3, SCOPE_WHOLE))
+    turn_until(app, lambda: held.model.comparison() is not None)
+    assert held.status.needs_you is None and view.answers.isHidden()
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live(), 10.0)
+    windows_asked.clear()
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=replace(_compared(), stop_button="Stop training…"))
+    assert stand_in.started.wait(5)
+    run = held.status.run
+    stand_in.say(masked_line(450, 1000, 3, SCOPE_WHOLE))
+    turn_until(app, lambda: held.status.needs_you is not None)
+    assert held.status.needs_you == "The comparison with the audit needs an answer."
+    assert not view.answers.isHidden() and [view.comparison_stop_button.text(), view.keep_training_button.text()] == [
+        "Stop training…", "Keep training"]
+    for _ in range(5):
+        app.processEvents()
+    assert [name for name, _args, _thread in windows_asked].count("flash") == 1, windows_asked
+    clock.advance(60)
+    view.keep_training_button.click()
+    turn_until(app, lambda: held.status.needs_you is None)
+    assert view.answers.isHidden() and held.is_live(), "the answer stopped the fit"
+    entry = history.read(tmp_path / "runs" / f"{run}.json")["health"]["comparison"]
+    assert entry["kept_training"] == _at(8, 12, 1).isoformat() and entry["accepted"] is None, entry
+    assert (entry["state"], entry["audit"], entry["audit_fraction"], entry["unusable"], entry["total"]) == (
+        "Failed", _AUDIT["id"], _AUDIT["fraction"], 450, 1000), entry
+    assert tuple(entry) == history.COMPARISON_FIELDS
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live(), 10.0)

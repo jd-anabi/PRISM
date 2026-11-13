@@ -32,8 +32,10 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
 - ``health``, ``fit``, ``check``, ``result``, ``failure``, ``text``: what the run's page measured, the fit, a
   check's own result, the record the run wrote (its kind, its id, its name and the name it was asked to have, which
   differ when another record took the name while the run was going), how it failed, and its text file's name.
-  ``health`` is ``{"failed", "simulated", "memory_peak", "batches_split", "out_of_memory"}`` once any of it is known,
-  else None; a file written before these were kept holds the first two alone. ``check``, of ``CHECK_FIELDS``, is a
+  ``health`` is ``{"failed", "simulated", "memory_peak", "batches_split", "out_of_memory", "comparison"}`` once any of
+  it is known, else None; a file written before these were kept holds the first two alone. ``comparison``, of
+  ``COMPARISON_FIELDS``, is a training's or a narrowing round's first total of unusable driven recordings against the
+  audit it was handed, with the answers given to it; None for any other run, and before the total. ``check``, of ``CHECK_FIELDS``, is a
   check's run's: which check (its key) and at what sizes, as its page handed them, how long it took in seconds (None
   while it runs), the seconds of each stage it began, by the stage's name, and the check's own result, names and
   numbers only; None for a run that is no check's, and in every file written before checks kept it. A name a reader
@@ -55,9 +57,11 @@ says which file, once.
 No torch: what a simulation set holds is read by the window's reading of what a reopened window can offer, never
 here.
 """
+import copy
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -81,6 +85,12 @@ TRY_FIELDS = ("started", "ended", "outcome", "failure", "batches_before", "batch
               "epochs_after")
 #: What ``check`` holds.
 CHECK_FIELDS = ("key", "sizes", "seconds", "stages", "result")
+#: What ``health["comparison"]`` holds: the first total of unusable driven recordings (its counts, its scope, its
+#: batches), the audit it was compared with (its id and its share), the difference and the state the comparison read,
+#: and the two answers to it, each None until given: the acceptance of the difference (when, of which audit, the
+#: difference accepted) and when the person chose to keep training.
+COMPARISON_FIELDS = ("unusable", "total", "scope", "batches", "audit", "audit_fraction", "difference", "state",
+                     "accepted", "kept_training")
 #: How many times in all, and how many seconds apart, a rename refused while another program holds the file open is
 #: tried before the refusal is raised.
 REPLACE_TRIES = 5
@@ -98,6 +108,8 @@ PASSED_OVER_TEXT = "The file %s is no run's history the window can read (%s); it
 
 #: The pause between two tries of a refused rename.
 _pause = time.sleep
+#: What separates the folders of a path, written either way.
+_SLASHES = re.compile(r"[\\/]")
 #: The files already said to be passed over, each by its path, its size and when it was last written: a file written
 #: again is said again.
 _said: set = set()
@@ -389,6 +401,39 @@ def runs_for(folder: Path, simulation_set: str) -> list[dict]:
             if (record.get("simulation_set") or {}).get("folder") == simulation_set]
 
 
+def runs_for_set_id(folder: Path, set_id: str) -> list[dict]:
+    """The runs that wrote to the simulation set whose id is ``set_id``, oldest first: those whose set's folder ends in
+    a folder of that name, however its path was spelled (its slashes either way, its drive in either case)."""
+    found = []
+    for record in _records(folder):
+        held = (record.get("simulation_set") or {}).get("folder")
+        if isinstance(held, str) and set_id and _SLASHES.split(held.rstrip("\\/"))[-1] == set_id:
+            found.append(record)
+    return found
+
+
+def amend(folder: Path, run: str, change) -> dict | None:
+    """The history file of the run ``run`` in ``folder``, read back, ``change`` made to a copy of its record (a function
+    handed the record, which it changes in place), and written whole by replace, as ``write`` writes: the record now in
+    the file is handed back, the one read when the write fails or changes nothing. None, and nothing written, for a file
+    that is gone, cannot be read, or holds another run, and for a change that raises. Never raises."""
+    try:
+        record = read(Path(folder) / f"{run}.json")
+        if record is None or record.get("id") != run:
+            return None
+        changed = copy.deepcopy(record)
+        change(changed)
+    except Exception:                            # noqa: BLE001 -- an amendment never stops what asked for it
+        return None
+    if changed == record:
+        return record
+    try:
+        write(folder, changed)
+    except Exception:                            # noqa: BLE001 -- a file that cannot be written stays as it was
+        return record
+    return changed
+
+
 def close_unseen(folder: Path) -> tuple[str, ...]:
     """Rewrite each history file in ``folder`` that still says "running" as a run not seen to end, heard last when
     its file was last written, and return their ids. Only one PRISM runs at a time, so such a file is a run that
@@ -440,8 +485,10 @@ def _check(record: dict) -> None:
     """Refuse, before anything is written, a record with no id or with a name the history does not keep."""
     if not record.get("id"):
         raise ValueError("a run's history file needs the run's id")
+    health = record.get("health")
     parts = [("the record", FIELDS, record), ("simulation_set", SET_FIELDS, record.get("simulation_set")),
-             ("fit", FIT_FIELDS, record.get("fit")), ("check", CHECK_FIELDS, record.get("check"))]
+             ("fit", FIT_FIELDS, record.get("fit")), ("check", CHECK_FIELDS, record.get("check")),
+             ("the comparison", COMPARISON_FIELDS, health.get("comparison") if isinstance(health, dict) else None)]
     parts += [("a try", TRY_FIELDS, one) for one in record.get("tries") or ()]
     for what, kept, held in parts:
         unknown = sorted(set(held) - set(kept)) if isinstance(held, dict) else []
