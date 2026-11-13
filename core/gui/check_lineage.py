@@ -373,6 +373,19 @@ def audit_fraction(found: Sequence[CheckRow]):
     return results.get("masked_fraction") if isinstance(results, Mapping) else None
 
 
+def counted_audit(found: Sequence[CheckRow]) -> "dict | None":
+    """The audit that decides the audit's row among ``found``, as a run is handed it to compare its simulation set
+    with, names and numbers: its record's id, the share it read and the batches it was made at; None when no audit
+    decides it."""
+    audit = next((row for row in found if row.key == "audit"), None)
+    fraction = audit_fraction(found)
+    if audit is None or fraction is None:
+        return None
+    batches = _settings(audit.record).get("num_runs")
+    return {"id": _ident(audit.record), "fraction": fraction,
+            "batches": batches if isinstance(batches, int) and not isinstance(batches, bool) else None}
+
+
 def comparison_of(held: Held, found: Sequence[CheckRow]) -> "check_readings.Comparison | None":
     """The comparison of the posterior's simulation set with the audit, from the set's counts the reading found and the
     audit that decides among ``found``, the rows made before it; None with no posterior in use or no counts."""

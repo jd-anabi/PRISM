@@ -7,7 +7,7 @@ from core import config, orchestrator
 from core.artifacts import default_store
 from core.refusals import Refusal, require_at_least, require_between
 
-from ... import icons, settings
+from ... import check_lineage, icons, record_words, settings
 from ...fields import label
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
@@ -168,10 +168,17 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         self.new_run.setChecked(False)
 
     def run_spec(self, fn, *args, **kwargs):
-        """A narrowing round: a training of its own, on the region, so its run is a training's, narrowed."""
+        """A narrowing round: a training of its own, on the region, so its run is a training's, narrowed; its first
+        total of unusable driven recordings compared with the audit of the prior in use that counted as it starts, as
+        the screen last read the checks."""
         if fn is not orchestrator.tsnpe_round:
             return super().run_spec(fn, *args, **kwargs)
-        return training_spec("Narrowing round", _PLACE, "Stop the narrowing round…", args[0], kwargs, narrowed=True)
+        rows = getattr(self._screen, "pre_run_rows", lambda: None)()
+        prior = args[2] if len(args) > 2 else None
+        return training_spec("Narrowing round", _PLACE, "Stop the narrowing round…", args[0], kwargs, narrowed=True,
+                             audit=check_lineage.counted_audit(rows) if rows is not None else None,
+                             prior=getattr(prior, "id", None),
+                             prior_words=record_words.phrase_of("prior", prior) if prior is not None else "")
 
     def _on_round(self, payload):
         """Install the round's LoadedPosterior -- it carries its own region and observation digest

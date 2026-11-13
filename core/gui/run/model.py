@@ -17,8 +17,10 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
+from .. import check_readings
 from ..texts import date_text, duration_text, number_text
 from . import readings
+from .questions import TRAINING_WORDS
 
 #: The batches the simulation's pace is measured over, the newest of this try.
 PACE_BATCHES = 200
@@ -40,6 +42,12 @@ MESSAGES_KEPT = 50
 FAILED_FINE = 0.01
 #: Where the fit's expected epochs come from when its page was given the number; filled with the number.
 TYPED_EPOCHS_TEXT = "about {0} epochs: the number given on the Training page"
+#: The health table's row of the unusable driven recordings, and why the run needs someone while the comparison with
+#: the audit is beyond its last band and unanswered.
+UNUSABLE_MEASURE = "Unusable driven recordings"
+COMPARISON_NEEDS_YOU = "The comparison with the audit needs an answer."
+#: The two answers to that comparison.
+ANSWERS = ("accepted", "keep_training")
 
 STATES = ("idle", "starting", "running", "stopping", "retrying", "ended", "not_seen", "acknowledged")
 OUTCOMES = ("finished", "stopped", "failed", "not seen to end")
@@ -221,6 +229,17 @@ class Message:
 
 
 @dataclass(frozen=True)
+class Masked:
+    """The first total of unusable driven recordings a training or a narrowing round says, as the engine counts it:
+    the ``unusable`` of the ``total`` driven recordings, over ``batches`` batches, of the ``scope`` it names (whole
+    as written, a semicolon of its own among it); a total that counted none, nought of nought over nought batches."""
+    unusable: int
+    total: int
+    batches: int
+    scope: str
+
+
+@dataclass(frozen=True)
 class EpochRecord:
     """The record of one epoch of the fit, and when the window read it."""
     epoch: int
@@ -294,8 +313,9 @@ class RunModel:
         self._fit_ended_by: str | None = None
         self._failed: tuple[int, int] | None = None
         self._earlier: tuple[tuple[int, int], ...] | None = None
-        self._unusable: tuple[int, int] | None = None
-        self._unusable_counted = False
+        self._masked: Masked | None = None
+        self._compared = None                # the comparison with the audit, made once at the first total
+        self._answers: dict = {}             # each answer to it, by its name, with when it was given
         self._chi_seen = False
         self._heard_lines: dict[str, int] = {}   # how many lines each reading has read
         self._saying = False                 # the stage in progress says its words in place of its name
@@ -550,19 +570,19 @@ class RunModel:
                                   self._follows() if kind == "simulation" else "")
 
     def health(self) -> tuple[HealthRow, ...]:
-        """The training's health, for a run that simulates training rows; nothing for any other run."""
-        if not any(stage.counts == SIMULATION_ROW for stage in self._stages):
+        """The training's health, for a training or a narrowing round, which simulate training rows; nothing for any
+        other run, a check's among them, whatever its lines say. The unusable driven recordings read as the comparison
+        with the audit does, its sentence beside the measure ("Fine" where the comparison passes)."""
+        if self.spec.word not in TRAINING_WORDS or not any(stage.counts == SIMULATION_ROW for stage in self._stages):
             return ()
         out = [self._failed_row()]
         if self.spec.facts.get("observation") == "chi" or self._chi_seen:
-            if self._unusable is not None:
-                masked, total = self._unusable
-                out.append(HealthRow("Unusable driven recordings",
-                                     f"{number_text(round(100.0 * masked / total, 1))} %", "Not compared"))
-            elif self._unusable_counted:
-                out.append(HealthRow("Unusable driven recordings", "None counted", "Not compared"))
+            compared = self.comparison()
+            if compared is None:
+                out.append(HealthRow(UNUSABLE_MEASURE, "Counted when simulation ends", ""))
             else:
-                out.append(HealthRow("Unusable driven recordings", "Counted when simulation ends", ""))
+                said = compared.sentence.removeprefix(f"{UNUSABLE_MEASURE} ")
+                out.append(HealthRow(UNUSABLE_MEASURE, said, "Fine" if compared.state == "Passed" else compared.state))
         out.append(self._memory_row())
         if self._saving_shown and not self._not_saved:
             if not self._save_failed:
@@ -579,8 +599,56 @@ class RunModel:
         return ((self._silence,) if self._silence is not None else ()) + tuple(m for _, m in self._kept)
 
     def needs_you(self) -> str | None:
-        """Why the run needs someone now, or None."""
-        return self._silence.sentence if self._silence_needs_you and self._silence is not None else None
+        """Why the run needs someone now, or None: a silence long past its pace, or a comparison with the audit beyond
+        its last band that has had no answer, while the run goes on and no stop is asked for. The window never stops
+        the fit itself."""
+        if self._silence_needs_you and self._silence is not None:
+            return self._silence.sentence
+        if self.comparison_asks():
+            return COMPARISON_NEEDS_YOU
+        return None
+
+    def masked(self) -> Masked | None:
+        """The first total of unusable driven recordings of a training or a narrowing round; None before it, and for
+        any other run."""
+        return self._masked
+
+    def comparison(self) -> "check_readings.Comparison | None":
+        """The first total of unusable driven recordings against the audit the run was handed as it started (its
+        share; None for none that counted), made once, at that total, with the difference accepted when it was;
+        whether the simulation set is kept, which the advice to stop says, from the run's own settings. None before
+        the total."""
+        if self._masked is None:
+            return None
+        if self._compared is None or ("accepted" in self._answers) != self._compared[0]:
+            masked, audit = self._masked, self.spec.facts.get("audit")
+            fraction = audit.get("fraction") if isinstance(audit, dict) else None
+            accepted = self._answers.get("accepted")
+            made = check_readings.compare(
+                unusable=masked.unusable, total=masked.total, scope=masked.scope, audit_fraction=fraction,
+                accepted=None if accepted is None else {"at": accepted}, batches=masked.batches,
+                prior_words=self.spec.facts.get("prior_words") or "the prior in use",
+                kept_set=bool(self.spec.simulation_set and self.spec.facts.get("cadence")))
+            self._compared = ("accepted" in self._answers, made)
+        return self._compared[1]
+
+    def comparison_asks(self) -> bool:
+        """Whether the comparison with the audit asks for an answer now: beyond its last band, with neither answer
+        given, while the run is live and no stop is asked for."""
+        compared = self.comparison()
+        return (compared is not None and compared.state == "Failed" and not self._answers
+                and self._state in ("starting", "running"))
+
+    def answer(self, answer: str, when: datetime) -> None:
+        """The answer ``answer`` ("accepted" or "keep_training") to the comparison, given at ``when``: held once, the
+        first answer of each kind standing. ValueError for another word."""
+        if answer not in ANSWERS:
+            raise ValueError(f"{answer!r} is no answer to the comparison: {ANSWERS}")
+        self._answers.setdefault(answer, when)
+
+    def answers(self) -> dict:
+        """Each answer given to the comparison, by its name, with when it was given."""
+        return dict(self._answers)
 
     def epochs(self) -> tuple[EpochRecord, ...]:
         """The records of the fit's epochs read so far, in order."""
@@ -744,10 +812,15 @@ class RunModel:
             self._failed = (values["bad"], values["rows"])
         elif name in ("chi_batch", "chi_total", "chi_none"):
             self._chi_seen = True
-            if name == "chi_total":
-                self._unusable, self._unusable_counted = (values["masked"], values["total"]), True
-            elif name == "chi_none":
-                self._unusable, self._unusable_counted = None, True
+            if name != "chi_batch" and self._masked is None and self.spec.word in TRAINING_WORDS:
+                # the first total alone: a later one (a calibration's, a resumed fit's) changes nothing
+                self._masked = (Masked(values["masked"], values["total"], values["batches"], values["scope"])
+                                if name == "chi_total" else Masked(0, 0, 0, values["scope"]))
+                compared = self.comparison()
+                if compared.message:
+                    self._kept = [("comparison", Message("warn", compared.message, self._clock(), 1, True))] + [
+                        (key, message) for key, message in self._kept if key != "comparison"]
+                    del self._kept[MESSAGES_KEPT:]
         elif name == "mem":
             self._peak = max(self._peak or 0.0, values["peak"])
             self._card = values["card"]

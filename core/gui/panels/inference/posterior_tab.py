@@ -1050,6 +1050,15 @@ class PosteriorPanel(StepPage):
         if self._asked_from_zero(question):
             self._start(knobs, True)
 
+    def _compared_with(self, prior) -> dict:
+        """What a training's first total of unusable driven recordings is compared with, as its run is handed it: the
+        prior it trains on, by its id and as a sentence names it, and the audit of that prior that counts, as the
+        screen last read the checks (None before the first reading, or for none). Reads nothing."""
+        rows = self._pre_run_rows()
+        return {"audit": check_lineage.counted_audit(rows) if rows is not None else None,
+                "prior": getattr(prior, "id", None),
+                "prior_words": record_words.phrase_of("prior", prior) if prior is not None else ""}
+
     def expected(self) -> "tuple[int, str] | None":
         """The epochs a training started now is expected to run, with the words that say where the number comes from,
         as the fit's time estimate takes them: the number typed in the form, else that of the last finished training of
@@ -1066,6 +1075,7 @@ class PosteriorPanel(StepPage):
         reads it)."""
         if fn is not orchestrator.build_posterior:
             return super().run_spec(fn, *args, **kwargs)
+        compared = self._compared_with(args[1] if len(args) > 1 else None)
         if args[3] and self._resuming is not None:
             kept = self._resuming
             record = getattr(kept, "config", None) or {}
@@ -1074,13 +1084,13 @@ class PosteriorPanel(StepPage):
             given.update(kwargs)
             given["name"] = kwargs.get("name") or getattr(kept, "posterior_name", "") or ""
             return training_spec("Training", _PLACE, STOP_WORDS, args[0], given, narrowed=False,
-                                 plan=None, settings=self._kept_settings(kept, given["name"]))
+                                 plan=None, settings=self._kept_settings(kept, given["name"]), **compared)
         if args[3]:
             row = self.form.rows["expected_epochs"]
             typed = None if "expected_epochs" in self.problems() else row.value()
             return training_spec("Training", _PLACE, STOP_WORDS, args[0], kwargs, narrowed=False,
                                  expected_epochs=typed, plan=self._screen.plan_entry() if self._screen else None,
-                                 settings=self.settings_entry())
+                                 settings=self.settings_entry(), **compared)
         return RunSpec("Posterior load", _PLACE, stop_button="Stop loading", loads_only=True, keeps_files=False,
                        stop_asks=False)
 

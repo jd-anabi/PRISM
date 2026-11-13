@@ -1093,7 +1093,7 @@ def _health(run) -> list:
 def test_the_health_table_reads_its_four_measures():
     """A training's health: failed simulations as a share of those simulated ("Fine" up to 1 %), since the batch a
     continued run resumed at, or over every run of the set once the earlier ones are handed in; unusable driven
-    recordings once simulation ends, not compared yet; the graphics card's largest peak of its memory with the
+    recordings once simulation ends, as the comparison with the audit reads them; the graphics card's largest peak of its memory with the
     limit, during simulation once the fit has begun, "Look closer" once a batch had to be split or failed whole;
     and the training saved as it goes, "Look closer" after a failed save until the next save. A run that simulates
     no training rows has none."""
@@ -1116,7 +1116,9 @@ def test_the_health_table_reads_its_four_measures():
     assert _health(run)[0] == ("Failed simulations", "1.63 %", "Look closer")
     _feed(run, _LINES["patho_total"], _LINES["chi_total"], _LINES["simulation_complete"])
     assert _health(run)[:2] == [("Failed simulations", "0.15 %", "Fine"),
-                                ("Unusable driven recordings", "40.1 %", "Not compared")]
+                                ("Unusable driven recordings", "There is no audit of the prior in use to compare with. "
+                                 "The simulation set holds 40.1 % unusable driven recordings. Run the audit in "
+                                 "step 4, Checks, when this run has ended.", "Waiting for the audit")]
     assert _health(run)[2] == ("Graphics-card memory", "10.4 of 15.9 GiB, limit 6 GiB, during simulation",
                                "Look closer")
     assert len(_health(run)) == 3, "the training saved shows once it is saved"
@@ -1136,7 +1138,8 @@ def test_the_health_table_reads_its_four_measures():
     _feed(unsaved, _LINES["fit_not_kept"])
     _fitting(unsaved, clock)
     _feed(unsaved, _LINES["chi_none"])
-    assert _health(unsaved)[1] == ("Unusable driven recordings", "None counted", "Not compared")
+    assert _health(unsaved)[1] == ("Unusable driven recordings", "Not compared: no driven recordings were counted.",
+                                   "Not compared")
     assert [measure for measure, _, _ in _health(unsaved)] == [
         "Failed simulations", "Unusable driven recordings", "Graphics-card memory"]
     assert unsaved.fit_not_saved() and not run.fit_not_saved()
@@ -1924,7 +1927,8 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         assert (spec.patience, spec.epoch_limit) == (config.TRAINING_STOP_AFTER_EPOCHS, config.TRAINING_MAX_NUM_EPOCHS)
         assert spec.facts == {"model": "NADROWSKI", "observation": "chi", "narrowed": narrowed,
                               "network": (config.NSF_HIDDEN_FEATURES, config.NSF_NUM_TRANSFORMS), "rotated": True,
-                              "cadence": orchestrator.TRAINING_CHECKPOINT_EVERY}, kind
+                              "cadence": orchestrator.TRAINING_CHECKPOINT_EVERY, "prior": None, "audit": None,
+                              "prior_words": ""}, kind
     given = inference.posterior_panel.run_spec(orchestrator.build_posterior, cfg, None, None, True,
                                                stop_after_epochs=7, max_num_epochs=40, hidden_features=64,
                                                num_transforms=3, checkpoint_every=25)
@@ -6705,3 +6709,211 @@ def test_a_selectable_block_asks_the_height_of_its_words_and_their_room(factor):
         assert (block.minimumSizeHint().height(), block.sizeHint().height()) == (one, one), (
             block.minimumSizeHint().height(), one, block.sizeHint().width())
         _gone(block)
+
+
+# ── the comparison of a training's unusable driven recordings with the audit ──
+#: The audit a training is handed as it starts, as its page hands it: the record's id, its share and its batches.
+_AUDIT = {"id": "20261002T081500", "fraction": 0.379, "batches": 100}
+
+
+def _compared(word="Training", *, audit=_AUDIT, cadence=50, simulation_set=True) -> RunSpec:
+    """A training, or a narrowing round, handed the audit ``audit`` and its prior, its simulation set kept every
+    ``cadence`` batches (0: not kept)."""
+    return _training(word, simulation_set=simulation_set,
+                     facts={"model": "NADROWSKI", "observation": "chi", "narrowed": word != "Training",
+                            "network": (256, 10), "memory_limit": 6.0, "cadence": cadence, "audit": audit,
+                            "prior": "20261001T222935", "prior_words": "the prior retrain_prior"})
+
+
+def _row_and_messages(run) -> tuple:
+    """The health table's row of the unusable driven recordings, and every message, as their words."""
+    row = next(row for row in run.health() if row.measure == "Unusable driven recordings")
+    return (row.now, row.state), [(message.kind, message.sentence) for message in run.messages()]
+
+
+def test_the_run_keeps_the_first_masked_record_with_its_scope():
+    """A training keeps the first total of unusable driven recordings it says, its counts, its batches and its scope
+    read whole, a scope that holds a semicolon of its own among them; a later total changes nothing. A round's first
+    that counted none is nought of nought over nought batches."""
+    from core.gui.run.model import Masked
+    from tests._runs import SCOPE_PROCESS, SCOPE_WHOLE, masked_line, masked_none, scope_part
+    clock = _Clock(_at(8, 19, 2, 11))
+    run = RunModel(_compared(), clock=clock)
+    assert (run.masked(), run.comparison()) == (None, None)
+    _feed(run, masked_line(1201, 3000, 3, scope_part(90)), masked_line(5, 3000, 3, SCOPE_WHOLE))
+    assert run.masked() == Masked(1201, 3000, 3, scope_part(90)), run.masked()
+    assert ";" in run.masked().scope and run.comparison().state == "Not compared"
+    round_ = RunModel(_compared("Narrowing round"), clock=clock)
+    _feed(round_, masked_none(SCOPE_PROCESS), masked_line(1201, 3000, 3, SCOPE_WHOLE))
+    assert round_.masked() == Masked(0, 0, 0, SCOPE_PROCESS)
+
+
+def test_the_comparison_is_made_only_for_a_training_or_a_round(tmp_path):
+    """STANDING. Only a training or a narrowing round keeps a total of unusable driven recordings, compares it with the
+    audit and draws a "Training health" table: a check's lines, a calibration's counted by the row that counts a
+    training's simulation among them, make none, and its run's page shows no such table."""
+    from core.gui.panels.inference import check_forms
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import CALIBRATION_LINES, SCOPE_WHOLE, Clock, StandIn, masked_line, start_run, turn_until
+    clock = _Clock(_at(8, 19, 2, 11))
+    line = masked_line(1201, 3000, 3, SCOPE_WHOLE)
+    for spec in (check_forms.check_spec("calibration", sizes={}), check_forms.check_spec("timing", sizes={}),
+                 check_forms.check_spec("card_test", sizes={}), RunSpec("Inference", ("inference", "infer"))):
+        run = RunModel(spec, clock=clock)
+        run.rows([_frame(3, 10)])
+        _feed(run, line)
+        assert (run.masked(), run.comparison(), run.health(), run.needs_you()) == (None, None, (), None), spec.name
+    for word in ("Training", "Narrowing round"):
+        run = RunModel(_compared(word), clock=clock)
+        _feed(run, line)
+        assert run.masked() is not None and run.health(), word
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 0)))
+    host, stand_in = build_run_host(), StandIn(word="Check")
+    start_run(host, stand_in, spec=check_forms.check_spec("calibration", sizes={}))
+    assert stand_in.started.wait(5)
+    stand_in.row(SIMULATION_ROW, 3, 10)
+    for said in (*CALIBRATION_LINES[1:], line):
+        stand_in.say(said)
+    turn_until(app, lambda: held.model.stage == "Saving")
+    assert held.model.health() == () and host.run_view.health_head.isHidden() and host.run_view.health.isHidden()
+    stand_in.release(None)
+    turn_until(app, lambda: not held.is_live(), 10.0)
+
+
+#: Each band of the comparison, at the audit's 37.9 %: the unusable of 1,000 driven recordings counted over 3 batches,
+#: and the scope; the row's words and its state; and the one message, as its kind and its words.
+_BANDS = {
+    "within 3 points": (401, "every committed batch of the simulation cache", _AUDIT,
+                        ("40.1 %. The audit read 37.9 %; within 3 points is fine.", "Fine"), []),
+    "above 3, at most 5": (417, "every committed batch of the simulation cache", _AUDIT,
+                           ("41.7 %. The audit read 37.9 %; they differ by 3.8 points; up to 5 is a reason to look "
+                            "closer.", "Look closer"),
+                           [("warn", "The simulation set and the audit differ by 3.8 points. Look closer before leaving "
+                                     "the fit to run: step 4, Checks, shows the per-batch figures of both.")]),
+    "above 5": (450, "every committed batch of the simulation cache", _AUDIT,
+                ("45.0 %. The audit read 37.9 %; they differ by 7.1 points; beyond 5 the advice is to stop.", "Failed"),
+                [("warn", "The advice is to stop the fit and find out why. The fit is saved after every epoch, so a "
+                          "stop keeps it and loses at most the epoch in progress; the training can be resumed later.")]),
+    "no audit": (401, "every committed batch of the simulation cache", None,
+                 ("There is no audit of the prior retrain_prior to compare with. The simulation set holds 40.1 % unusable "
+                  "driven recordings. Run the audit in step 4, Checks, when this run has ended.",
+                  "Waiting for the audit"),
+                 [("warn", "There is no audit of the prior retrain_prior to compare with. The simulation set holds 40.1 % "
+                           "unusable driven recordings. Run the audit in step 4, Checks, when this run has ended.")]),
+    "part of the set": (401, "only the batches this process generated; the cache's first 90 batches were committed "
+                             "without per-batch counts", _AUDIT,
+                        ("Not compared: the count covers 3 batches, not the whole simulation set; the first 90 were "
+                         "saved without their counts.", "Not compared"),
+                        [("warn", "Not compared: the count covers 3 batches, not the whole simulation set; the first "
+                                  "90 were saved without their counts.")]),
+}
+
+
+@pytest.mark.parametrize("band", list(_BANDS))
+def test_the_health_row_reads_the_checks_word_in_each_band(band):
+    """The row of the unusable driven recordings reads as the comparison with the audit does in each band: its
+    sentence beside the measure, "Fine" where the check reads "Passed" and the check's own word elsewhere, and one
+    "Attention" message in the comparison's words in every band but the first, saying no count of its own. Only the
+    band beyond 5 points asks for someone."""
+    from tests._runs import masked_line
+    unusable, scope, audit, row, messages = _BANDS[band]
+    run = RunModel(_compared(audit=audit), clock=_Clock(_at(8, 19, 2, 11)))
+    _feed(run, masked_line(unusable, 1000, 3, scope))
+    assert _row_and_messages(run) == (row, messages), _row_and_messages(run)
+    assert all(message.count_said for message in run.messages())
+    assert run.needs_you() == ("The comparison with the audit needs an answer." if band == "above 5" else None)
+
+
+def test_the_advice_to_stop_says_what_a_stop_keeps():
+    """Beyond 5 points the advice to stop says what a stop keeps: the fit, saved after every epoch, when the simulation
+    set is kept; the simulations and the fit lost when it is not."""
+    from core.gui.check_readings import STOP_KEPT_MESSAGE, STOP_NOT_KEPT_MESSAGE
+    from tests._runs import SCOPE_PROCESS, SCOPE_WHOLE, masked_line
+    for cadence, scope, said in ((50, SCOPE_WHOLE, STOP_KEPT_MESSAGE), (0, SCOPE_PROCESS, STOP_NOT_KEPT_MESSAGE)):
+        run = RunModel(_compared(cadence=cadence), clock=_Clock(_at(8, 19, 2, 11)))
+        _feed(run, masked_line(450, 1000, 3, scope))
+        assert [message.sentence for message in run.messages()] == [said], cadence
+    assert STOP_NOT_KEPT_MESSAGE.endswith("so a stop loses its simulations and its fit.")
+
+
+def test_a_continued_training_that_simulates_nothing_is_still_compared():
+    """A training continued on a set already complete simulates nothing and still says its total, of the whole set:
+    it is compared, and its row reads as the comparison does."""
+    from tests._runs import SCOPE_WHOLE, masked_line
+    clock = _Clock(_at(8, 19, 2, 11))
+    run = RunModel(_compared(), clock=clock)
+    folder = r"C:\Users\J\PRISM\Artifacts\simulations\eda5c2a1e468"
+    _feed(run, _LINES["budget"], f"[checkpoint] resuming at batch 10000/10000 from {folder} (rotation stored)",
+          f"[checkpoint] complete: 10000 batches in {folder}. Safe to delete once the posterior is saved; keeping it "
+          f"lets you retrain the flow without re-simulating.", masked_line(8_212_345, 20_480_000, 10000, SCOPE_WHOLE))
+    assert run.batches_done() == 10000 and run.comparison().state == "Passed", run.comparison()
+    assert _row_and_messages(run)[0] == ("40.1 %. The audit read 37.9 %; within 3 points is fine.", "Fine")
+
+
+def test_the_comparison_reads_the_audit_that_counted_when_the_run_started(tmp_path, monkeypatch):
+    """The comparison is made against the audit the run was handed as it started, the audit that counted then for the
+    prior in use, as the Training page hands it: an audit written while the run is live is not read, and nothing of
+    the store, the run history or a record is read while the run is live."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.check_lineage import CheckRow, RecordRead, counted_audit
+    from tests._fixtures import _nad_cfg, build_run_host, build_window, check_results, qt_app, readings_of_a_run
+    from tests._fixtures import write_diagnostic
+    from tests._runs import SCOPE_WHOLE, Clock, StandIn, masked_line, start_run, turn_until
+    from core import orchestrator
+    record = RecordRead("f", {"id": "20261002T081500", "kind": "diagnostic",
+                              "body": {"settings": {"num_runs": 100}, "results": {"masked_fraction": 0.379}}})
+    rows = (CheckRow("audit", "Passed", "", None, record, (), ""),)
+    assert counted_audit(rows) == _AUDIT and counted_audit((CheckRow("audit", "Not run yet", "", None, None, (), ""),)) \
+        is None
+    app = qt_app()
+    window = build_window()
+    page = window.part("inference").posterior_panel
+    monkeypatch.setattr(page, "_pre_run_rows", lambda: rows)
+    cfg = SimpleNamespace(model="NADROWSKI", observation_mode="chi", reparam_rotate=True)
+    prior = SimpleNamespace(kind="prior", id="20261001T222935", name="retrain_prior")
+    spec = page.run_spec(orchestrator.build_posterior, cfg, prior, None, True)
+    assert (spec.facts["audit"], spec.facts["prior"], spec.facts["prior_words"]) == (
+        _AUDIT, "20261001T222935", "the prior retrain_prior"), spec.facts
+    store = ArtifactStore(tmp_path / "Artifacts")
+    with use_store(store):
+        held = _controller_on(tmp_path, Clock(_at(8, 12, 0)))
+        stand_in = StandIn()
+        start_run(build_run_host(), stand_in, spec=spec)
+        assert stand_in.started.wait(5)
+        calls = readings_of_a_run(monkeypatch)
+        write_diagnostic(store, _nad_cfg(chi_mode=True), diagnostic="probes", variant="mask",
+                         parents={"prior": prior.id}, **check_results("audit", masked_fraction=0.45))
+        calls.clear()                        # the record written meanwhile; from now on nothing is read
+        stand_in.say(masked_line(401, 1000, 3, SCOPE_WHOLE))
+        turn_until(app, lambda: held.model.comparison() is not None)
+        assert held.model.comparison().state == "Passed" and calls == [], calls
+        stand_in.release()
+        turn_until(app, lambda: not held.is_live(), 10.0)
+
+
+@pytest.mark.parametrize("band", list(_BANDS))
+def test_the_window_never_stops_a_fit_on_the_comparison(band, tmp_path, monkeypatch):
+    """STANDING. In no band does the window stop a fit itself: no stop is asked of the run, and the run goes on to the
+    end its own lines give it."""
+    from core.gui.run.controller import RunController
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, masked_line, start_run, turn_until
+    asked = []
+    real = RunController.request_stop
+    monkeypatch.setattr(RunController, "request_stop", lambda held, **kwargs: (asked.append(kwargs),
+                                                                               real(held, **kwargs))[1])
+    app = qt_app()
+    unusable, scope, audit, _row, _messages = _BANDS[band]
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 0)))
+    stand_in = StandIn()
+    start_run(build_run_host(), stand_in, spec=_compared(audit=audit))
+    assert stand_in.started.wait(5)
+    stand_in.say(masked_line(unusable, 1000, 3, scope))
+    turn_until(app, lambda: held.model.comparison() is not None)
+    for _ in range(5):
+        app.processEvents()
+    assert held.is_live() and not held.status.stop_requested and asked == [], (band, asked)
+    stand_in.release()
+    turn_until(app, lambda: not held.is_live(), 10.0)
+    assert held.status.outcome == "finished"

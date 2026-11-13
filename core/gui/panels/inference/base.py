@@ -23,12 +23,15 @@ TRAINING_STAGES = (Stage("Rotation", ("rotation_begins",)),
 
 def training_spec(word: str, place: tuple, stop_button: str, cfg, kwargs: dict, *, narrowed: bool,
                   expected_epochs: int | None = None, plan: dict | None = None,
-                  settings: dict | None = None) -> RunSpec:
+                  settings: dict | None = None, audit: dict | None = None, prior: str | None = None,
+                  prior_words: str = "") -> RunSpec:
     """The run of a training or of a narrowing round, as its page knows it: its stages; the patience and the epoch
     limit it trains with, the call's own or else the settings' (read, never written); and the facts its pace and
     its expected epochs are looked up by (the model, the kind of observation, whether it is narrowed, the network)
     with what the page knows before the run says it (whether it rotates, and the batches between two saves of
-    its simulation set: the call's own, else what the stage reads)."""
+    its simulation set: the call's own, else what the stage reads), and what its first total of unusable driven
+    recordings is compared with: the id of the prior in use (``prior``) and the audit of it that counted as the run
+    started (``audit``, ``{"id", "fraction", "batches"}``; None for none), with the prior as a sentence names it."""
     def given(name, default):
         return default if kwargs.get(name) is None else kwargs[name]
 
@@ -41,7 +44,9 @@ def training_spec(word: str, place: tuple, stop_button: str, cfg, kwargs: dict, 
                           "network": (given("hidden_features", config.NSF_HIDDEN_FEATURES),
                                       given("num_transforms", config.NSF_NUM_TRANSFORMS)),
                           "rotated": bool(cfg.reparam_rotate),
-                          "cadence": given("checkpoint_every", orchestrator.TRAINING_CHECKPOINT_EVERY)})
+                          "cadence": given("checkpoint_every", orchestrator.TRAINING_CHECKPOINT_EVERY),
+                          "prior": prior, "audit": None if audit is None else dict(audit),
+                          "prior_words": prior_words})
 
 
 class _StagePanel(BasePanel):
