@@ -2767,6 +2767,7 @@ def test_each_deciding_check_hands_its_stage_the_forms_arguments(key, tmp_path, 
     the posterior and the prior as the stage takes them; no setting of the engine is written."""
     import random
     from core import config
+    from core.gui.panels.inference import check_forms
     seen = _tripwire(monkeypatch)
     monkeypatch.setattr(random, "randrange", lambda top: 1840273 if top == 2 ** 31 else 0)
     where, usual, typed, changed = _HANDED[key]
@@ -2786,6 +2787,7 @@ def test_each_deciding_check_hands_its_stage_the_forms_arguments(key, tmp_path, 
             handed = {name: value for name, value in seen["kwargs"].items() if name not in _CONTROLLERS}
             named = ("a_check", "why it was run") if values is not None else ("", "")
             assert handed == {**wanted, "name": named[0], "note": named[1]}, (key, handed)
+            assert seen["kwargs"]["spec"].check == {"key": key, "sizes": check_forms.sizes_of(key, form)}, key
             assert seen["kwargs"]["provide_fig_sink"] is True
             given = {"band": 1, "audit": 2, "calibration": 3, "input_use": 2, "identifiability": 2}[key]
             assert len(seen["args"]) == given, seen["args"]
@@ -2802,10 +2804,10 @@ def test_each_deciding_check_hands_its_stage_the_forms_arguments(key, tmp_path, 
 
 @pytest.mark.parametrize("limits", ["a bounds file", "limits typed by hand"])
 def test_a_check_builds_its_own_configuration_and_never_writes_the_sessions(limits, tmp_path, monkeypatch):
-    """The frequency band and the audit run on a configuration of their own, made as the session's was, from the step 1
-    settings applied and the bounds file in use or the limits typed by hand, with the frequency response, on the
-    session configuration's device: the band's cell is loaded on it alone, the audit's holds none, and the session's
-    configuration is as it was."""
+    """The frequency band, the audit and the drive study run on a configuration of their own, made as the session's was,
+    from the step 1 settings applied and the bounds file in use or the limits typed by hand, the first two with the
+    frequency response and the drive study without it, on the session configuration's device: the cell is loaded on it
+    alone, the audit's holds none, and the session's configuration and its step 1 settings are as they were."""
     from collections import OrderedDict
     seen = _tripwire(monkeypatch)
     with _checks_page(tmp_path) as (_window, screen, page, _store):
@@ -2818,16 +2820,19 @@ def test_a_check_builds_its_own_configuration_and_never_writes_the_sessions(limi
             assert "bounds" not in held.sources
         before = {name: repr(getattr(held, name)) for name in (
             "sources", "params_dict", "rescale_params", "force_params_dict", "chi_mode", "T_obs")}
-        for key in ("band", "audit"):
+        draft, drafted = screen.session.draft, repr(screen.session.draft)
+        for key in ("band", "audit", "drive_study"):
             _ready(page, key)
             page._main_clicked()
             made = seen["args"][0]
-            assert made is not held and made.chi_mode is True and made.hw.device == held.hw.device, key
+            assert made is not held and made.chi_mode is (key != "drive_study"), key
+            assert made.hw.device == held.hw.device, key
             assert [(name, ends) for name, (_v, ends) in made.params_dict.items()] == [
                 (name, ends) for name, (_v, ends) in held.params_dict.items()], key
             assert made.sources.get("bounds") == held.sources.get("bounds"), key
-            assert (made.sources.get("cell") is not None) == (key == "band"), (key, made.sources)
+            assert (made.sources.get("cell") is not None) == (key != "audit"), (key, made.sources)
         assert {name: repr(getattr(held, name)) for name in before} == before
+        assert screen.session.draft is draft and repr(draft) == drafted, "the step 1 settings were written"
 
 
 def test_the_calibrations_seed_left_blank_is_drawn_and_named_in_its_result(tmp_path, monkeypatch):
@@ -3017,12 +3022,17 @@ def test_a_checks_time_is_this_computers_own_from_the_history(tmp_path, monkeypa
 
         assert time_said() == "Took 43 minutes here last time at these sizes."
         calls = readings_of_a_run(monkeypatch)
-        page.form.rows["n_cal"].widget.setText("1000")
-        assert time_said() == "Took 20 minutes here last time at these sizes."
-        page.form.rows["n_cal"].widget.setText("3000")
-        assert time_said() == "Not timed on this computer yet."
-        page.form.rows["n_cal"].widget.setText("1500")
-        assert time_said() == "Not timed on this computer yet."
+
+        def edited(text):
+            """``n_cal`` typed, and a reading the edit started fired at once rather than after its pause."""
+            page.form.rows["n_cal"].widget.setText(text)
+            if page.read_timer.isActive():
+                page.read_timer.timeout.emit()
+            return time_said()
+
+        assert edited("1000") == "Took 20 minutes here last time at these sizes."
+        assert edited("3000") == "Not timed on this computer yet."
+        assert edited("1500") == "Not timed on this computer yet."
         _settle()
         assert calls == [], calls
 
@@ -3311,6 +3321,7 @@ def test_each_informing_check_and_tool_hands_its_stage_the_forms_arguments(key, 
     session's with the posterior and the prior, identifiability across the prior on its own with the posterior; no
     setting of the engine is written."""
     from core import config
+    from core.gui.panels.inference import check_forms
     seen = _tripwire(monkeypatch)
     chi, where, needed, usual, typed, changed = _HANDED_TOOLS[key]
     settings = {name: repr(value) for name, value in vars(config).items() if name.isupper()}
@@ -3327,6 +3338,7 @@ def test_each_informing_check_and_tool_hands_its_stage_the_forms_arguments(key, 
             assert seen.get("fn") is _engine(where), (key, page.foot.reason.text())
             handed = {name: value for name, value in seen["kwargs"].items() if name not in _CONTROLLERS}
             assert handed == {**wanted, "name": "a_tool" if values is not None else "", "note": ""}, (key, handed)
+            assert seen["kwargs"]["spec"].check == {"key": key, "sizes": check_forms.sizes_of(key, form)}, key
             assert seen["kwargs"]["provide_fig_sink"] is True
             made, *rest = seen["args"]
             if key == "fixed_number":
@@ -3447,7 +3459,7 @@ def test_the_drive_studys_forcing_lines_can_be_copied(tmp_path):
     """The drive study's result shows the Forcing sections its record suggests, as lines a cell file and a bounds file
     take, in the fixed face and selectable, with "Copy" beside them, which puts them on the clipboard exactly; the
     clipboard is put back as it was."""
-    from PySide6.QtGui import QFontInfo
+    from core.gui import fonts
     from tests._fixtures import check_results, write_diagnostic
     app = qt_app()
     suggested = {"free_running": {"amp": 0.25, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
@@ -3472,7 +3484,7 @@ def test_the_drive_studys_forcing_lines_can_be_copied(tmp_path):
                      "# Forcing Parameters of a bounds file\namp in (0, 4.5)\nfreq in (0.003, 0.3)\n"
                      "phase in (0, 6.28319)\noffset in (-50, 50)")
             assert region.lines.text() == lines and region.lines.isVisibleTo(page)
-            assert QFontInfo(region.lines.font()).fixedPitch() or region.lines.font().fixedPitch()
+            assert region.lines.font().fixedPitch() and region.lines.font().families() == fonts.fixed().families()
             assert region.lines.textInteractionFlags() & Qt.TextSelectableByMouse
             assert region.copy_button.text() == "Copy" and region.copy_button in region.stops()
             region.copy_button.click()
@@ -3528,7 +3540,7 @@ def test_a_tools_greyed_reasons_follow_the_model_the_mode_and_the_bounds_file(tm
         assert page.foot.reason.text() == "Cannot start: it applies only with the frequency response."
 
 
-# ── what the fix round holds ──
+# ── the forms' rules, the audit's greying and the result's width ──
 #: The Forcing sections a drive study's record suggests, as a record of the engine holds them.
 _SUGGESTED = {"free_running": {"amp": 0.25, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
               "captured": {"amp": 1.5, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
@@ -3693,3 +3705,58 @@ def test_before_the_history_is_read_no_time_is_said(tmp_path):
         assert not [one for one in said if "here last time" in one or one.startswith("Not timed")], said
         page.read_facts()
         assert "Not timed on this computer yet." in [fact.sentence for fact in page.facts_from_form()]
+
+
+def test_a_checks_page_says_the_memory_lines_for_a_check_on_the_card_alone(tmp_path):
+    """On a check's page, "Before you start" says the memory limit in force and the last run on this computer, as the
+    page's reading found them, for a check that simulates on the graphics card, and nothing of them for one that reads
+    records and simulates nothing."""
+    from core.gui.memory_limit import limit_words, memory_limit_in_force
+    from core.gui.run.ends import NO_LAST_RUN_TEXT
+    memory = f"{limit_words(memory_limit_in_force())} {NO_LAST_RUN_TEXT}"
+    with _checks_page(tmp_path, simulation=SET) as (_window, _screen, page, _store):
+        for key, card in (("calibration", True), ("input_use", False)):
+            page.open_check(key)
+            page.redraw()
+            assert (memory in [fact.sentence for fact in page.facts_from_form()]) == card, (key, page.facts_from_form())
+
+
+def test_no_widget_a_checks_reading_or_a_runs_end_makes_is_shown_as_a_window_of_its_own(tmp_path, monkeypatch):
+    """STANDING, beside the builders' guard. What the Checks page makes after it is built, every check's result at a
+    reading with a record of each kind and again at a check's run's end, is made inside its page: none is shown as a
+    window of its own, but the window itself and the questions the dialogs' guard records."""
+    from PySide6.QtWidgets import QMessageBox, QWidget
+    from core import orchestrator
+    from core.gui.main_window import MainWindow
+    from core.gui.widgets.ask import Ask
+    from tests._runs import StandIn, turn_until
+    from tests._window_helpers import shown_off_screen
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
+    app = qt_app()
+    shown = []
+    real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
+
+    def heard(widget, on: bool) -> None:
+        if on and widget.isWindow() and not isinstance(widget, (MainWindow, Ask, QMessageBox)):
+            words = getattr(widget, "text", None)
+            shown.append((type(widget).__name__, words() if callable(words) else "", widget.parent() is None))
+
+    with _checks_page(tmp_path, records=_every_record, shown=False) as (window, _screen, page, _store):
+        monkeypatch.setattr(QWidget, "setVisible", lambda widget, on: (heard(widget, on), real["setVisible"](widget, on)))
+        monkeypatch.setattr(QWidget, "show", lambda widget: (heard(widget, True), real["show"](widget)))
+        monkeypatch.setattr(QWidget, "setHidden", lambda widget, on: (heard(widget, not on), real["setHidden"](widget, on)))
+        shown_off_screen(window, 1300, 820)
+        window.go_to("inference", "checks")           # the page's first reading, which makes every result
+        _settle()
+        made = sum(1 for one in page.check_pages.values() if one.result is not None)
+        _ready(page, "calibration")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        for name, method in real.items():
+            monkeypatch.setattr(QWidget, name, method)
+    assert made >= 6, made
+    assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"

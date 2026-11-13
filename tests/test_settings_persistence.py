@@ -1102,18 +1102,19 @@ def test_no_widget_the_builders_make_is_shown_as_a_window_of_its_own(monkeypatch
     flash in the real program before its page takes it in: a page gives each widget its parent first, then its
     visibility. Every widget the window, each of its parts, each step and a bare step page are built with, each check's
     page and form among them, and a configuration installed on Parameter inference, is watched as it is made visible,
-    shown or unhidden: none is a window then but the window itself and a dialog, which the question's own guard
-    records."""
-    from PySide6.QtWidgets import QDialog, QWidget
+    shown or unhidden: none is a window then but the window itself and the questions and message boxes the dialogs'
+    guard records."""
+    from PySide6.QtWidgets import QMessageBox, QWidget
     from core.gui import keys
     from core.gui.main_window import MainWindow
+    from core.gui.widgets.ask import Ask
     from tests._fixtures import build_step_page, build_window, forced_cfg, qt_app
     qt_app()
     shown = []
     real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
 
     def heard(widget, on: bool) -> None:
-        if on and widget.isWindow() and not isinstance(widget, (MainWindow, QDialog)):
+        if on and widget.isWindow() and not isinstance(widget, (MainWindow, Ask, QMessageBox)):
             words = getattr(widget, "text", None)
             shown.append((type(widget).__name__, words() if callable(words) else ""))
 

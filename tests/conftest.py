@@ -240,6 +240,20 @@ def _settings_home(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _clipboard_kept():
+    """The clipboard's text holds at the end of every test what it held at its start (the process's own clipboard,
+    offscreen, or the person's, on the real screen): a test that presses a "Copy" takes the text first and puts it
+    back, and one that does not fails here, before a later test meets what it left."""
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    before = app.clipboard().text() if app is not None else ""
+    yield
+    app = QApplication.instance()
+    after = app.clipboard().text() if app is not None else ""
+    assert after == before, f"the test left the clipboard holding {after[:80]!r}"
+
+
+@pytest.fixture(autouse=True)
 def _isolated_settings(tmp_path):
     """A FRESH .ini per test -- the primitive; a shared file cleared per test would fight QSettings'
     file cache. Teardown restores the SESSION path _settings_home installed, never None: None is the

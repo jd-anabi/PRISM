@@ -1956,6 +1956,8 @@ def process_state(app) -> dict:
         "standard streams": (sys.stdout, sys.stderr),
         "fault handler": faulthandler.is_enabled(),
         "Qt message handler": getattr(entry._bound, "qt", None),
+        # The text on the clipboard, the process's own offscreen: a "Copy" a test presses puts it back as it found it.
+        "clipboard": app.clipboard().text(),
     }
 
 

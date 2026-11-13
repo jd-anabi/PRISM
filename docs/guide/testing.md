@@ -170,7 +170,7 @@ and the session guards).
   - `_memory_limit_put_back`: the memory limit the window assigns on `core.config`, the one setting it
     assigns there, is put back as the test found it, and the keep-awake switch is put back on.
 
-  The other nine fail a test at its teardown:
+  The other ten fail a test at its teardown:
   - `_every_file_chooser_is_answered`: a file chooser the test opened and did not answer;
   - `_every_native_box_is_read`: a plain Windows message the test did not read
     (`tests/_dialogs.native_boxes()`), a start that failed where none was expected;
@@ -183,6 +183,8 @@ and the session guards).
     with is in force again (a test that began with no application is held to the font the toolkit
     gives a new one), because the program's fonts registered again under a changed font would take its
     family for the toolkit's own;
+  - `_clipboard_kept`: the clipboard left holding other text than at the test's start (a test that
+    presses a "Copy" takes the text first and puts it back);
   - `_drawing_code_raises_nothing`: an error the window's own drawing code caught and recorded while
     the test ran (`core.gui.reported`); a test that causes one on purpose does it inside
     `reported.expected()`;

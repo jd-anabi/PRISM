@@ -188,11 +188,11 @@ class ResultRegion(QWidget):
                 continue
             caption = self._small()
             caption.setText(words)
-            caption.setVisible(bool(words))
             picture = _FitLabel()
             picture.set_source(pixmap)
             self._pictures.addWidget(caption)
             self._pictures.addWidget(picture)
+            caption.setVisible(bool(words))    # in the region first: a caption with no parent made visible is a window
             self.pictures.append((caption, picture))
         self._judge()
 
