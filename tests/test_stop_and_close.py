@@ -1572,12 +1572,13 @@ def test_a_figure_popped_out_during_a_run_opens_as_its_picture(tmp_path):
     """While a run is live, a figure popped out of a page opens as its picture, in the image viewer, even when an
     interactive copy could be built: the window's thread lays out no figure while a run builds its own; a window no
     window owns, as at any time. Its button says so meanwhile, for a figure that arrived before the run and one that
-    arrived during it. Once the run has ended, it opens interactive again, and its button says that."""
-    from core.gui.panels.inference_tabs import InferPanel
+    arrived during it. Once the run has ended, it opens interactive again, and its button says that. The host is a page
+    of the old frame, whose figures stay through a run and after it."""
+    from core.gui.panels.inference_tabs import TSNPEPanel
     from core.gui.widgets.figure_window import ImageZoomWindow, InteractiveFigureWindow
     app = qt_app()
     held, window = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_window()
-    host = window.panel(InferPanel)
+    host = window.panel(TSNPEPanel)
     stack = host.figure_stack
     stack.add_figure("interactive", _picture(), _figure_pickle())
     interactive, held_tip, picture = ("Open an interactive, zoomable copy in a new window",

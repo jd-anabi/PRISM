@@ -3686,7 +3686,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     _shown_off_screen(window, 1300, design.small_below() - 1 if low else 820)
                     assert window.shell._small == low, (factor, low)
                     for place in keys.PARTS[1:]:
-                        window.go_to(place.key, "infer" if place.key == "inference" else None)
+                        window.go_to(place.key, "narrowing" if place.key == "inference" else None)
                         QApplication.processEvents()
                         if place.key != "settings":
                             assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
@@ -3752,7 +3752,9 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
                 inference.install_config(inference.session.draft.make_config(bounds_path=str(bounds)))
             for part, page, panel in panels:
                 window.go_to(part, page)
-                QApplication.processEvents()
+                for _ in range(3):                       # a step in sight already lays out what its gates just said
+                    QApplication.sendPostedEvents()
+                    QApplication.processEvents()
                 short, loose = wrong(panel)
                 if short or loose:
                     found[(session, part, page)] = (short, loose)
@@ -4005,7 +4007,7 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
         assert window._places[built.config_panel] == ("inference", "model"), "its panel would have no place"
         assert window.built_parts() == tuple(place.key for place in keys.PARTS)
         assert window.shell.stack.indexOf(page) == -1, "the error page stays in the stack"
-        window.go_to("inference", "infer")
+        window.go_to("inference", "narrowing")
         QApplication.processEvents()
         assert _margins(window, "inference") == (design.scaled(12),) * 4, "a part built again has no margin"
     finally:
@@ -4362,7 +4364,7 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
                        for panel in every._all_panels() if isinstance(panel, BasePanel)
                        for splitter in ("splitter", "results")})
     groups = {key.split("/")[0] for key in remembered}
-    assert groups == {"inference_infer", "inference_tsnpe", "layout"}, groups
+    assert groups == {"inference_tsnpe", "layout"}, groups
     st.use_ini_file(str(tmp_path / "kept.ini"))
     kept = st.settings()
     for key, value in remembered.items():
@@ -4716,7 +4718,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
     nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, its stop
     asked by no Escape, in the rail or on its own page's stop button."""
     from PySide6.QtWidgets import QPushButton, QToolButton
-    from core.gui.panels.inference_tabs import InferPanel
+    from core.gui.panels.inference_tabs import TSNPEPanel
     qt_app()
     given = _given(monkeypatch)
     window = build_window()
@@ -4738,16 +4740,16 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 QTest.keyClick(first, Qt.Key_Escape)
                 assert (window.current_place()[0], window.focusWidget(), said) == (part, first, []), (
                     f"Escape on the first setting of {part} moved something")
-            runner = window.panel(InferPanel)
+            runner = window.panel(TSNPEPanel)              # a page of the old frame, whose form stands beside its run
             with running(runner):
-                for target in ("infer", "prior"):
+                for target in ("narrowing", "prior"):
                     window.go_to("inference", target)                        # every setting locked by the run
                     QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
                     held = window.focusWidget()
                     assert not rail.isAncestorOf(held), f"Escape left the keyboard in the rail over {target}"
                     assert window.part("inference").isAncestorOf(held), f"Escape gave the keyboard away from {target}"
                     assert not isinstance(held, (QPushButton, QToolButton)), f"Escape gave a button of {target} it"
-                window.go_to("inference", "infer")
+                window.go_to("inference", "narrowing")
                 rail.take_keyboard()
                 QTest.keyClick(window.focusWidget(), Qt.Key_Tab)            # the foot, a button while the run is live
                 assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
@@ -4764,7 +4766,7 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                         controller()._run.token.requested.is_set(), stop.isEnabled()) == (
                     True, False, False, True), "Escape asked the run to stop"
                 assert (window.current_place(), window.focusWidget(), said) == (
-                    ("inference", "infer"), stop, []), "Escape on the stop button moved something"
+                    ("inference", "narrowing"), stop, []), "Escape on the stop button moved something"
     finally:
         window.hide()
 
@@ -6793,7 +6795,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     _shown_off_screen(window, 1300, 820)
     today = window.part("inference")
     assert today.first_focus() is today.config_panel.model_combo and today.pending() == frozenset()
-    window.go_to("inference", "infer")
+    window.go_to("inference", "narrowing")
     assert today.first_focus() is None
     assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
     window.resize(1300, design.small_below() - 1)
@@ -6802,7 +6804,7 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     step = _stand_in_step(window, monkeypatch)
     window.go_to("inference", "model")
     assert window._start_of(today) is step.named and window.focusWidget() is step.named
-    window.go_to("inference", "infer")
+    window.go_to("inference", "narrowing")
     assert today.first_focus() is None, "the screen answered for a step not shown"
     window.go_to("inference", "model")
     assert not step.is_small()
@@ -7166,10 +7168,17 @@ def _the_whole_window(tmp_path, monkeypatch):
         window.hide()
 
 
+def _deep_in(panel, widget) -> None:
+    """``widget`` stood deep in ``panel``: in the body of a page of the look, under its scrolling body and its stacks;
+    in a page of the old frame, under its scrolling form and its splitter."""
+    held = getattr(panel, "_body", None)
+    (held if held is not None else panel.controls_layout).addWidget(widget)
+
+
 def _button_in(panel):
-    """A push button deep in ``panel``, under its scrolling form, splitter and stacks, and the list of its presses."""
+    """A push button deep in ``panel``, under its scrolling body and stacks, and the list of its presses."""
     pressed, button = [], QPushButton("Deep in the page")
-    panel.controls_layout.addWidget(button)
+    _deep_in(panel, button)
     button.clicked.connect(lambda: pressed.append(1))
     QApplication.processEvents()
     return button, pressed
@@ -7269,7 +7278,7 @@ def test_enter_with_a_modifier_in_a_field_or_on_a_tick_box_presses_nothing(contr
         target = button
         if made is not None:
             target = made
-            panel.controls_layout.addWidget(made)
+            _deep_in(panel, made)
             QApplication.processEvents()
             _arrive(target, Qt.TabFocusReason)
             target.setFocus(Qt.TabFocusReason)

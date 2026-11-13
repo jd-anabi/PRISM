@@ -503,16 +503,15 @@ class InferenceScreen(QWidget):
         self.refresh_gates()
 
     def install_config(self, cfg):
-        """A configuration set IN PLACE, fanned out to the steps whose pickers and fields depend on it, then the gates
-        and the states worked out again. The Prior step no longer calls this: its configuration comes into use with its
-        prior, through ``take_prior``. Its destructive twin ``new_draft`` is the one the first step confirms."""
+        """A configuration set IN PLACE, then the gates and the states worked out again: each step reads the
+        configuration in use as it draws. The Prior step no longer calls this: its configuration comes into use with
+        its prior, through ``take_prior``. Its destructive twin ``new_draft`` is the one the first step confirms."""
         self._fan_out(cfg)
         self.refresh_gates()
 
     def _fan_out(self, cfg) -> None:
-        """Hold ``cfg`` and hand it to the steps whose pickers and fields depend on it."""
+        """Hold ``cfg``: the steps whose rows depend on it read it from the session as they draw."""
         self.session.cfg = cfg
-        self.infer_panel.on_config_built(cfg)
 
     def take_prior(self, cfg, loaded) -> None:
         """A prior has come back from its run, made on ``cfg``, the very configuration the Prior step handed the run:
@@ -544,6 +543,12 @@ class InferenceScreen(QWidget):
         ident = getattr(loaded, "id", None)
         picks = [(remembered.POSTERIOR_KEY, ident)] if isinstance(ident, str) and ident else []
         remembered.put_many(picks + self.last_used(getattr(getattr(session, "draft", None), "model", None)))
+        self.refresh_gates()
+
+    def take_observation(self, observation) -> None:
+        """An observation has come back from an inference's run: it comes into use, and the gates and the states are
+        worked out once. Called while the run is still live, so it writes the session and nothing else reads."""
+        self.session.observation = observation
         self.refresh_gates()
 
     # ── a sentence a press leaves ──

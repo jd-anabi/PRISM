@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QScr
 from core.gui import design, fields, fonts, style
 from core.gui.panels.inference import check_forms
 from core.gui.panels.inference.config_tab import ConfigPanel
+from core.gui.panels.inference.infer_tab import InferPanel
 from core.gui.panels.inference.posterior_tab import PosteriorPanel
 from core.gui.panels.inference.prior_tab import PriorPanel
 from core.gui.panels.inference.validate_tab import ValidatePanel
@@ -40,11 +41,11 @@ BLOCKS = "the name cannot be used"
 #: Each rebuilt page by its step, as the standing tests a page joins in its own task name it: the stand-in, then the
 #: pages of the window.
 PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel, "Training": PosteriorPanel,
-         "Checks": ValidatePanel}
+         "Checks": ValidatePanel, "Inference": InferPanel}
 #: A field of each page an edit is typed into, by the page's class: of a page that shows a form only for what it has
 #: open, the form of what ``OPENED`` opens on it.
 EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations", PosteriorPanel: "num_runs",
-          ValidatePanel: "n_cal"}
+          ValidatePanel: "n_cal", InferPanel: "t_obs"}
 #: What a page opens to show the form an edit is typed into: on the Checks list, the calibration's page.
 OPENED = {ValidatePanel: lambda page: page.open_check("calibration")}
 #: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
@@ -1144,13 +1145,45 @@ def _the_most_rows_in_error(page) -> None:
     assert page.form.rows["t_obs"].in_error()
 
 
+def _on_recordings(page, *, posterior: bool = True) -> None:
+    """Inference on your own recordings: a configuration of a frequency response of twelve slots in use, with a
+    posterior of it unless ``posterior`` is False; the observation named."""
+    from types import SimpleNamespace
+    from core.gui.session import SbiSession
+    from tests._fixtures import prior_stub
+    screen = page.window().part("inference")
+    cfg = SimpleNamespace(model="NADROWSKI", params_dict={}, rescale_params={}, force_params_dict={}, has_forcing=False,
+                          chi_mode=True, chi_n_freqs=3, chi_k_pad=12, observation_mode="chi")
+    held = SimpleNamespace(kind="posterior", id="q1", name="retrain_posterior",
+                           posterior=SimpleNamespace(truncation=None, x_obs_digest=None)) if posterior else None
+    screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior_stub(), posterior=held)
+    screen.refresh_gates()
+    page.modes.set_value("recordings")
+    page.names.other_name.setText("cell_a")
+    page.read_facts()
+
+
+def _twelve_driven_recordings_one_in_error(page) -> None:
+    """Inference on recordings of a frequency response, with a posterior of twelve slots in use: twelve driven
+    recordings, the eighth's frequency typed as 0, said under its row."""
+    _on_recordings(page)
+    rows = [*page.driven.rows(), *(page.driven.add_row() for _ in range(11))]
+    for at, row in enumerate(rows):
+        _typed(row, f"C:/recordings/driven_{at}.npy", "0" if at == 7 else f"{1.5 + at}")
+    page.redraw()
+    assert page.driven.reading_of(rows[7])[0] == "err"
+
+
 #: The pages the foot is held over at the smallest window, by a name: the stand-in, a table of rows on a page of the later
-#: steps, a list with a detail open, and the Checks list with its check of the most rows open; each with the class's
-#: maker (or the class), the step it stands on, and what is done to it.
+#: steps, a list with a detail open, the Checks list with its check of the most rows open, and Inference with twelve
+#: driven recordings, one in error; each with the class's maker (or the class), the step it stands on, and what is done
+#: to it.
 FOOT_PAGES = {"the stand-in": (None, "training", None),
               "a table of rows": ("stand_in_table_page", "infer", _twelve_rows_one_in_error),
               "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open),
-              "the Checks list, the check of the most rows open": (ValidatePanel, "checks", _the_most_rows_in_error)}
+              "the Checks list, the check of the most rows open": (ValidatePanel, "checks", _the_most_rows_in_error),
+              "Inference, twelve driven recordings, one in error": (InferPanel, "infer",
+                                                                     _twelve_driven_recordings_one_in_error)}
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
@@ -3449,6 +3482,70 @@ WALKED_CHECKS = {
 }
 
 
+def _a_simulated_cell(page, *, typed: bool = False) -> None:
+    """Inference on a simulated cell, the first cell file of the model chosen and the observation named; with ``typed``,
+    its values typed by hand, from that file."""
+    page.read_facts()
+    page.cell_picker.combo.setCurrentIndex(0)
+    page.names.other_name.setText("cell_a")
+    page.typed_tick.setChecked(typed)
+    page.read_facts()
+
+
+def _the_inference_fold(page, *, typed: bool = False, recordings: bool = False) -> list:
+    """The fold of Inference: the posterior draws; then, in a simulated cell's mode, the tick that types the cell's
+    values, and the values under it while it is ticked."""
+    if recordings:
+        return [page.form.rows["n_samples"].widget]
+    return [page.form.rows["n_samples"].widget, page.typed_tick, *(page.values_grid._fields.values() if typed else ())]
+
+
+def _the_recordings_rows(page) -> list:
+    """The main settings of Inference on recordings of a frequency response: the mode, the spontaneous recording, each
+    driven recording's fields and its remove button, the button that adds one and the planner's, the drive amplitude
+    and the recording length."""
+    rows = page.form.rows
+    return [page.modes.stops()[0], rows["recording_spont"].widget.edit, rows["recording_spont"].widget.browse,
+            *page.driven.stops(), page.plan_button, rows["chi_f0_si"].widget, rows["t_obs"].widget]
+
+
+def _inference_names(page) -> list:
+    return [page.names.name, page.names.other_name, page.names.note]
+
+
+def _inference_foot(page, small: bool) -> list:
+    """The foot of Inference with its main button greyed by one or two facts: "Check again"."""
+    return [page.foot.check_again]
+
+
+def _inference_foot_of_four(page, small: bool) -> list:
+    """The foot of Inference with its main button greyed by four facts: "Show all 4" in the low window, and "Check
+    again"."""
+    return [*([page.foot.more] if small else []), page.foot.check_again]
+
+
+#: Inference's shapes, as ``WALKED`` reads them: a simulated cell, its values typed by hand or not, with no posterior in
+#: use, so the main button is greyed; recordings of a frequency response, twelve of them, one in error, which greys it;
+#: and the second mode with no posterior in use, which shows no form.
+WALKED_INFERENCE = {
+    "a simulated cell": (
+        _a_simulated_cell, lambda page: [page.help_button],
+        lambda page: [page.modes.stops()[0], page.cell_picker.combo, page.form.rows["t_obs"].widget],
+        _the_inference_fold, _inference_names, _inference_foot),
+    "a simulated cell, its values typed by hand": (
+        lambda page: _a_simulated_cell(page, typed=True), lambda page: [page.help_button],
+        lambda page: [page.modes.stops()[0], page.cell_picker.combo, page.form.rows["t_obs"].widget],
+        lambda page: _the_inference_fold(page, typed=True), _inference_names, _inference_foot),
+    "recordings, twelve driven recordings, one in error": (
+        _twelve_driven_recordings_one_in_error, lambda page: [page.help_button], _the_recordings_rows,
+        lambda page: _the_inference_fold(page, recordings=True), _inference_names, _inference_foot_of_four),
+    "recordings, no posterior": (
+        lambda page: _on_recordings(page, posterior=False), lambda page: [page.help_button],
+        lambda page: [page.modes.stops()[0]], lambda page: _the_inference_fold(page, recordings=True),
+        _inference_names, _inference_foot),
+}
+
+
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
 #: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
 #: in that shape; the controls of its main settings; those of the fold, while it is open, or None for a shape with no
@@ -3497,6 +3594,7 @@ WALKED = {
     },
     "training": WALKED_TRAINING,
     "checks": WALKED_CHECKS,
+    "infer": WALKED_INFERENCE,
 }
 
 

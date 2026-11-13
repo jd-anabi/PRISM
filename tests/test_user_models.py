@@ -1063,18 +1063,21 @@ def test_apply_icon_never_blank():
 
 
 def test_migrated_glyph_buttons_render():
-    """The migrated buttons (picker refresh, help badge, chi probe remove) never render blank."""
+    """The migrated buttons (picker refresh, help badge, a driven recording's remove button) never render blank."""
     import tempfile
     from PySide6.QtWidgets import QPushButton
-    from core.gui.panels.inference_tabs import _ChiProbeRow
     from core.gui.widgets.artifact_picker import ArtifactPicker
     from core.gui.widgets.help_badge import HelpBadge
+    from tests._fixtures import build_inference
     qt_app()
     ap = ArtifactPicker(tempfile.mkdtemp())
     refresh = ap.findChild(QPushButton, "iconButton")
     assert refresh is not None and refresh.text()
     assert HelpBadge("some help text").text()
-    assert _ChiProbeRow(lambda _row: None).btn_remove.text()        # the last unmigrated glyph button
+    table = build_inference().infer_panel.driven
+    remove = table.remove_button(table.rows()[0])
+    assert remove is not None and not remove.icon().isNull(), "a driven recording's remove button renders blank"
+    assert remove.accessibleName() == "Remove this driven recording"
 
 
 def test_every_icon_name_has_a_real_glyph_in_the_bundled_font():

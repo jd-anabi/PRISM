@@ -1608,8 +1608,13 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     qs.setValue("inference_prior/bounds", "stale_bounds.txt")
     qs.setValue("inference_posterior/num_runs", "1234")
     qs.setValue("inference_tsnpe/num_runs", "4321")
+    # the recording lengths of an older Inference page, one per form, and its drive amplitude: blank at every launch
+    for old in ("sim_tobs", "exp_tobs", "chi_tobs", "chi_f0_si"):
+        qs.setValue(f"inference_infer/{old}", "7.5")
     qs.sync()
     relaunched = build_inference()
+    assert [relaunched.infer_panel.form.rows[key].widget.text() for key in ("t_obs", "chi_f0_si")] == ["", ""], (
+        "an older page's length or drive amplitude was put back")
     assert off_config(relaunched) == {}, f"science knobs restored from an old file: {off_config(relaunched)}"
     assert relaunched.prior_panel._kept_pick == ("", "stale_bounds.txt"), "the bounds file is a selection"
     assert relaunched.prior_panel.typed_tick.isChecked() is False
@@ -1734,13 +1739,12 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
 
 
 def test_consents_are_never_persisted(tmp_path):
-    """A CONSENT is answered per run and never remembered -- both of the window's. The TSNPE tab's "Start
-    a new simulation even if a cache one setting away exists" (the near-miss consent) and the Infer
-    tab's "Run on a different observation" (the narrowed-posterior consent) open at their construction
-    defaults at every launch.
+    """A CONSENT is answered per run and never remembered. The TSNPE tab's "Start a new simulation even if a cache one
+    setting away exists" (the near-miss consent) opens at its construction default at every launch; the Inference page
+    holds no consent at all, so an answer an older page's tick wrote is read by nothing.
 
-    Three legs: no save_settings or restore_settings names a consent; a save after both were flipped
-    writes neither of them; an old PRISM.ini that holds both answers opens at the defaults.
+    Three legs: no save_settings or restore_settings names a consent; a save after the tick was flipped writes none,
+    and the Inference page writes nothing; an old PRISM.ini that holds both answers opens at the defaults.
     """
     from PySide6.QtCore import QSettings
     from core.gui import settings as st
@@ -1750,25 +1754,27 @@ def test_consents_are_never_persisted(tmp_path):
 
     qt_app()
     # (a) the source: executable code only, so a comment explaining the rule cannot trip it
-    for cls, names in ((TSNPEPanel, ("new_run",)), (InferPanel, ("other_obs",))):
+    for cls, names in ((TSNPEPanel, ("new_run",)), (InferPanel, ("other_obs", "accept"))):
         for method in (cls.save_settings, cls.restore_settings):
             src = code_only(method)
             for name in names:
                 assert name not in src, f"{cls.__name__}.{method.__name__} names the consent {name}"
 
-    # (b) both flipped, then saved: the groups are written, and no consent is in them
+    # (b) the tick flipped, then saved: its group is written, and no consent is in it; the Inference page writes nothing
     inf = build_inference()
     inf.tsnpe_panel.new_run.setChecked(True)
-    inf.infer_panel.other_obs.setChecked(True)            # setChecked ignores the disabled state
+    assert not hasattr(inf.infer_panel, "other_obs"), "the Inference page holds a consent of its own"
     out = QSettings(str(tmp_path / "saved.ini"), QSettings.IniFormat)
     for panel in (inf.tsnpe_panel, inf.infer_panel):
         panel.save_settings(out)
     out.sync()
-    for group, names in (("inference_tsnpe", {"new_run"}), ("inference_infer", {"other_obs"})):
-        out.beginGroup(group)
-        written = set(out.childKeys())
-        out.endGroup()
-        assert written and not (written & names), f"[{group}] writes a consent: {sorted(written)}"
+    out.beginGroup("inference_tsnpe")
+    written = set(out.childKeys())
+    out.endGroup()
+    assert written and "new_run" not in written, f"[inference_tsnpe] writes a consent: {sorted(written)}"
+    out.beginGroup("inference_infer")
+    assert out.childKeys() == [], "the Inference page writes at a save"
+    out.endGroup()
 
     # (c) an old PRISM.ini holding both answers: a relaunch opens every box at its default
     qs = st.settings()
@@ -1777,7 +1783,7 @@ def test_consents_are_never_persisted(tmp_path):
     qs.sync()
     inf2 = build_inference()
     assert inf2.tsnpe_panel.new_run.isChecked() is False
-    assert inf2.infer_panel.other_obs.isChecked() is False
+    assert not hasattr(inf2.infer_panel, "other_obs")
 
 
 def test_get_bool_falls_back_on_an_unparseable_value():

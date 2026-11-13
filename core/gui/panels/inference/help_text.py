@@ -13,6 +13,8 @@ HELP = {
               "parameters are inferred and the prior range of each.",
     "cell": "A cell file (Resources/Cells/<model>) whose parameter values are the ground truth — the "
             "simulator uses them to generate a synthetic observation.",
+    "n_samples": "How many draws are taken from the posterior for the estimates, the corner plot and the check of "
+                 "what it predicts. More draws make the percentiles steadier and the run longer.",
     "tobs": "Observation duration in seconds. Longer traces carry more information but cost more to "
             "simulate.",
     "prior": "Load a saved prior from the store, or choose “(from scratch)” to construct a new "
@@ -100,22 +102,6 @@ HELP = {
                 "cost wall-clock. The per-batch splitter already handles the geometry tail, so reach "
                 "for this only if you see splitting on most batches. ⚠ Also part of the checkpoint "
                 "identity.",
-    "infer_mode": "Simulated: infer on a synthetic observation from a cell’s ground truth. "
-                  "Experimental: infer on your own recordings — in χ mode, one passive recording plus "
-                  "single-tone forced ones, each at the frequency it was driven at; otherwise a "
-                  "spontaneous+forced pair, or a single passive recording when the bounds file has no "
-                  "Forcing section.",
-    "infer_other_obs": "A TSNPE posterior is valid only NEAR the observation its region was drawn "
-                       "around: elsewhere the flow has never seen a training row and extrapolates "
-                       "confidently rather than returning the prior. Ticking this runs it anyway and "
-                       "adds \"other_observation\" to the inference's \"accepted\" record, so a number "
-                       "produced this way is marked. A TSNPE posterior that was loaded, not trained in "
-                       "this session, already carries \"truncated\", the acceptance its load was given, "
-                       "so its record reads [\"truncated\", \"other_observation\"]; a round trained in "
-                       "this session records [\"other_observation\"] alone. Simulated mode needs it for "
-                       "ANY TSNPE posterior: re-simulating the same cell draws new noise, so the "
-                       "observation can never carry the region's digest. Greyed out for an amortized "
-                       "posterior, where it would mean nothing.",
     "spont": "Path to the recorded spontaneous/passive (undriven) trace (.csv or .npy; last column "
              "= values).",
     "forced": "Path to the recorded forced (driven) hair-bundle trace (.csv or .npy; last column = "
@@ -157,15 +143,6 @@ HELP = {
                  "is FIXED BY MEASUREMENT (config.CHI_FREQ_BOUNDS) and shown read-only: it fixes the "
                  "encoder's frequency normalisation, so a different band means editing config.py "
                  "deliberately, for every future run, and retraining.",
-    "chi_passive": "The passive (undriven) recording. Its power spectrum sets Ω₀, which anchors the "
-                   "frequency of every driven recording below.",
-    "chi_forced": "One row per single-tone forced recording: the file, and the frequency you "
-                  "ACTUALLY drove it at in Hz. Type the real frequency rather than the nominal "
-                  "one — a lock-in decays like a sinc, so being off by a fraction of 1/T_obs "
-                  "destroys the estimate while every number still looks plausible. Any count from 1 "
-                  "to the posterior's probe slots works, at any frequencies in band: the encoder is "
-                  "permutation-invariant and carries each probe's frequency explicitly. Use "
-                  "'Plan probes…' to see what is in band for this cell and how long each must be.",
     "chi_f0_si": "The physical drive amplitude of the forced recordings, one value for every probe. "
                  "χ is the response over this drive, but an oscillating bundle does not respond "
                  "linearly to it, so the |χ| a recording gives depends on the amplitude too. Training "
@@ -176,8 +153,6 @@ HELP = {
                      "selected file, because the parameter names and their order are fixed by the model "
                      "(simulators bind parameter columns by position) — only the numbers are yours to "
                      "change. Switching to “Edit values” reloads from whichever file is selected.",
-    "cell_source": "Pick a cell file, or edit its ground-truth values directly. As with bounds, direct "
-                   "entry starts from the selected file and lets you change only the numbers.",
     "units": "The units the numbers in your bounds and cell files are written in. This DECLARES what "
              "those numbers mean — it never converts them, so changing it re-interprets your files "
              "rather than rescaling them. Plot axes and unit labels follow this choice. Frequency is "

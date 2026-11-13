@@ -19,11 +19,10 @@ Three shapes of entry:
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
   control in Records, whose list and Note box are not form rows, the model builder's forcing
   fields, whose rows are labelled by parameter name, or a plan, whose file is what is corrected; the
-  sentence quotes the control's own text ("Run on a different observation") and names its places as
-  a box's sentence does.
-* ``None`` for a key the window has no control for: the device and the samples an inference draws,
-  which the window never exposes; the name of the observation an inference makes, which no page asks
-  for; and the settings of the checks that no check's form offers.
+  sentence quotes the control's own text ("Load this posterior") and names its places as a box's
+  sentence does.
+* ``None`` for a key the window has no control for: the device, which the window never exposes, and the
+  settings of the checks that no check's form offers.
 
 Four settings stand only on the Training page, for its own run: the checkpoint cadence, the resume
 policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
@@ -39,11 +38,11 @@ written in one place. ``num_runs`` and ``run_size_cap`` sit in training, in the 
 a check's form with the same label, so their place is a tuple of every one and the sentence names each:
 one place would send a user refused in the narrowing round to training. The narrowing round's row of the second reads
 "(0 = automatic)" after the label, where the Training page has its tick "Automatic". The three drive keys
-are static strings built exactly as the Infer tab builds its rows (``labels.gui_forcing_label``
-with ``config.FORCING_DISPLAY_UNITS``); ``_rebuild_forcing_fields`` keeps deriving its rows from
-the config's forcing names, so a model with an ``amp_y`` or ``offset`` drive shows rows this table
-does not name. ``tests/test_nav_and_gating.py`` pins the key set against the registry both ways,
-the places against the built window, and the sentences verbatim.
+are static strings built exactly as the Inference page builds its drive's rows (``labels.gui_forcing_label``
+with ``config.FORCING_DISPLAY_UNITS``); the page makes a row for each forcing name of the configuration
+in use, so a model with an ``amp_y`` or ``offset`` drive shows rows this table does not name.
+``tests/test_nav_and_gating.py`` pins the key set against the registry both ways, the places against the
+built window, and the sentences verbatim.
 """
 from core import config
 from core.Helpers import labels
@@ -56,7 +55,7 @@ _FIXED = "Fixed by measurement: it cannot be changed in the window."
 
 
 def _drive(name: str) -> str:
-    """The Infer tab's own row label for a forcing parameter (infer_tab._rebuild_forcing_fields)."""
+    """The Inference page's own row label for a forcing parameter of the drive."""
     return labels.gui_forcing_label(name, config.FORCING_DISPLAY_UNITS[name])
 
 
@@ -87,7 +86,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "n_cal": ("checks", "Test datasets"),
     "cal_n_scales": ("checks", "Operating points"),
     "num_posterior_samples": ("checks", "Samples per dataset"),
-    "n_samples": None,
+    "n_samples": ("infer", "Posterior draws"),
     # the prior sweep
     "num_iterations": ("prior", "Sweep rounds"),
     "sweep_batch": ("prior", "Candidates per round"),
@@ -108,16 +107,17 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # consents and names
     "accept_truncated": (f"Answer 'Load this posterior' in the question that loading a posterior from a narrowing "
                          f"round asks {_in('training')}."),
-    "accept_other_observation": f"Tick 'Run on a different observation' {_in('infer')}.",
-    # A name is typed in two boxes, and the sentence lists both: 'Name' on step 2 names the prior a build makes,
-    # 'Name' on step 3 the posterior a training makes.
-    "name": f"Choose another name in 'Name' {_in(('prior', 'training'))}.",
-    # the observation an inference makes: no page names it, so no control answers its name
-    "observation_name": None,
+    "accept_other_observation": f"Answer the question that 'Run inference' asks {_in('infer')}.",
+    # A name is typed in three boxes, and the sentence lists them: 'Name' on step 2 names the prior a build makes,
+    # 'Name' on step 3 the posterior a training makes, and 'Name of the inference' on step 5 the inference.
+    "name": (f"Choose another name in 'Name' {_in(('prior', 'training'))}, or in 'Name of the inference' "
+             f"{_in('infer')}."),
+    # the observation an inference makes, named beside the inference
+    "observation_name": ("infer", "Name of the observation"),
     # Records. Sentences, not (place, label), although Records is a place: the list is not a box, and
     # the Note box sits in its action row, not in a form row the read-back pin reads.
     "artifact": f"Select an artifact in the list {_in('records')}.",
-    "note": f"Edit it in the Note box {_in('records')}.",
+    "note": f"Change it in 'Note' {_in('infer')}, or in the Note box {_in('records')}.",
     # inputs. ``units`` is NOT widened -- one units control exists in the whole application (the choice of step 1);
     # everywhere else the units file is resolved from the model and there is no control to name.
     "bounds": ("prior", "Bounds file"),
@@ -128,14 +128,13 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "prior": ("prior", "Saved prior"),
     "posterior": ("training", "Saved posterior"),
     # recordings and the drive
-    "recording_spont": (f"Select the passive recording {_in('infer')} (the 'Spontaneous' box, or the "
-                        "'Passive' box for a χ observation)."),
-    "recording_forced": ("infer", "Forced"),
-    "recording_probe": f"Pick the probe's recording in the χ probe table {_in('infer')}.",
+    "recording_spont": ("infer", "Spontaneous recording"),
+    "recording_forced": ("infer", "Driven recording"),
+    "recording_probe": ("infer", "Driven recordings"),
     "drive_amplitude": ("infer", _drive("amp")),
     "drive_frequency": ("infer", _drive("freq")),
     "drive_phase": ("infer", _drive("phase")),
-    "chi_f0_si": ("infer", "Drive F₀ (N)"),
+    "chi_f0_si": ("infer", "Drive amplitude"),
     # the kind of observation, its driven recordings, and the rotation
     "chi_mode": ("model", "Kind of observation"),
     "chi_n_freqs": ("model", "Driven recordings per observation"),
@@ -201,6 +200,7 @@ ON_THIS_PAGE: dict[str, str] = {
     "accept_truncated": "Answer 'Load this posterior' in the question that loading a posterior from a narrowing round "
                         "asks on this page.",
     "note": "Change it in 'Note' on this page.",
+    "accept_other_observation": "Answer the question that the start button asks on this page.",
 }
 
 

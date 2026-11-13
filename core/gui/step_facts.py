@@ -780,6 +780,184 @@ def narrowed_question(label: str, observation: str) -> tuple:
     return NARROWED_TITLE, NARROWED_TEXT.format(label, around), NARROWED_THEN, LOAD_POSTERIOR_WORDS
 
 
+# ── the fifth step, Inference ──
+#: What the table of driven recordings asks before it drops a row that holds a file or a frequency typed.
+INFER_REMOVE = RemoveQuestion("Remove this driven recording?",
+                              "The file and the frequency typed in this row go with it.", "Keep it", "Remove it")
+#: What the posterior in use reads, by the kind of observation, as "Before you start" names it.
+INFER_READS = {"chi": "frequency response, up to {} driven recordings",
+               "forced": "a spontaneous recording and one driven recording",
+               "spontaneous": "a spontaneous recording only"}
+INFER_USES_TEXT = "Posterior {}: {}."
+INFER_NAMED_TEXT = "Posterior {}."
+FREQUENCY_WORDS = "frequency response"
+INFER_NARROWED_TEXT = "This posterior was narrowed around the observation {} and is valid only near it."
+CELL_PROBLEM_TEXT = "This cell does not fit the bounds file in use: {}."
+CELL_BLOCKS = "the cell does not fit"
+ABOVE_TEXT = "{} s is above the {} s the posterior was trained on; it may extrapolate."
+BELOW_TEXT = "{} s is below the {} s the posterior was trained on; it may extrapolate."
+UNCHECKED_TEXT = ("The cell is not checked against what training saw: the prior in use is not the one this posterior "
+                  "was trained with.")
+SLOTS_TEXT = "This posterior takes at most {} driven recordings; remove {}."
+SLOTS_BLOCKS = "too many driven recordings"
+NEEDS_A_POSTERIOR = "Needs a posterior: train one in step 3, or load a saved one."
+#: What a row left blank says, by its field key, with the words beside the button.
+INFER_BLANKS = {"cell": ("Choose a cell file.", "no cell file is chosen"),
+                "t_obs": ("Type a recording length.", "no recording length is typed"),
+                "recording_spont": ("Choose the spontaneous recording.", "no spontaneous recording is chosen"),
+                "recording_forced": ("Choose the driven recording.", "no driven recording is chosen"),
+                "recording_probe": ("Add a driven recording.", "no driven recording is added"),
+                "driven_row": ("Every driven recording needs its file and the frequency it was driven at.",
+                               "a driven recording is not complete"),
+                "chi_f0_si": ("Type the drive amplitude.", "no drive amplitude is typed"),
+                "drive_amplitude": ("Type the drive's amplitude.", "the drive is not complete"),
+                "drive_frequency": ("Type the drive's frequency.", "the drive is not complete"),
+                "drive_phase": ("Type the drive's phase.", "the drive is not complete")}
+#: The question a narrowed posterior asks before every inference, in both modes: its title, its sentence, what it says
+#: beneath for a simulated cell and for recordings, what it says last, and the answer that runs.
+INFER_NARROWED_TITLE = "Run on another observation?"
+INFER_NARROWED_TEXT = "This posterior is valid only near the observation it was narrowed around, {}."
+SIMULATED_NEVER_TEXT = "A cell simulated now has new noise, so it is never that observation."
+SAME_RECORDINGS_TEXT = ("If these are the same recordings with the same description, PRISM finds them to be that "
+                        "observation and the inference runs as on it; your answer is then not recorded, though the "
+                        "observation is saved again as a new record.")
+EXTRAPOLATION_TEXT = "Elsewhere the result is an extrapolation. The inference records that you accepted this."
+RUN_ANYWAY = "Run inference anyway"
+#: A driven recording's reading under its row, by what the engine will do with it: used whole, cut at the lock-in
+#: limit, too short to be used, refused; the lead word stands before each.
+USED_TEXT = "{} drive cycles."
+CUT_TEXT = "{} drive cycles: only the first {} s are used."
+TOO_SHORT_TEXT = "Unusable: {} drive cycles, fewer than the {} needed. Record at least {} s at this frequency."
+#: What "Plan the driven recordings…" says on the page: the cell's own frequency and the band, or why it cannot plan.
+PLANNED_TEXT = "The cell's own frequency is {} Hz; the band runs from {} to {} Hz."
+PLAN_NEEDS_LENGTH_TEXT = "Type a recording length to plan the driven recordings."
+PLAN_NEEDS_SPONTANEOUS_TEXT = "Choose the spontaneous recording to plan the driven recordings."
+NOT_MEASURED_TEXT = "The cell's own frequency could not be measured from the spontaneous recording: {}."
+
+
+#: What the fifth step holds, said under its label: the observation in use, by where it came from and its length.
+OBSERVATION_HELD = {"simulated": "A simulated cell, {} s. Saved as a record.",
+                    "experimental": "Your own recordings, {} s. Saved as a record."}
+OBSERVATION_SAVED_TEXT = "Saved as a record."
+NO_OBSERVATION_TEXT = "Run an inference to make an observation."
+
+
+def observation_in_use(label: str, body) -> tuple[str, str]:
+    """What the fifth step holds, as "In use" says it: the observation's label, and from its record where it came from
+    and its length; ``("", ...)`` with what the step waits for while it holds none. What its record does not hold is
+    left out."""
+    if not label:
+        return "", NO_OBSERVATION_TEXT
+    source = body.get("source") if isinstance(body, dict) else None
+    source = source if isinstance(source, dict) else {}
+    said = OBSERVATION_HELD.get(source.get("kind"))
+    try:
+        seconds = float(source.get("T_obs_s"))
+    except (TypeError, ValueError):
+        seconds = None
+    if said is None or seconds is None or not math.isfinite(seconds):
+        return label, OBSERVATION_SAVED_TEXT
+    return label, said.format(f"{seconds:g}")
+
+
+def _cycles(count: float) -> str:
+    """Drive cycles as a reading says them: to a tenth below ten, whole above."""
+    return f"{count:.1f}" if count < 10 else f"{count:.0f}"
+
+
+def _sentence(words: str) -> str:
+    """The engine's own words as one sentence: its first letter up, a full stop at its end."""
+    words = str(words).strip()
+    if not words:
+        return ""
+    words = words[0].upper() + words[1:]
+    return words if words.endswith(".") else f"{words}."
+
+
+def driven_reading(verdict, *, least_cycles: float) -> tuple[str, str]:
+    """What the line under a driven recording says of the engine's verdict on it, ``verdict`` a ``chi.probe_verdict``:
+    its marker and the sentence after the marker's lead word. Used whole: how many drive cycles it gives. Cut at the
+    lock-in limit: the cycles used and how many seconds of it. Too short: how many it gives against the
+    ``least_cycles`` needed, and the length it needs at its frequency. Refused: the engine's reason, as an error. Read
+    from the verdict's numbers, never from its reason, but for a refusal."""
+    action = getattr(verdict, "action", "")
+    cycles = float(getattr(verdict, "cycles", 0.0) or 0.0)
+    if action == "use":
+        return "fine", USED_TEXT.format(_cycles(cycles))
+    if action == "truncate":
+        return "fine", CUT_TEXT.format(_cycles(cycles), f"{float(verdict.max_seconds):.3g}")
+    if action == "mask":
+        return "warn", TOO_SHORT_TEXT.format(_cycles(cycles), f"{least_cycles:g}", f"{float(verdict.min_seconds):.3g}")
+    return "err", _sentence(getattr(verdict, "reason", "")) or "This driven recording cannot be used."
+
+
+def inference_uses(label: str, kind, slots) -> str:
+    """What "Before you start" says the inference runs on: the posterior in use by its label and what it reads; "" while
+    there is no posterior in use."""
+    if not label:
+        return ""
+    reads = INFER_READS.get(kind)
+    if reads is None:
+        return INFER_NAMED_TEXT.format(label)
+    if kind == "chi" and _whole(slots) is None:
+        return INFER_USES_TEXT.format(label, FREQUENCY_WORDS)
+    return INFER_USES_TEXT.format(label, reads.format(_whole(slots)))
+
+
+def inference_facts(*, mode: str = "simulated", uses: str = "", narrowed_words: str = "", cell_problem: str = "",
+                    length=None, trained=None, checked=None, slots=None, rows: int = 0, blanks: Sequence = (),
+                    others_pending: Sequence[str] = (), name_facts: Sequence[Fact] = (),
+                    field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+    """The facts of the fifth step, in the order of its table, those that block first. ``uses``: what the inference runs
+    on, "" while no posterior is in use, which blocks: nothing can be inferred. ``narrowed_words``: the observation a
+    narrowed posterior was narrowed around, by its label ("" for a posterior that is not). ``cell_problem``: why the
+    cell chosen does not fit the configuration in use, which blocks until another is chosen. ``length``, the recording length
+    typed, against ``trained``, the shortest and the longest the posterior was trained on, in seconds: outside them it
+    may extrapolate, which never blocks. ``checked``: whether the cell is checked against what training saw (None where
+    nothing is checked, in the second mode). ``rows`` driven recordings against the posterior's ``slots`` (None where
+    it reads none): more block, saying how many to remove. ``blanks``: the rows left blank, each by its field key, or as
+    a sentence with its words beside the button. Then the other steps' changes not applied, the names', the fields' and
+    the plan's facts. Reads nothing, and raises on nothing a reading or a session holds."""
+    facts = []
+    if uses:
+        facts.append(Fact("info", uses))
+    else:
+        facts.append(Fact("lock", NEEDS_A_POSTERIOR, NEEDS_A_POSTERIOR_BLOCKS))
+    if narrowed_words:
+        facts.append(Fact("warn", INFER_NARROWED_TEXT.format(narrowed_words)))
+    if mode == "simulated" and cell_problem:
+        facts.append(Fact("err", cell_problem, CELL_BLOCKS))
+    try:
+        low, high = (float(one) for one in trained) if trained is not None else (None, None)
+        typed = float(length) if length is not None else None
+    except (TypeError, ValueError):
+        low = high = typed = None
+    if typed is not None and typed > 0 and low is not None and high is not None:
+        if typed > high:
+            facts.append(Fact("warn", ABOVE_TEXT.format(f"{typed:g}", f"{high:g}")))
+        elif typed < low:
+            facts.append(Fact("warn", BELOW_TEXT.format(f"{typed:g}", f"{low:g}")))
+    if mode == "simulated" and uses and checked is False:
+        facts.append(Fact("info", UNCHECKED_TEXT))
+    most = _whole(slots)
+    if mode == "recordings" and most is not None and rows > most:
+        facts.append(Fact("err", SLOTS_TEXT.format(most, rows - most), SLOTS_BLOCKS))
+    for blank in blanks:
+        sentence, blocks = INFER_BLANKS[blank] if isinstance(blank, str) else blank
+        facts.append(Fact("err", sentence, blocks))
+    facts += [Fact("warn", said) for said in others_pending if said]
+    return ordered((*facts, *name_facts, *field_facts, *plan_lines))
+
+
+def narrowed_question_words(*, observation_words: str, simulated: bool) -> tuple[str, str, str, str]:
+    """The question a narrowed posterior asks before every inference: its title, its sentence, naming the observation it
+    was narrowed around by ``observation_words``, what it says beneath for a simulated cell or for recordings, and the
+    answer that runs the inference all the same ("Cancel" is the other)."""
+    beneath = f"{SIMULATED_NEVER_TEXT if simulated else SAME_RECORDINGS_TEXT} {EXTRAPOLATION_TEXT}"
+    return (INFER_NARROWED_TITLE, INFER_NARROWED_TEXT.format(observation_words or NO_OBSERVATION_WORDS), beneath,
+            RUN_ANYWAY)
+
+
 # ── the choice of a kept training that matches ──
 NEW_TRAINING_TITLE = "Start a new training?"
 ONE_KEPT_TEXT = "1 kept training matches these settings and can be resumed:"

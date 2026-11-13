@@ -406,8 +406,8 @@ def test_posterior_from_scratch_is_gated_on_a_prior():
 
 
 def test_inference_pickers_repoint_from_draft_and_config():
-    """The Prior tab's BOUNDS picker follows the applied model (new_draft), and the Infer tab's CELL
-    picker follows the BUILT config's model (install_config) -- neither tab has its own model combo."""
+    """The Prior page's list of bounds files follows the applied model (new_draft), and the Inference page's list of
+    cell files follows the model in use as the page reads -- neither page has its own list of models."""
     from core import config
     from core.gui.session import ConfigDraft
 
@@ -429,111 +429,119 @@ def test_inference_pickers_repoint_from_draft_and_config():
         observation_mode = "spontaneous"
 
     inf.install_config(Cfg())
+    inf.infer_panel.read_facts()                 # the page reads the model in use as it reads, never handed it
     assert inf.infer_panel.cell_picker.base_path.name == "hopf"
     assert inf.session.draft is not None, "install_config must not wipe the draft/session"
 
 def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots():
-    """The probe table has variable rows. The core has always accepted 1..chi_k_pad probes at arbitrary
-    frequencies; the GUI was the only thing forcing a fixed grid. Rows must be addable and removable,
-    and the cap must be chi_k_pad -- which is FROZEN into the trained artifact, so exceeding it is not
-    a soft limit."""
-
+    """The table of driven recordings has rows of any number: the engine takes from one driven recording to the
+    posterior's slots, at any frequencies. It opens with one blank row. "Add a driven recording" stays live past the
+    slots, which are frozen into the trained posterior, and the page then says how many to remove and greys the start;
+    a row removed is gone; and a configuration taken later draws the fact again, never the rows."""
     qt_app()
     inf = build_inference(cfg=_chi_cfg(k=3, pad=5))
+    inf.session.posterior = _posterior_stub()
+    inf.refresh_gates()
     panel = inf.infer_panel
-    assert len(panel._chi_forced_fields) == 3, "should seed chi_n_freqs rows when empty"
+    panel.modes.set_value("recordings")
+    table = panel.form.rows["recording_probe"].widget
+    assert table is panel.driven and len(table.rows()) == 1, "the table opens with one blank row"
+    for _ in range(4):
+        table.add_row()
+    assert not any("at most" in fact.sentence for fact in panel.facts_from_form())
+    table.add_row()
+    assert len(table.rows()) == 6 and table.add_button.isEnabled(), "the table refused a row past the slots"
+    said = [fact.sentence for fact in panel.facts_from_form()]
+    assert "This posterior takes at most 5 driven recordings; remove 1." in said, said
+    panel.redraw()
+    assert panel.foot.reason.text().startswith("Cannot start yet: too many driven recordings"), panel.foot.reason.text()
+    table.remove(table.rows()[0])                            # a blank row goes at once, asking nothing
+    assert len(table.rows()) == 5
+    assert not any("at most" in fact.sentence for fact in panel.facts_from_form())
+    inf.install_config(_chi_cfg(k=3, pad=2))
+    assert len(table.rows()) == 5, "a configuration taken later dropped rows"
+    assert "This posterior takes at most 2 driven recordings; remove 3." in [
+        fact.sentence for fact in panel.facts_from_form()]
 
-    panel._add_chi_probe()
-    panel._add_chi_probe()
-    assert len(panel._chi_forced_fields) == 5
-    panel._add_chi_probe()                                   # over capacity
-    assert len(panel._chi_forced_fields) == 5, "must refuse to exceed chi_k_pad slots"
 
-    panel._remove_chi_probe(panel._chi_forced_fields[0])
-    assert len(panel._chi_forced_fields) == 4
-
-def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency():
+def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency(monkeypatch):
     """The one-widget-per-row invariant. Parallel path/frequency lists let a MIDDLE deletion pair
     recording k with frequency k+1 -- silent, because a lock-in at the wrong frequency decays like a
-    sinc and simply returns a smaller number. Delete from the middle and check the survivors."""
+    sinc and simply returns a smaller number. Delete from the middle, its question answered, and check the survivors."""
+    from tests._dialogs import choose
 
     qt_app()
     inf = build_inference(cfg=_chi_cfg(k=4))
-    panel = inf.infer_panel
-    for i, row in enumerate(panel._chi_forced_fields):
+    table = inf.infer_panel.driven
+    rows = [*table.rows(), *(table.add_row() for _ in range(3))]
+    for i, row in enumerate(rows):
         row.path.edit.setText(f"/tmp/rec{i}.csv")
-        row.freq.setText(str(1.0 + i))
-
-    panel._remove_chi_probe(panel._chi_forced_fields[1])      # delete from the MIDDLE
-    pairs = [r.pair() for r in panel._chi_forced_fields]
+        row.hz.setText(str(1.0 + i))
+    choose(monkeypatch, words="Remove it")
+    table.remove(rows[1])                                    # delete from the MIDDLE
+    pairs = table.value_or_none()
     assert pairs == [("/tmp/rec0.csv", 1.0), ("/tmp/rec2.csv", 3.0), ("/tmp/rec3.csv", 4.0)], pairs
 
+
 def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency(tmp_path):
-    """Two constraints on the probe table's variable rows in one place, because both are about data
-    the GUI cannot regenerate.
+    """Two constraints on the table's rows in one place, because both are about data the window cannot make again.
 
-    PRESERVATION: rows carry hand-typed drive frequencies and browsed paths -- a record of a bench
-    session that already happened. Rebuilding the config (to fix a bounds file, say) must not discard
-    them, unlike the forcing rows, which ARE derivable from the config.
+    PRESERVATION: rows carry typed drive frequencies and chosen paths -- a record of a bench session that already
+    happened. A configuration taken later must not discard them.
 
-    BLANK FREQUENCY: a SEEDED row is blank and is said to be blank. It used to arrive holding "0.0"
-    -- FloatField's own default -- and be refused as "must be a positive number (got 0)", a sentence
-    about a value nobody entered, while 0 Hz is a genuine DC probe the lock-in would happily attempt.
-    A TYPED zero keeps that sentence, because a zero somebody typed is a different state from a box
-    nobody filled.
+    BLANK FREQUENCY: a row left blank says so, under its row, in the window's words; a TYPED zero is a different state,
+    a zero somebody typed, and says that 0 Hz cannot be used. Either greys the start; and at the press the engine's own
+    rule refuses the blank under the table's key, dispatching nothing.
     """
-
     qt_app()
     inf = build_inference(cfg=_chi_cfg(k=2))
-    panel = inf.infer_panel
-    panel._chi_forced_fields[0].path.edit.setText("/tmp/keep.csv")
-    panel._chi_forced_fields[0].freq.setText("2.5")
-
-    inf.install_config(_chi_cfg(k=2))                         # rebuild
-    assert len(panel._chi_forced_fields) == 2, "a rebuild must not add or drop rows"
-    assert panel._chi_forced_fields[0].pair() == ("/tmp/keep.csv", 2.5), \
-        "a rebuild destroyed hand-entered probe data"
-
-    # Row 2 was SEEDED and never typed into: its box is empty and it is reported as blank.
-    assert panel._chi_forced_fields[1].freq.text() == "", panel._chi_forced_fields[1].freq.text()
-    probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
-    assert "probe 2: drive frequency is blank" in probs, probs
-    assert not any("got 0" in p for p in probs), probs
-    assert not any("probe 1" in p for p in probs), probs
-
-    # A zero the user TYPED is a different state, and keeps its own sentence.
-    panel._chi_forced_fields[1].freq.setText("0")
-    probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
-    assert any("probe 2" in p and "positive" in p and "got 0" in p for p in probs), probs
-    assert not any("is blank" in p for p in probs), probs
-
-    # ...and at the click, the yellow box's sentence is the blank one again
-    panel._chi_forced_fields[1].freq.setText("")
     inf.session.posterior = _posterior_stub()
+    inf.refresh_gates()
+    panel = inf.infer_panel
+    panel.modes.set_value("recordings")
+    table = panel.driven
+    first, second = table.rows()[0], table.add_row()
+    first.path.edit.setText("/tmp/keep.csv")
+    first.hz.setText("2.5")
+    inf.install_config(_chi_cfg(k=2))                         # another configuration taken
+    assert table.rows() == [first, second], "a configuration taken later added or dropped rows"
+    assert first.value() == ("/tmp/keep.csv", 2.5), "a configuration taken later lost a row's data"
+
+    second.path.edit.setText("/tmp/second.csv")
+    assert second.hz.text() == "", second.hz.text()
+    panel.redraw()
+    assert table.reading_of(second) == ("err", "Error. Type the frequency this recording was driven at.")
+    assert table.reading_of(first) == ("", "")
+    said = [fact.sentence for fact in panel.facts_from_form()]
+    assert "Every driven recording needs its file and the frequency it was driven at." in said, said
+
+    second.hz.setText("0")                                    # a zero the person TYPED keeps its own sentence
+    panel.redraw()
+    assert table.reading_of(second) == ("err", "Error. The frequency must be greater than 0 Hz.")
+
+    # ...and at the press, the engine's rule refuses a blank under the table's key
+    second.hz.setText("")
     refused, sent = [], {}
     panel._refusal = lambda exc: refused.append(exc)
     panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn)
     for name in ("passive.npy", "probe0.npy", "probe1.npy"):
         (tmp_path / name).touch()
-    panel.infer_mode.setCurrentIndex(1)                          # experimental: the chi page
-    panel.chi_tobs.setText("2.0")
-    panel.chi_f0_si.setText("1.0")
-    panel.chi_spont.edit.setText(str(tmp_path / "passive.npy"))
-    for i, row in enumerate(panel._chi_forced_fields):
+    panel.form.rows["t_obs"].widget.setText("2.0")
+    panel.form.rows["chi_f0_si"].widget.setText("1.0")
+    panel.form.rows["recording_spont"].widget.edit.setText(str(tmp_path / "passive.npy"))
+    for i, row in enumerate(table.rows()):
         row.path.edit.setText(str(tmp_path / f"probe{i}.npy"))
-    panel._infer()
+    panel.main_pressed()
     assert sent == {} and len(refused) == 1 and refused[-1].field == "recording_probe", (sent, refused)
-    assert "probe 2: drive frequency is blank" in refused[-1].message, refused[-1].message
-    assert "got 0" not in refused[-1].message, refused[-1].message
+    assert "is blank" in refused[-1].message and "got 0" not in refused[-1].message, refused[-1].message
 
 
 def test_a_new_probe_row_starts_blank_and_floatfield_accepts_none():
     """``FloatField(None)`` is an EMPTY box; every other default still shows its number, including the
-    several call sites that hand it a pre-formatted string. Nothing persists a probe row
-    (infer_tab.save_settings says so), so this touches only the in-session seed -- and a seed the user
-    has to fill is the point: the frequency is entered, never derived (see _ChiProbeRow's docstring),
-    because the frequencies a bench achieves are not exactly mult_k * Omega_0."""
-    from core.gui.panels.inference.rows import _ChiProbeRow
+    several call sites that hand it a pre-formatted string. A driven recording's frequency is entered, never derived,
+    because the frequencies a bench achieves are not exactly mult_k * Omega_0: a new row's box starts blank, and a row
+    given a value shows it."""
+    from core.gui.panels.inference.infer_tab import _Driven
     from core.gui.widgets.labeled_inputs import FloatField
     from tests._fixtures import qt_app
 
@@ -544,84 +552,96 @@ def test_a_new_probe_row_starts_blank_and_floatfield_accepts_none():
     assert FloatField(0.0).text() == "0.0" and FloatField(2.5).text() == "2.5"
     assert FloatField("0.33").text() == "0.33", "the string call sites (config/prior/posterior tabs) stand"
 
-    assert _ChiProbeRow(lambda _row: None).freq.text() == ""
-    assert _ChiProbeRow(lambda _row: None, 7.5).freq.text() == "7.5", "an explicit seed still seeds"
+    assert _Driven().hz.text() == "" and _Driven().value() == (None, None)
+    given = _Driven()
+    given.set_value(("/tmp/a.npy", 7.5))
+    assert given.hz.text() == "7.5" and given.value() == ("/tmp/a.npy", 7.5), "a value handed still shows"
 
     inf = build_inference(cfg=_chi_cfg(k=3))
-    panel = inf.infer_panel
-    assert len(panel._chi_forced_fields) == 3
-    assert [r.freq.text() for r in panel._chi_forced_fields] == ["", "", ""]
-    row = panel._add_chi_probe()
-    assert row is not None and row.freq.text() == "" and row.freq.value_or_none() is None
-    assert panel._add_chi_probe(12.25).freq.text() == "12.25"
+    table = inf.infer_panel.driven
+    assert [row.hz.text() for row in table.rows()] == [""], "the table opens with one blank row"
+    row = table.add_row()
+    assert row.hz.text() == "" and row.hz.value_or_none() is None
 
 
-def test_the_planner_and_the_probe_row_give_a_blank_frequency_one_sentence():
-    """One state had two wordings a user could meet minutes apart: the tab's ``probe N: drive
-    frequency is blank`` at the click, and "Plan probes…"'s ``no frequency entered``. The tab's is the
-    one, which also makes the planner's own "Filled N blank frequency box(es)" line literally true.
-    The TYPED-ZERO sentences are deliberately untouched at both layers -- the tab's "(got 0)" and
-    chi.probe_verdict's "must be finite and positive, got 0.0 Hz".
-
-    Pinned on the row's real output and on the planner's PARSED source (code_only, so the comments in
-    that region cannot answer for the code). The planner's branch is defensive: the nominal-grid fill
-    a few lines above it covers every blank box, so nothing reaches it unless the grid comes back
-    shorter than the list of blanks."""
-    from core.gui.panels.inference.infer_tab import InferPanel
-    from core.gui.panels.inference.rows import _ChiProbeRow
+def test_the_planner_and_a_row_give_a_blank_frequency_one_sentence(tmp_path, monkeypatch):
+    """One state, one sentence: a driven recording whose frequency is blank says "Type the frequency this recording was
+    driven at." under its row, before "Plan the driven recordings…" and after it, when the planner had no frequency of
+    the band to fill it with. A TYPED zero keeps its own sentence under the row, and the engine's own for it is
+    untouched."""
+    import torch
     from core.SBI import chi as chi_mod
-    from tests._fixtures import code_only, qt_app
+    from tests._fixtures import code_only
+
+    assert "must be finite and positive, got" in code_only(chi_mod.probe_verdict), "the engine's own words moved"
+    panel = _planned_page(tmp_path, monkeypatch)
+    table = panel.driven
+    blank, zero = table.rows()[0], table.add_row()
+    for row in (blank, zero):
+        row.path.edit.setText(str(tmp_path / "spont.npy"))
+    zero.hz.setText("0")
+    panel.redraw()
+    before = table.reading_of(blank)
+    assert before == ("err", "Error. Type the frequency this recording was driven at."), before
+    monkeypatch.setattr(chi_mod, "chi_multipliers", lambda n_freqs, bounds: torch.zeros(0))
+    panel.plan_button.click()
+    assert table.reading_of(blank) == before, "the planner says a blank frequency in words of its own"
+    assert table.reading_of(zero) == ("err", "Error. The frequency must be greater than 0 Hz.")
+
+
+def _planned_page(tmp_path, monkeypatch):
+    """Inference on recordings of a frequency response, a stand-in configuration and posterior in use, a spontaneous
+    recording chosen and a length typed, ready for "Plan the driven recordings…": the recording read as nothing, the
+    cell's own frequency 10 Hz, its band 3.7 to 37 Hz, the band's frequencies 0.5 and 2 times the cell's, and every
+    verdict of the engine's that a recording is used whole at 23 drive cycles."""
+    from core import config
+    from core.Helpers import file_manager
+    from core.SBI import chi as chi_mod
 
     qt_app()
-    blank = _ChiProbeRow(lambda _row: None).problems(0)
-    assert blank == ["probe 1: no recording selected", "probe 1: drive frequency is blank"], blank
+    cfg = _chi_cfg(k=2)
+    cfg.dt_exp, cfg.hw = 0.001, config.cpu_device()
+    cfg.get_unit_conversion_factor = lambda unit: 1.0
+    inf = build_inference(cfg=cfg)
+    inf.session.posterior = _posterior_stub()
+    inf.refresh_gates()
+    panel = inf.infer_panel
+    panel.modes.set_value("recordings")
+    spont = tmp_path / "spont.npy"
+    spont.touch()
+    panel.form.rows["recording_spont"].widget.edit.setText(str(spont))
+    panel.form.rows["t_obs"].widget.setText("4.5")
+    monkeypatch.setattr(file_manager, "load_experimental_data", lambda path, dtype=None: torch.zeros(16))
+    monkeypatch.setattr(chi_mod, "peak_freq", lambda trace, dt: torch.tensor(10.0))
+    monkeypatch.setattr(chi_mod, "band_hz", lambda cfg, own: (3.7, 37.0))
+    monkeypatch.setattr(chi_mod, "chi_multipliers", lambda n_freqs, bounds: torch.linspace(0.5, 2.0, n_freqs))
+    monkeypatch.setattr(chi_mod, "probe_verdict",
+                        lambda cfg, own, hz, samples: chi_mod.ProbeVerdict("use", "", 23.0, samples, 0.2, 2.0))
+    return panel
 
-    src = code_only(InferPanel._plan_chi_probes)
-    assert "drive frequency is blank" in src, "the planner still has a wording of its own for a blank"
-    assert "no frequency entered" not in src, "the planner's old wording is still there"
-    assert "Filled" in src and "blank frequency box" in src
 
-    # the typed-zero sentences, both layers, unchanged
-    typed = _ChiProbeRow(lambda _row: None, 0.0).problems(0)
-    assert "probe 1: drive frequency must be a positive number (got 0)" in typed, typed
-    assert "must be finite and positive, got" in code_only(chi_mod.probe_verdict)
-
-
-def test_the_planner_fills_a_blank_frequency_box_and_never_a_typed_zero():
-    """A typed zero is a DIFFERENT STATE from a box nobody filled, and the row's own ``problems()``
-    keeps them apart -- but the planner's auto-fill selected the rows to overwrite with
-    ``_probe_frequency(row) is None``, which maps a NON-POSITIVE box to None too. So "Plan probes…"
-    silently replaced a typed ``0`` with a suggested grid frequency and counted it among the "blank
-    boxes filled", while the comment directly above it reads "a typed frequency is a record of what
-    the bench actually did".
-
-    That was invisible while every seeded row held ``0``; making the seed blank is what turned it
-    into a user-visible divergence -- the two layers now disagreed about the same box. The predicate
-    asks the blank-aware accessor instead, so a typed zero is left alone and refused as a zero, as
-    the row's own ``problems()`` refuses it.
-
-    Tested on the predicate rather than through ``_plan_chi_probes``, which needs a built config and
-    a measured Ω₀ from a real recording: what changed is which rows are SELECTED."""
-    from core.gui.panels.inference.infer_tab import _blank_frequency
-    from core.gui.panels.inference.rows import _ChiProbeRow
-    from tests._fixtures import qt_app
-
-    qt_app()
-    blank = _ChiProbeRow(lambda _row: None)                     # a seeded row: an empty box
-    typed_zero = _ChiProbeRow(lambda _row: None, 0.0)           # a DC probe, or a typo for 10
-    real = _ChiProbeRow(lambda _row: None, 42.0)
-    half_typed = _ChiProbeRow(lambda _row: None)
-    half_typed.freq.setText("-")                                # mid-typing: parses as nothing
-
-    assert _blank_frequency(blank) is True
-    assert _blank_frequency(half_typed) is True, "a box that parses as nothing is still unfilled"
-    assert _blank_frequency(typed_zero) is False, \
-        "a typed zero is a record of what the bench did and must not be overwritten"
-    assert _blank_frequency(real) is False
-    assert typed_zero.freq.value_or_none() == 0.0, "the box still holds what was typed"
-
-    # ... and the row still REFUSES that zero, instead of a silent fill.
-    assert "probe 1: drive frequency must be a positive number (got 0)" in typed_zero.problems(0)
+def test_the_planner_fills_a_blank_frequency_box_and_never_a_typed_zero(tmp_path, monkeypatch):
+    """A typed zero is a DIFFERENT STATE from a box nobody filled: "Plan the driven recordings…" fills only the boxes
+    nobody filled, a half-typed one among them, from the band, and leaves a typed zero and a typed frequency as they
+    are: a typed frequency is a record of what the bench actually did. The zero is then still refused under its row, as
+    the row refuses it, the rows read whole are said so, and the cell's own frequency and the band are said on the
+    page."""
+    panel = _planned_page(tmp_path, monkeypatch)
+    table = panel.driven
+    blank, zero, typed, half = table.rows()[0], table.add_row(), table.add_row(), table.add_row()
+    for row in (blank, zero, typed, half):
+        row.path.edit.setText(str(tmp_path / "spont.npy"))
+    zero.hz.setText("0")                                        # a DC probe, or a typo for 10
+    typed.hz.setText("42")
+    half.hz.setText("-")                                        # mid-typing: parses as nothing
+    panel.plan_button.click()
+    assert (zero.hz.text(), typed.hz.text()) == ("0", "42"), "a typed frequency was overwritten"
+    assert (blank.hz.value_or_none(), half.hz.value_or_none()) == (5.0, 20.0), "a box nobody filled was left blank"
+    assert panel.plan_said.plain_text() == "The cell's own frequency is 10 Hz; the band runs from 3.7 to 37 Hz."
+    assert table.reading_of(zero) == ("err", "Error. The frequency must be greater than 0 Hz.")
+    assert table.reading_of(typed) == ("fine", "Fine. 23 drive cycles.")
+    said = [fact.sentence for fact in panel.facts_from_form()]
+    assert "Every driven recording needs its file and the frequency it was driven at." in said, said
 
 
 def test_config_units_control_declares_units_and_validates_them():
@@ -932,83 +952,82 @@ def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     assert (obs.id, inf.id) == ("o", "i"), "the composition must return (observation, inference)"
 
 
-def test_the_infer_tab_dispatches_the_compositions(tmp_path):
-    """The Infer tab's four Run paths must call the COMPOSITIONS, not a GUI-local runner.
-
-    The runner module existed only to be module-level and Qt-free with an injectable fig_sink; the
-    compositions are both, and a wrapper is one more hop where positional order can drift. Each branch
-    is checked for the function it dispatches and for the positional argument that decides the run:
-    the simulated branch's cell (or hand-entered values) and the experimental branch's RecordingSet.
-    """
+def test_the_inference_page_calls_the_compositions_and_hands_its_prior_only_when_it_is_the_posteriors_own(tmp_path):
+    """Inference calls the compositions, never a runner of its own, each with what decides the run: a simulated cell's
+    file, or its values typed by hand, and its length; recordings as one RecordingSet, a frequency response with each
+    recording beside the frequency it was driven at. Both hand on the posterior draws, the two names and the note, and
+    drop a name another record takes while the run goes. The prior in use is handed to a simulated cell only when it is
+    the one the posterior was trained with, since the cell is then checked against what training saw; else none."""
+    from types import SimpleNamespace
     from core import orchestrator
-    from core.gui.session import SbiSession
 
     qt_app()
     inf = build_inference(cfg=_chi_cfg(k=2))
-    inf.session.posterior = _posterior_stub()
-    inf.session.inf_prior = _prior_stub()
+    prior = _prior_stub()
+    posterior = _posterior_stub()
+    posterior.manifest = SimpleNamespace(parents={"prior": prior.id}, body={}, config={})
+    inf.session.posterior, inf.session.inf_prior = posterior, prior
+    inf.refresh_gates()
     panel = inf.infer_panel
-
     cap = {}
     panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
+    rows = panel.form.rows
 
-    # simulated, from a cell FILE. Real (empty) files: the click now refuses a missing cell or
-    # recording before it dispatches, and the dispatch is stubbed so nothing reads them.
+    # a simulated cell, from its file
     cell = tmp_path / "cell.txt"
     cell.touch()
-    panel.infer_mode.setCurrentIndex(0)
-    panel.cell_source.set_direct(False)
+    panel.modes.set_value("simulated")
     panel.cell_picker.selected_path = lambda: str(cell)
-    panel._cell_problems = []
-    panel.sim_tobs.setText("3.5")
-    panel._infer()
+    rows["t_obs"].widget.setText("3.5")
+    rows["n_samples"].widget.setText("500")
+    panel.names.name.setText("retrain_inf")
+    panel.names.other_name.setText("cell_a")
+    panel.names.note.setText("a note")
+    panel.main_pressed()
     assert cap["fn"] is orchestrator.simulated_inference, cap["fn"]
-    assert cap["args"][2] == 3.5 and cap["kwargs"]["cell"] == str(cell)
-    assert cap["kwargs"]["gt_values"] is None and cap["kwargs"]["prior"] is inf.session.inf_prior
-    assert cap["kwargs"]["provide_fig_sink"] is True
-    assert cap["kwargs"]["on_result"] == panel._on_observation
-    assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
-    # the observation's name, should another observation take it during the run, is dropped, not refused
-    assert cap["kwargs"]["if_name_taken"] == "unnamed", cap["kwargs"]
+    assert cap["args"][2] == 3.5 and cap["kwargs"]["cell"] == str(cell) and cap["kwargs"]["gt_values"] is None
+    assert cap["kwargs"]["prior"] is prior, "the posterior's own prior was not handed"
+    handed = {key: cap["kwargs"][key] for key in ("n_samples", "name", "observation_name", "note", "if_name_taken",
+                                                  "provide_fig_sink", "accept")}
+    assert handed == {"n_samples": 500, "name": "retrain_inf", "observation_name": "cell_a", "note": "a note",
+                      "if_name_taken": "unnamed", "provide_fig_sink": True, "accept": None}, handed
+    assert cap["kwargs"]["on_result"] == panel._on_inference
 
-    # experimental, chi: one passive recording + the probe pairs, as a RecordingSet
+    # another prior in use: none is handed
+    inf.session.inf_prior = _prior_stub(id_="p2")
+    cap.clear()
+    panel.main_pressed()
+    assert cap["fn"] is orchestrator.simulated_inference and cap["kwargs"]["prior"] is None, cap["kwargs"]["prior"]
+
+    # the values typed by hand, in place of the file
+    panel.typed_tick.setChecked(True)
+    panel.values_grid.load({"x": 0.0}, {"k": 1.0}, {}, {})
+    cap.clear()
+    panel.main_pressed()
+    assert cap["kwargs"]["cell"] is None and cap["kwargs"]["gt_values"] == panel.values_grid.to_dicts()
+
+    # recordings of a frequency response: the spontaneous recording and the pairs, as one RecordingSet
     passive = tmp_path / "passive.npy"
     passive.touch()
-    probes = [tmp_path / f"probe{i}.npy" for i in range(len(panel._chi_forced_fields))]
+    probes = [tmp_path / f"probe{i}.npy" for i in range(2)]
     for p in probes:
         p.touch()
-
-    def _chi_run():
-        cap.clear()
-        panel.infer_mode.setCurrentIndex(1)
-        panel.chi_spont.edit.setText(str(passive))
-        for i, row in enumerate(panel._chi_forced_fields):
-            row.path.edit.setText(str(probes[i]))
-            row.freq.setText(str(10.0 + i))
-        panel.chi_tobs.setText("2.0")
-        panel._infer()
-
-    _chi_run()
+    panel.modes.set_value("recordings")
+    rows["recording_spont"].widget.edit.setText(str(passive))
+    table = panel.driven
+    for i, row in enumerate([table.rows()[0], table.add_row()]):
+        row.path.edit.setText(str(probes[i]))
+        row.hz.setText(str(10.0 + i))
+    rows["chi_f0_si"].widget.setText("1.5")
+    rows["t_obs"].widget.setText("2.0")
+    cap.clear()
+    panel.main_pressed()
     assert cap["fn"] is orchestrator.experimental_inference, cap["fn"]
     rec = cap["args"][2]
-    assert rec.spont == str(passive) and rec.forced == ((str(probes[0]), 10.0),
-                                                        (str(probes[1]), 11.0))
-    assert rec.T_obs_s == 2.0 and cap["kwargs"]["provide_fig_sink"] is True
-    assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
-    assert cap["kwargs"]["if_name_taken"] == "unnamed", cap["kwargs"]
-
-    # a NON-AMORTIZED posterior with the box ticked -- the consent travels on both branches
-    inf.session.posterior = _posterior_stub(truncation=object(), x_obs_digest="d" * 16)
-    inf.refresh_gates()
-    panel.other_obs.setChecked(True)
-    cap.clear()
-    panel.infer_mode.setCurrentIndex(0)
-    panel._infer()
-    assert cap["fn"] is orchestrator.simulated_inference, cap["fn"]
-    assert cap["kwargs"]["accept"].other_observation is True, cap["kwargs"]["accept"]
-    _chi_run()
-    assert cap["fn"] is orchestrator.experimental_inference, cap["fn"]
-    assert cap["kwargs"]["accept"].other_observation is True, cap["kwargs"]["accept"]
+    assert rec.spont == str(passive) and rec.forced == ((str(probes[0]), 10.0), (str(probes[1]), 11.0))
+    assert rec.T_obs_s == 2.0 and rec.F0_si == 1.5
+    assert "prior" not in cap["kwargs"], "the recordings' path takes no prior"
+    assert cap["kwargs"]["observation_name"] == "cell_a" and cap["kwargs"]["if_name_taken"] == "unnamed"
 
 
 def test_the_tsnpe_tab_dispatches_a_loaded_observation(monkeypatch):
@@ -1122,46 +1141,6 @@ def test_the_tsnpe_new_run_box_is_not_persisted():
     assert "new_run" not in src, "restore_settings must not restore the near-miss consent"
 
 
-def test_the_infer_tab_other_observation_box():
-    """The narrowed-posterior consent on the Infer tab. The box is the GUI's only way to say "yes, run
-    this TSNPE posterior on a different observation" -- and it must be UNREACHABLE for an amortized
-    posterior, where it would mean nothing, and must never survive a change of posterior or a restart:
-    a stale tick would silence the narrowed-model rule for a posterior the user never answered the
-    question about."""
-    from core.artifacts import Accept
-    from core.gui.session import SbiSession
-
-    qt_app()
-    inf = build_inference(cfg=_chi_cfg(k=1))
-    panel = inf.infer_panel
-
-    # (a) amortized: greyed out, and no accept travels
-    inf.session.posterior = _posterior_stub(id_="amort")
-    inf.refresh_gates()
-    assert panel.other_obs.isEnabled() is False
-    assert panel._accept() is None, "an amortized posterior must send no Accept at all"
-
-    # (b) non-amortized and ticked: the consent travels
-    inf.session.posterior = _posterior_stub(id_="trunc", truncation=object(), x_obs_digest="d" * 16)
-    inf.refresh_gates()
-    assert panel.other_obs.isEnabled() is True
-    panel.other_obs.setChecked(True)
-    acc = panel._accept()
-    assert isinstance(acc, Accept) and acc.other_observation is True and acc.truncated is False
-
-    # (c) a DIFFERENT posterior clears it, even another truncated one
-    inf.session.posterior = _posterior_stub(id_="trunc2", truncation=object(), x_obs_digest="e" * 16)
-    inf.refresh_gates()
-    assert panel.other_obs.isChecked() is False, "the tick survived a change of posterior"
-    assert panel._accept() is None
-
-    # (d) not persisted: a restart must not restore consent
-    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(type(panel).save_settings))))
-    assert "other_obs" not in src, "save_settings must not persist the other-observation consent"
-    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(type(panel).restore_settings))))
-    assert "other_obs" not in src, "restore_settings must not restore it"
-
-
 def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     """The window's half of the refusal contract. A Refusal names its field by a key and never a box,
     tab, button or flag; the yellow "Check your inputs" box gets its "how to fix here" line from ONE
@@ -1184,15 +1163,14 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     (c) every sentence a user can read under a refusal, verbatim, in one table: one for each key the
         window has a control for, among them each way places are joined (one step, two steps, one part)
         and the consents, which quote
-        their controls' own text (posterior_tab.py:232, tsnpe_tab.py:102, infer_tab.py:150), so a
+        their controls' own text (posterior_tab.py:232, tsnpe_tab.py:102, the Inference page's main button), so a
         reworded label, a renamed place or a place moved in a list is seen as a change of what a person
         reads;
-    (d) the keys with no window control are exactly the settings the window does not expose (the device, the
-        samples an inference draws and the name of the observation it makes) and the checks' settings no check's
-        form offers, so a key with no control renders no window sentence;
-    (e) the three drive labels are built exactly as the Infer tab builds its rows
-        (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
-        cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built step 5 can find them.
+    (d) the keys with no window control are exactly the settings the window does not expose (the device) and the
+        checks' settings no check's form offers, so a key with no control renders no window sentence;
+    (e) the three drive labels are built exactly as the Inference page builds its drive's rows
+        (labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which cli.INFERENCE_PROMPT_UNITS aliases), so the
+        read-back over the built step 5 can find them.
     """
     from core import config
     import core.gui.fields as gui_fields
@@ -1334,25 +1312,27 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "fisher_points": "Set it in the 'Rotation: parameter sets averaged' box in step 3, Training.",
         "accept_truncated": ("Answer 'Load this posterior' in the question that loading a posterior from a narrowing "
                              "round asks in step 3, Training."),
-        "accept_other_observation": "Tick 'Run on a different observation' in step 5, Inference.",
-        "name": "Choose another name in 'Name' in step 2, Prior, or step 3, Training.",
+        "accept_other_observation": "Answer the question that 'Run inference' asks in step 5, Inference.",
+        "name": ("Choose another name in 'Name' in step 2, Prior, or step 3, Training, or in 'Name of the inference' "
+                 "in step 5, Inference."),
         # the two of Records, where the list and the Note box are no form rows
         "artifact": "Select an artifact in the list in Records.",
-        "note": "Edit it in the Note box in Records.",
+        "note": "Change it in 'Note' in step 5, Inference, or in the Note box in Records.",
         "bounds": "Set it in the 'Bounds file' box in step 2, Prior.",
         "cell": "Set it in the 'Cell file' box in step 4, Checks, or step 5, Inference.",
         "units": "Set it in the 'Units' box in step 1, Model and options.",
         "model": "Set it in the 'Model' box in step 1, Model and options.",
         "prior": "Set it in the 'Saved prior' box in step 2, Prior.",
         "posterior": "Set it in the 'Saved posterior' box in step 3, Training.",
-        "recording_spont": ("Select the passive recording in step 5, Inference (the 'Spontaneous' box, or the "
-                            "'Passive' box for a χ observation)."),
-        "recording_forced": "Set it in the 'Forced' box in step 5, Inference.",
-        "recording_probe": "Pick the probe's recording in the χ probe table in step 5, Inference.",
+        "recording_spont": "Set it in the 'Spontaneous recording' box in step 5, Inference.",
+        "recording_forced": "Set it in the 'Driven recording' box in step 5, Inference.",
+        "recording_probe": "Set it in the 'Driven recordings' box in step 5, Inference.",
+        "n_samples": "Set it in the 'Posterior draws' box in step 5, Inference.",
+        "observation_name": "Set it in the 'Name of the observation' box in step 5, Inference.",
         "drive_amplitude": "Set it in the 'A (N)' box in step 5, Inference.",
         "drive_frequency": "Set it in the 'f (Hz)' box in step 5, Inference.",
         "drive_phase": "Set it in the 'φ (rad)' box in step 5, Inference.",
-        "chi_f0_si": "Set it in the 'Drive F₀ (N)' box in step 5, Inference.",
+        "chi_f0_si": "Set it in the 'Drive amplitude' box in step 5, Inference.",
         "chi_mode": "Set it in the 'Kind of observation' box in step 1, Model and options.",
         "chi_n_freqs": "Set it in the 'Driven recordings per observation' box in step 1, Model and options.",
         "chi_k_pad": "Set it in the 'Slots for driven recordings' box in step 1, Model and options.",
@@ -1384,7 +1364,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # (d) no window control: the settings the window does not expose, and the tool-only set
     assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
-        "device", "n_samples", "observation_name",
+        "device",
         # the checks' settings no form offers: what decides a check's verdict
         "min_valid", "probe_multipliers", "probe_drives", "probe_cycle_caps", "cv_max", "phase_max", "snr_min",
         "sup_min", "band_peak_window", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
@@ -2268,7 +2248,7 @@ def test_every_help_entry_of_parameter_inference_stands_beside_a_control_or_is_k
     page of parameter inference, or is one of the few kept by name, whose words are still true, until each setting
     gains a help panel of its own."""
     from core.gui.panels.inference.help_text import HELP
-    kept = {"bounds", "cell", "chi_f0", "chi_range", "units_mode", "units_text"}
+    kept = {"bounds", "chi_f0", "chi_range", "units_mode", "units_text"}
     read = set()
     for path in (Path(__file__).resolve().parents[1] / "core" / "gui" / "panels").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
@@ -2277,147 +2257,171 @@ def test_every_help_entry_of_parameter_inference_stands_beside_a_control_or_is_k
     assert set(HELP) - read == kept, sorted(set(HELP) - read)
 
 
+def _inference_page(inf):
+    """The Inference page of ``inf`` with what its press dispatches and every refusal it says caught: (the page, the call
+    dispatched, the refusals)."""
+    panel = inf.infer_panel
+    sent, refused = {}, []
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel._refusal = lambda exc: refused.append(exc)
+    return panel, sent, refused
+
+
+def _said(panel) -> list:
+    """The sentences of the page's facts, as they stand."""
+    return [fact.sentence for fact in panel.facts_from_form()]
+
+
+def _line(panel, key) -> tuple:
+    """What the line under the row ``key`` says: its marker and its sentence."""
+    panel.redraw()
+    line = panel.form.rows[key].line
+    return (line.kind, line.words) if line.says() else ("", "")
+
+
 def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
-    """The three observation-length boxes. FloatField.value() turns a blank or half-typed box into
-    0.0, and every branch used to forward it: the simulated one spent the simulation and then died in
-    math.log(0.0) (statistics.py), the bench ones built a zero-length observation. Now the click
-    reads the box through value_or_none() and require_positive("t_obs", ...): a blank, a lone "-" and
-    a typed 0 are each refused through _refusal (the yellow box) with field "t_obs", and NOTHING is
-    dispatched. One box per page: sim_tobs, exp_tobs (the passive and driven branches share it) and
-    chi_tobs. Every file the click also checks is a real (empty) file, so the refusal seen is the
-    box's and not a missing file's; the dispatch is stubbed, so nothing reads them."""
+    """The recording length, one row in both modes. A blank one is said among the facts and greys the start; a typed 0
+    or a half-typed one is said under the row in the window's words, and greys it too. At the press the engine's own rule
+    refuses each with the field "t_obs" and NOTHING is dispatched; a length that passes dispatches, on every way the
+    page runs: a simulated cell, a driven recording, a spontaneous recording only and a frequency response. Every file
+    the press also checks is a real (empty) file, so the refusal seen is the length's; the dispatch is stubbed, so
+    nothing reads them."""
     from core import orchestrator
     from core.refusals import Refusal
-    from tests._fixtures import qt_app
 
     qt_app()
     inf = build_inference()
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
-    panel = inf.infer_panel
-    sent, refused = {}, []
-    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
-    panel._refusal = lambda exc: refused.append(exc)
+    panel, sent, refused = _inference_page(inf)
+    box = panel.form.rows["t_obs"].widget
     files = {}
     for stem in ("cell.txt", "passive.npy", "forced.npy", "probe0.npy", "probe1.npy"):
         files[stem] = tmp_path / stem
         files[stem].touch()
 
-    def click(box, text):
+    def press(text):
         sent.clear()
         refused.clear()
         box.setText(text)
-        panel._infer()
+        panel.main_pressed()
 
-    def refused_t_obs(box):
-        for text, why in (("", "is blank"), ("-", "is blank"), ("0", "greater than 0")):
-            click(box, text)
+    def refused_t_obs():
+        for text, why, said in (("", "is blank", None), ("-", "is blank", "Recording length must be a number; got '-'."),
+                                ("0", "greater than 0", "Recording length must be greater than 0.")):
+            press(text)
             assert sent == {}, (text, sent)
             assert len(refused) == 1 and isinstance(refused[0], Refusal), (text, refused)
             assert refused[0].field == "t_obs" and why in refused[0].message, (text, refused[0].message)
+            if said is None:
+                assert "Type a recording length." in _said(panel) and _line(panel, "t_obs") == ("", ""), text
+            else:
+                assert _line(panel, "t_obs") == ("err", said) and said in _said(panel), (text, _line(panel, "t_obs"))
 
-    # simulated: sim_tobs
+    # a simulated cell
     inf.install_config(_forced_cfg())
-    panel.infer_mode.setCurrentIndex(0)
-    panel.cell_source.set_direct(False)
+    panel.modes.set_value("simulated")
     panel.cell_picker.selected_path = lambda: str(files["cell.txt"])
-    panel._cell_problems = []
-    refused_t_obs(panel.sim_tobs)
-    click(panel.sim_tobs, "3.5")
+    refused_t_obs()
+    press("3.5")
     assert refused == [] and sent["fn"] is orchestrator.simulated_inference and sent["args"][2] == 3.5
 
-    # driven: exp_tobs, with every drive box and both recordings given
-    panel.infer_mode.setCurrentIndex(1)
-    panel.exp_spont.edit.setText(str(files["passive.npy"]))
-    panel.exp_forced.edit.setText(str(files["forced.npy"]))
-    for name, text in (("amp", "1.5"), ("freq", "5"), ("phase", "0"), ("offset", "0")):
-        panel._forcing_fields[name].setText(text)
-    refused_t_obs(panel.exp_tobs)
-    click(panel.exp_tobs, "2.0")
+    # a driven recording, with every drive box and both recordings given
+    rows = panel.form.rows
+    panel.modes.set_value("recordings")
+    rows["recording_spont"].widget.edit.setText(str(files["passive.npy"]))
+    rows["recording_forced"].widget.edit.setText(str(files["forced.npy"]))
+    for key, text in (("drive_amplitude", "1.5"), ("drive_frequency", "5"), ("drive_phase", "0"),
+                      ("drive_offset", "0")):
+        rows[key].widget.setText(text)
+    refused_t_obs()
+    press("2.0")
     assert refused == [] and sent["fn"] is orchestrator.experimental_inference
     assert sent["args"][2].T_obs_s == 2.0 and sent["args"][2].forced == ((str(files["forced.npy"]), None),)
 
-    # passive: the same exp_tobs box on the no-drive branch
+    # a spontaneous recording only: the same row, with no drive
     inf.install_config(_forced_cfg(names=()))
-    refused_t_obs(panel.exp_tobs)
-    click(panel.exp_tobs, "2.0")
+    refused_t_obs()
+    press("2.0")
     assert refused == [] and sent["fn"] is orchestrator.experimental_inference
     assert sent["args"][2].forced == () and sent["args"][2].forcing_params_si is None
 
-    # chi: chi_tobs, with the passive recording, F0 and two complete probe rows given
+    # a frequency response, with the spontaneous recording, the drive amplitude and two complete rows given
     inf.install_config(_chi_cfg(k=2))
-    panel.chi_spont.edit.setText(str(files["passive.npy"]))
-    panel.chi_f0_si.setText("1.0")
-    for i, row in enumerate(panel._chi_forced_fields):
+    rows["chi_f0_si"].widget.setText("1.0")
+    for i, row in enumerate([panel.driven.rows()[0], panel.driven.add_row()]):
         row.path.edit.setText(str(files[f"probe{i}.npy"]))
-        row.freq.setText(str(10.0 + i))
-    refused_t_obs(panel.chi_tobs)
-    click(panel.chi_tobs, "2.0")
+        row.hz.setText(str(10.0 + i))
+    refused_t_obs()
+    press("2.0")
     assert refused == [] and sent["fn"] is orchestrator.experimental_inference
     assert sent["args"][2].F0_si == 1.0 and sent["args"][2].T_obs_s == 2.0
 
 
 def test_the_driven_branch_refuses_a_zero_drive_and_a_missing_recording(tmp_path):
-    """The driven page's boxes, at the click. A zero amplitude is the passive branch's job and a 0 Hz
-    drive would reach the lock-in, so both are refused (require_positive); a blank phase is a blank
-    (require_finite); each recording is refused by its own role -- "recording_spont" or
-    "recording_forced" -- whether blank or pointing at a file that is not there (require_file).
-    Today none of this is checked: FloatField(0.0)'s "0.0" dispatched a zero drive, and a wrong path
-    surfaced as a FileNotFoundError inside the worker's red box. The offset row is a forcing name
-    outside the registry: it is read as a finite number of either sign under its own row label, with
-    no field key to point at. When every box passes, the recording set carries the SI drive keyed by
-    forcing NAME (what build_experiment_obs takes) and the forced file with no frequency."""
+    """A driven recording's rows. A zero amplitude is the spontaneous recording's way and a 0 Hz drive would reach the
+    lock-in, so both are said under their row and grey the start (the engine's require_positive); a blank one of the
+    drive is said among the facts. Each recording blank is said among the facts by its own role. At the press each is
+    refused by the engine's own rule under its own field, a recording that names no file by require_file, and nothing
+    is dispatched. The offset row is a forcing name outside the registry: a finite number of either sign, refused under
+    its own row label with no field key to point at. When every row passes, the recording set carries the SI drive keyed
+    by forcing NAME and the driven file with no frequency."""
     from core import orchestrator
     from core.refusals import Refusal
-    from tests._fixtures import qt_app
 
     qt_app()
     inf = build_inference(cfg=_forced_cfg())
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
-    panel = inf.infer_panel
-    sent, refused = {}, []
-    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
-    panel._refusal = lambda exc: refused.append(exc)
+    panel, sent, refused = _inference_page(inf)
+    rows = panel.form.rows
     spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
     spont.touch()
     forced.touch()
-    panel.infer_mode.setCurrentIndex(1)
-    panel.exp_tobs.setText("2.0")
-    panel.exp_spont.edit.setText(str(spont))
-    panel.exp_forced.edit.setText(str(forced))
-    amp, freq, phase, offset = (panel._forcing_fields[n] for n in ("amp", "freq", "phase", "offset"))
+    panel.modes.set_value("recordings")
+    rows["t_obs"].widget.setText("2.0")
+    rows["recording_spont"].widget.edit.setText(str(spont))
+    rows["recording_forced"].widget.edit.setText(str(forced))
+    amp, freq, phase, offset = (rows[key].widget for key in ("drive_amplitude", "drive_frequency", "drive_phase",
+                                                             "drive_offset"))
     for box, text in ((amp, "1.5"), (freq, "5"), (phase, "0"), (offset, "-3")):
         box.setText(text)
+    assert rows["drive_offset"].label_text() == "offset (N)"
 
-    def click():
+    def press():
         sent.clear()
         refused.clear()
-        panel._infer()
+        panel.main_pressed()
         assert len(refused) <= 1, refused
         return refused[0] if refused else None
 
-    def refuse(edit, text, field, why):
+    def refuse(edit, text, field, why, said=None):
         keep = edit.text()
         edit.setText(text)
-        e = click()
+        e = press()
         assert sent == {}, (text, sent)
         assert isinstance(e, Refusal) and e.field == field and why in e.message, (text, e)
+        if said is not None:
+            assert said in _said(panel), (text, _said(panel))
         edit.setText(keep)
 
-    refuse(amp, "0", "drive_amplitude", "greater than 0")
-    refuse(amp, "", "drive_amplitude", "is blank")
-    refuse(freq, "0", "drive_frequency", "greater than 0")
-    refuse(freq, "-1", "drive_frequency", "greater than 0")
-    refuse(phase, "", "drive_phase", "is blank")
-    refuse(offset, "", None, "offset (N) is blank")
-    refuse(panel.exp_forced.edit, str(tmp_path / "gone.npy"), "recording_forced", "gone.npy")
-    refuse(panel.exp_forced.edit, "", "recording_forced", "is blank")
-    refuse(panel.exp_spont.edit, str(tmp_path / "gone.npy"), "recording_spont", "was not found")
-    refuse(panel.exp_spont.edit, "", "recording_spont", "is blank")
+    refuse(amp, "0", "drive_amplitude", "greater than 0", "A (N) must be greater than 0.")
+    assert _line(panel, "drive_amplitude") == ("", "")
+    refuse(amp, "", "drive_amplitude", "is blank", "Type the drive's amplitude.")
+    refuse(freq, "0", "drive_frequency", "greater than 0", "f (Hz) must be greater than 0.")
+    refuse(freq, "-1", "drive_frequency", "greater than 0", "f (Hz) must be greater than 0.")
+    refuse(phase, "", "drive_phase", "is blank", "Type the drive's phase.")
+    refuse(offset, "", None, "offset (N) is blank", "Type a value for offset (N).")
+    refuse(rows["recording_forced"].widget.edit, str(tmp_path / "gone.npy"), "recording_forced", "gone.npy")
+    refuse(rows["recording_forced"].widget.edit, "", "recording_forced", "is blank", "Choose the driven recording.")
+    refuse(rows["recording_spont"].widget.edit, str(tmp_path / "gone.npy"), "recording_spont", "was not found")
+    refuse(rows["recording_spont"].widget.edit, "", "recording_spont", "is blank", "Choose the spontaneous recording.")
+    amp.setText("0")
+    assert _line(panel, "drive_amplitude") == ("err", "A (N) must be greater than 0.")
+    amp.setText("1.5")
 
-    # every box given: dispatched once, with the drive by NAME and the forced file with no frequency
-    assert click() is None
+    # every row given: dispatched once, with the drive by NAME and the driven file with no frequency
+    assert press() is None
     assert sent["fn"] is orchestrator.experimental_inference, sent
     rec = sent["args"][2]
     assert rec.spont == str(spont) and rec.forced == ((str(forced), None),) and rec.T_obs_s == 2.0
@@ -2426,177 +2430,159 @@ def test_the_driven_branch_refuses_a_zero_drive_and_a_missing_recording(tmp_path
 
 
 def test_the_chi_branch_refuses_a_blank_drive_amplitude_and_a_missing_probe_at_the_click(tmp_path):
-    """The chi page's boxes, at the click, each through _refusal with its own field and nothing
-    dispatched: the physical drive amplitude blank or not positive (require_positive; a blank used to
-    be a division by zero inside the worker), the passive recording blank or not there, zero probes,
-    a problem in the probe table (a row with no recording), and a probe recording that names no file.
-    When every box passes, the recording set carries the passive file, the (recording, frequency)
-    pairs, T_obs and F0 as typed."""
+    """A frequency response's rows: the physical drive amplitude blank or not above 0, the spontaneous recording blank
+    or not there, a driven recording with no file or one that names no file, and no driven recording at all. Each is
+    said on the page, among the facts or under its row, and at the press refused by the engine's own rule under its own
+    field, with nothing dispatched. When every row passes, the recording set carries the spontaneous file, the
+    (recording, frequency) pairs, the length and the amplitude as typed."""
     from core import orchestrator
     from core.refusals import Refusal
-    from tests._fixtures import qt_app
 
     qt_app()
     inf = build_inference(cfg=_chi_cfg(k=2))
     inf.session.posterior = _posterior_stub()
     inf.session.inf_prior = _prior_stub()
-    panel = inf.infer_panel
-    sent, refused = {}, []
-    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
-    panel._refusal = lambda exc: refused.append(exc)
+    panel, sent, refused = _inference_page(inf)
+    rows = panel.form.rows
     passive = tmp_path / "passive.npy"
     passive.touch()
     probes = [tmp_path / f"probe{i}.npy" for i in range(2)]
     for p in probes:
         p.touch()
-    panel.infer_mode.setCurrentIndex(1)
-    panel.chi_tobs.setText("2.0")
-    panel.chi_f0_si.setText("1.5")
-    panel.chi_spont.edit.setText(str(passive))
-    assert len(panel._chi_forced_fields) == 2
-    for i, row in enumerate(panel._chi_forced_fields):
+    panel.modes.set_value("recordings")
+    rows["t_obs"].widget.setText("2.0")
+    rows["chi_f0_si"].widget.setText("1.5")
+    rows["recording_spont"].widget.edit.setText(str(passive))
+    driven = [panel.driven.rows()[0], panel.driven.add_row()]
+    for i, row in enumerate(driven):
         row.path.edit.setText(str(probes[i]))
-        row.freq.setText(str(10.0 + i))
+        row.hz.setText(str(10.0 + i))
 
-    def click():
+    def press():
         sent.clear()
         refused.clear()
-        panel._infer()
+        panel.main_pressed()
         assert len(refused) <= 1, refused
         return refused[0] if refused else None
 
-    def refuse(edit, text, field, why):
+    def refuse(edit, text, field, why, said=None):
         keep = edit.text()
         edit.setText(text)
-        e = click()
+        e = press()
         assert sent == {}, (text, sent)
         assert isinstance(e, Refusal) and e.field == field and why in e.message, (text, e)
+        if said is not None:
+            assert said in _said(panel), (text, _said(panel))
         edit.setText(keep)
 
-    refuse(panel.chi_f0_si, "", "chi_f0_si", "is blank")
-    refuse(panel.chi_f0_si, "0", "chi_f0_si", "greater than 0")
-    refuse(panel.chi_f0_si, "-1", "chi_f0_si", "greater than 0")
-    refuse(panel.chi_spont.edit, "", "recording_spont", "is blank")
-    refuse(panel.chi_spont.edit, str(tmp_path / "gone.npy"), "recording_spont", "was not found")
-    refuse(panel._chi_forced_fields[1].path.edit, "", "recording_probe", "probe 2: no recording selected")
-    refuse(panel._chi_forced_fields[0].path.edit, str(tmp_path / "gone.npy"), "recording_probe",
-           "was not found")
+    refuse(rows["chi_f0_si"].widget, "", "chi_f0_si", "is blank", "Type the drive amplitude.")
+    refuse(rows["chi_f0_si"].widget, "0", "chi_f0_si", "greater than 0", "Drive amplitude must be greater than 0.")
+    refuse(rows["chi_f0_si"].widget, "-1", "chi_f0_si", "greater than 0", "Drive amplitude must be greater than 0.")
+    refuse(rows["recording_spont"].widget.edit, "", "recording_spont", "is blank", "Choose the spontaneous recording.")
+    refuse(rows["recording_spont"].widget.edit, str(tmp_path / "gone.npy"), "recording_spont", "was not found")
+    refuse(driven[1].path.edit, "", "recording_probe", "is blank",
+           "Every driven recording needs its file and the frequency it was driven at.")
+    refuse(driven[0].path.edit, str(tmp_path / "gone.npy"), "recording_probe", "was not found")
+    driven[1].path.edit.setText("")
+    panel.redraw()
+    assert panel.driven.reading_of(driven[1]) == ("err", "Error. Choose the file of this driven recording.")
+    driven[1].path.edit.setText(str(probes[1]))
 
-    # every box given: dispatched once, with the pairs as typed
-    assert click() is None
+    # every row given: dispatched once, with the pairs as typed
+    assert press() is None
     assert sent["fn"] is orchestrator.experimental_inference, sent
     rec = sent["args"][2]
     assert rec.spont == str(passive) and rec.T_obs_s == 2.0 and rec.F0_si == 1.5
     assert rec.forced == ((str(probes[0]), 10.0), (str(probes[1]), 11.0)), rec.forced
 
-    # zero probes: refused by the probe recording's field, before the (empty) table is read
-    for row in list(panel._chi_forced_fields):
-        panel._remove_chi_probe(row)
-    e = click()
+    # no driven recording: said, and refused under the table's key at the press, before anything is read
+    for row in list(panel.driven.rows()):
+        panel.driven.set_value([])
+    assert "Add a driven recording." in _said(panel)
+    e = press()
     assert sent == {} and isinstance(e, Refusal) and e.field == "recording_probe", (sent, e)
-    assert "at least one forced probe" in e.message, e.message
 
 
-def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(tmp_path):
-    """The simulated branch's Cell row, at the click, through _refusal with field "cell": no cell
-    picked or a picked file that is not there (require_file), a picked cell the pick-time check found
-    does not fit the bounds (a warning line today, a refusal now), and in direct entry a values grid
-    with problems. Today the first dispatched a path the worker then failed on, and the other two
-    were warning lines with no dialog. The bounds-fit check itself is the pick-time one
-    (_on_cell_changed) and is unchanged; the grid's own validation is pinned at its widget tests."""
+def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(tmp_path, monkeypatch):
+    """A simulated cell's "Cell file", with field "cell": none chosen is said among the facts and refused at the press
+    by require_file, as a chosen file that is not there is; a cell the page's reading finds does not fit the bounds file
+    in use is said, in the check's own words, and greys the start until another is chosen; and the values typed by hand
+    with problems are said one by one, and refused at the press in their own sentences, one after another."""
+    from core import cli
     from core.refusals import Refusal
-    from tests._fixtures import qt_app
 
     qt_app()
     inf = build_inference(cfg=_forced_cfg())
     inf.session.posterior = _posterior_stub()
-    panel = inf.infer_panel
-    sent, refused = {}, []
-    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
-    panel._refusal = lambda exc: refused.append(exc)
-    panel.infer_mode.setCurrentIndex(0)
-    panel.sim_tobs.setText("3.5")
+    panel, sent, refused = _inference_page(inf)
+    panel.modes.set_value("simulated")
+    panel.form.rows["t_obs"].widget.setText("3.5")
 
-    def click() -> str:
+    def press() -> str:
         sent.clear()
         refused.clear()
-        panel._infer()
+        panel.main_pressed()
         assert sent == {}, sent
         assert len(refused) == 1 and isinstance(refused[0], Refusal), refused
         assert refused[0].field == "cell", refused[0]
         return refused[0].message
 
-    panel.cell_source.set_direct(False)
     panel.cell_picker.selected_path = lambda: None
-    panel._cell_problems = []
-    assert "is blank" in click()
+    assert "Choose a cell file." in _said(panel)
+    assert "is blank" in press()
     panel.cell_picker.selected_path = lambda: str(tmp_path / "gone.txt")
-    assert "was not found" in click()
+    assert "was not found" in press()
     cell = tmp_path / "cell.txt"
     cell.touch()
     panel.cell_picker.selected_path = lambda: str(cell)
-    panel._cell_problems = ["k = 9 is outside its bounds"]
-    msg = click()
-    assert "does not fit the bounds file" in msg and "k = 9" in msg, msg
-    # direct entry: the grid's problems, verbatim, under the same key
-    panel._cell_problems = []
-    panel.cell_source.is_direct = lambda: True
-    panel.values_grid.problems = lambda: ["k: must be a number"]
-    assert click() == "Fix the values first: k: must be a number"
-    # a real grid: its sentences stand one after another, joined as sentences are
-    del panel.values_grid.problems
+    monkeypatch.setattr(cli, "validate_gt_file", lambda cfg, path: ["ND parameter k = 9 is outside its bounds (0, 1)"])
+    panel.read_facts()
+    said = "This cell does not fit the bounds file in use: ND parameter k = 9 is outside its bounds (0, 1)."
+    assert said in _said(panel), _said(panel)
+    assert panel.foot.reason.text() == "Cannot start yet: the cell does not fit, and 1 more above.", (
+        panel.foot.reason.text())
+    # the values typed by hand: their problems, one after another, under the same key
+    panel.typed_tick.setChecked(True)
     panel.values_grid.load({}, {"k": 1.0, "lam": 2.0}, {}, {})
     panel.values_grid._fields[("PARAM", "k")].setText("1e")
     panel.values_grid._fields[("PARAM", "lam")].setText("")
-    assert click() == "Fix the values first: The value of k must be a number; got '1e'. Type a value for lam."
+    assert {"The value of k must be a number; got '1e'.", "Type a value for lam."} <= set(_said(panel))
+    assert press() == "The value of k must be a number; got '1e'. Type a value for lam."
 
 
 def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path):
-    """"Plan probes…" is a click, so it is refused like one: a blank or non-positive T_obs and a
-    blank or missing passive recording go to _refusal with their field, BEFORE the recording is
-    loaded. A blank T_obs used to read as 0.0 and the planner ran on a one-sample window, and a blank
-    recording was a warning line. A complete click passes the rules and goes on to load the
-    recording; the stub config has no hardware, so on this test's path that load fails inside the
-    planner's own guarded step, and its "Could not measure Ω₀" error line is the evidence the rules
-    ran first and let the click through."""
-    from core.refusals import Refusal
-    from tests._fixtures import PaneCapture, qt_app
-
+    """"Plan the driven recordings…" reads the recording length and the spontaneous recording before it loads
+    anything: a blank or non-positive length, and a blank or missing spontaneous recording, are said under the table in
+    the window's words, and nothing is read. A complete press goes on to load the recording; the stub configuration has
+    no hardware, so on this test's path that load fails inside the planner's guarded step, and its sentence is the
+    evidence the rules ran first and let the press through."""
     qt_app()
     inf = build_inference(cfg=_chi_cfg(k=2))
+    inf.session.posterior = _posterior_stub()
+    inf.refresh_gates()
     panel = inf.infer_panel
-    refused = []
-    panel._refusal = lambda exc: refused.append(exc)
-    pane = PaneCapture(panel)           # both pane channels, as (level, text) -- the stub's own order
-    lines = pane.lines                  # the list the capture appends to, so plan()'s clear() still works
+    panel.modes.set_value("recordings")
+    rows = panel.form.rows
     passive = tmp_path / "passive.npy"
     passive.touch()
 
-    def plan():
-        refused.clear()
-        lines.clear()
-        panel._plan_chi_probes()
+    def plan() -> str:
+        panel.plan_button.click()
+        return panel.plan_said.plain_text()
 
-    panel.chi_spont.edit.setText(str(passive))
-    panel.chi_tobs.setText("")
-    plan()
-    assert len(refused) == 1 and isinstance(refused[0], Refusal) and refused[0].field == "t_obs", refused
-    assert "is blank" in refused[0].message and lines == [], lines
-    panel.chi_tobs.setText("0")
-    plan()
-    assert refused[0].field == "t_obs" and "greater than 0" in refused[0].message and lines == []
-    panel.chi_tobs.setText("4.5")
-    panel.chi_spont.edit.setText("")
-    plan()
-    assert refused[0].field == "recording_spont" and "is blank" in refused[0].message and lines == []
-    panel.chi_spont.edit.setText(str(tmp_path / "gone.npy"))
-    plan()
-    assert refused[0].field == "recording_spont" and "gone.npy" in refused[0].message and lines == []
-    # a complete click passes the rules and reaches the load
-    panel.chi_spont.edit.setText(str(passive))
-    plan()
-    assert refused == [], refused
-    assert lines and lines[0][0] == "error" and lines[0][1].startswith("Could not measure Ω₀ from"), lines
+    rows["recording_spont"].widget.edit.setText(str(passive))
+    rows["t_obs"].widget.setText("")
+    assert plan() == "Type a recording length to plan the driven recordings."
+    rows["t_obs"].widget.setText("0")
+    assert plan() == "Type a recording length to plan the driven recordings."
+    rows["t_obs"].widget.setText("4.5")
+    rows["recording_spont"].widget.edit.setText("")
+    assert plan() == "Choose the spontaneous recording to plan the driven recordings."
+    rows["recording_spont"].widget.edit.setText(str(tmp_path / "gone.npy"))
+    assert plan() == "Choose the spontaneous recording to plan the driven recordings."
+    # a complete press passes the rules and reaches the load
+    rows["recording_spont"].widget.edit.setText(str(passive))
+    assert plan().startswith("The cell's own frequency could not be measured from the spontaneous recording: ")
 
 
 def test_every_identity_entry_has_an_on_screen_name():
@@ -2776,7 +2762,8 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
                                            x_obs_digest="d" * 16)
         screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
         screen.refresh_gates()
-        pages = (screen.config_panel, screen.prior_panel, screen.posterior_panel, screen.validate_panel)
+        pages = (screen.config_panel, screen.prior_panel, screen.posterior_panel, screen.validate_panel,
+                 screen.infer_panel)
         window.go_to("inference", "training")
         screen.posterior_panel.show_view("load")
         screen.posterior_panel.read_facts()             # no posterior saved yet: what the load view says then
@@ -2819,6 +2806,11 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
             checks.open_check(key)
             checks.read_facts()
             seen += _on_screen(checks)
+        window.go_to("inference", "infer")
+        for mode in ("recordings", "simulated"):
+            screen.infer_panel.modes.set_value(mode)
+            screen.infer_panel.read_facts()
+            seen += _on_screen(screen.infer_panel)
         seen += [gui_fields.fix_sentence(key, here=page.step) for page in pages for key in FIELDS]
         seen = [words for words in seen if words]
         named = [words for words in seen if OLD_PLACES.search(words)]
@@ -2828,14 +2820,14 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
             "Step 2, Prior, has changes"), "the scan's pattern finds nothing it must"
         assert _re.search(r"Load a posterior from a narrowing round", " ".join(seen))
     from core.gui import check_catalogue, check_lineage, check_readings, step_facts
-    from core.gui.panels.inference import (check_forms, check_page, check_results, config_tab, posterior_tab,
-                                           prior_tab, step_page, validate_tab)
+    from core.gui.panels.inference import (check_forms, check_page, check_results, config_tab, infer_tab,
+                                           posterior_tab, prior_tab, step_page, validate_tab)
     held = []
     from tests._fixtures import step_pages
     assert sorted(f"{page.__name__.rpartition('.')[2]}.py" for page in (config_tab, prior_tab, posterior_tab,
-                                                                         validate_tab)) == (
+                                                                         validate_tab, infer_tab)) == (
         sorted(file for file, _step in step_pages().values())), step_pages()
-    for module in (config_tab, prior_tab, posterior_tab, validate_tab, step_facts, step_page, check_page,
+    for module in (config_tab, prior_tab, posterior_tab, validate_tab, infer_tab, step_facts, step_page, check_page,
                    check_results, check_forms, check_catalogue, check_readings, check_lineage):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -2904,14 +2896,17 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
     assert {"num_runs", "run_size_cap", "checkpoint_every", "hidden_features", "num_transforms", "learning_rate",
             "stop_after_epochs", "max_num_epochs", "fisher_m", "fisher_dz", "fisher_points", "resume", "new_run",
             "posterior", "accept_truncated", "prior", "name", "resume_fit"} <= trained, sorted(trained)
+    inferred = _refusal_keys("simulated_inference", "experimental_inference")
+    assert {"n_samples", "t_obs", "name", "observation_name", "cell", "accept_other_observation"} <= inferred, (
+        sorted(inferred))
     unanswered = {"device"}
     from tests._fixtures import step_pages
-    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training", "checks"}, (
+    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training", "checks", "infer"}, (
         "a page whose stage is not read here")
     # The checks' settings no form offers, each at the stage's own usual value, which the stage never refuses.
     unoffered = {"cv_max", "snr_min", "sup_min", "phase_max", "band_peak_window", "probe_multipliers", "probe_drives",
                  "probe_cycle_caps", "min_valid", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
-    for step, keys_ in (("prior", built), ("training", trained), ("checks", checked)):
+    for step, keys_ in (("prior", built), ("training", trained), ("checks", checked), ("infer", inferred)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
         silent = sorted(key for key in keys_ - unanswered - (unoffered if step == "checks" else set())
                         if not gui_fields.fix_sentence(key, here=step))
@@ -2938,8 +2933,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     Step 5 is read after install_config with a FORCED stub config so its three drive rows exist; a
     chi config would build none (no force_params_dict) and the drive entries would pass vacuously.
 
-    The second half: the Infer tab's registered rows are built from label(key), not from a literal
-    that happens to match today."""
+    The second half: the Inference page's registered rows are named by the table, through their field keys, never by a
+    literal that happens to match today."""
     from PySide6.QtWidgets import QAbstractButton, QFormLayout, QLabel
     from core.gui import fields as gui_fields, keys
     from core.gui.panels.inference.infer_tab import InferPanel
@@ -3034,9 +3029,11 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "fisher_m": "Rotation: simulations per perturbation", "fisher_dz": "Rotation: step",
         "fisher_points": "Rotation: parameter sets averaged",
         "bounds": "Bounds file", "cell": "Cell file", "units": "Units", "model": "Model",
-        "prior": "Saved prior", "posterior": "Saved posterior", "recording_forced": "Forced",
+        "prior": "Saved prior", "posterior": "Saved posterior", "recording_spont": "Spontaneous recording",
+        "recording_forced": "Driven recording", "recording_probe": "Driven recordings",
+        "n_samples": "Posterior draws", "observation_name": "Name of the observation",
         "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
-        "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_mode": "Kind of observation",
+        "drive_phase": "φ (rad)", "chi_f0_si": "Drive amplitude", "chi_mode": "Kind of observation",
         "chi_n_freqs": "Driven recordings per observation", "chi_k_pad": "Slots for driven recordings",
         "chi_max_cycles": "Lock-in limit", "reparam_rotate": "Rotation",
         "param_value": "value", "param_min": "min", "param_max": "max", "init": "init", "x_scale": "x_scale (nm)",
@@ -3057,37 +3054,39 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     assert not differ, f"(in the table, as written here): {differ}"
     # every control a sentence entry quotes, at each place its sentence names
     quoted = (
-        ("accept_other_observation", "infer", "Run on a different observation"),
+        ("accept_other_observation", "infer", "Run inference"),
         ("new_run", "narrowing", "Start a new simulation even if a cache one setting away exists"),
-        ("name", "prior", "Name"), ("name", "training", "Name"),
-        ("recording_spont", "infer", "Spontaneous"), ("recording_spont", "infer", "Passive"),
+        ("name", "prior", "Name"), ("name", "training", "Name"), ("name", "infer", "Name of the inference"),
+        ("note", "infer", "Note"),
     )
     absent = []
     for key, name, words in quoted:
         sentence = gui_fields.fix_sentence(key)
         assert words in sentence and keys.place_words(name) in sentence, (key, name, sentence)
         panel = at(name)
-        texts = {w.text() for w in panel.findChildren(QLabel)} | {w.text() for w in panel.findChildren(QAbstractButton)}
+        texts = ({w.text() for w in panel.findChildren(QLabel)}
+                 | {w.text().replace("&", "") for w in panel.findChildren(QAbstractButton)})
         if words not in texts and labels.pretty_gui(words) not in texts:
             absent.append((key, name, words))
     assert not absent, f"a sentence quotes words its place does not show: {absent}"
 
+    page = window.part("inference").infer_panel
+    for key in ("t_obs", "cell", "recording_spont", "recording_forced", "recording_probe", "chi_f0_si", "n_samples",
+                "observation_name", "drive_amplitude", "drive_frequency", "drive_phase"):
+        assert page.form.rows[key].label_text() == gui_fields.label(key), f"the Inference page's {key} row is not named"
     src = code_only(InferPanel.__init__)
-    for key in ("t_obs", "cell", "recording_forced", "chi_f0_si"):
-        assert f"label({key!r})" in src, f"the Infer tab must build its {key} row from label({key!r})"
-    for literal in ("'T_obs (s)'", "'Drive F₀ (N)'"):
+    for literal in ("'T_obs (s)'", "'Drive F₀ (N)'", "'Recording length'", "'Drive amplitude'"):
         assert literal not in src, f"a literal row label {literal} survives in InferPanel.__init__"
 
 
 def _pick_simulated(panel, cell: str, t_obs: str) -> None:
-    """Put the Infer tab on its simulated page with a picked cell file and a typed T_obs. The picker is
-    pointed at the file directly, as test_the_infer_tab_dispatches_the_compositions does: what these
-    pins are about is the session config, not the picker's folder listing."""
-    panel.infer_mode.setCurrentIndex(0)
-    panel.cell_source.set_direct(False)
+    """Put the Inference page on a simulated cell, a cell file chosen and a recording length typed. The list is pointed
+    at the file directly, as the test of the page's calls does: what these pins are about is the session config, not the
+    list's folder."""
+    panel.modes.set_value("simulated")
+    panel.typed_tick.setChecked(False)
     panel.cell_picker.selected_path = lambda: cell
-    panel._cell_problems = []
-    panel.sim_tobs.setText(t_obs)
+    panel.form.rows["t_obs"].widget.setText(t_obs)
 
 
 def _wait_for_run(app, panel, limit: float = 300.0) -> None:
@@ -3138,7 +3137,7 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
     try:
         with monkeypatch.context() as m:
             m.setattr(SimConfig, "copy_for_run", lambda self: self)
-            panel._infer()
+            panel.main_pressed()
             _wait_for_run(app, panel)
     finally:
         inf.session.cfg = pristine
@@ -3148,7 +3147,7 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
 
     # (b) the copy on: the same failure leaves nothing behind
     snap = snapshot_cfg(pristine)
-    panel._infer()
+    panel.main_pressed()
     _wait_for_run(app, panel)
     assert_cfg_unchanged(pristine, snap)
     assert not pristine.has_ground_truth and "cell" not in pristine.sources
@@ -3175,12 +3174,12 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     before_obs, before_t_obs = inf.session.observation, cfg.T_obs
     snap = snapshot_cfg(cfg)
 
-    panel._infer()
+    panel.main_pressed()
     _wait_for_run(app, panel)
 
     assert all_asked() == [], [(a.title, a.sentence) for a in all_asked()]
     assert inf.session.observation is not None and inf.session.observation is not before_obs, \
-        "the run did not complete: _on_observation never installed an observation"
+        "the run did not complete: _on_inference never installed an observation"
     assert_cfg_unchanged(cfg, snap)
     assert not cfg.has_ground_truth and "cell" not in cfg.sources
     assert cfg.T_obs == before_t_obs

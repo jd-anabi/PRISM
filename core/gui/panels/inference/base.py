@@ -4,13 +4,11 @@ from PySide6.QtWidgets import QLabel
 
 from core import config, orchestrator
 from core.artifacts.provenance import _nvidia_smi_free_gib  # noqa: F401 -- re-exported for inference_tabs
-from core.config import CELL_PATH
 
 from ..base_panel import BasePanel
 from ...fields import label
 from ...run.controller import NOT_READ_YET_TEXT, controller
 from ...run.model import FIT_ENDED, SIMULATION_ROW, RunSpec, Stage
-from ...widgets.artifact_picker import ArtifactPicker
 
 #: A training's stages, as its page hands them to its run: what begins each, and what counts it. The fit begins
 #: when the simulation set is complete, or, for a training whose set is not kept, at the counts said when the
@@ -61,22 +59,6 @@ class _StagePanel(BasePanel):
     @property
     def session(self):
         return self._screen.session
-
-
-
-class _CellPreviewMixin:
-    """Cell-picker handling for the Infer tab (its only user): the cell folder follows the BUILT
-    config's model (there is no live model combo in that tab), so the picker is repointed in
-    on_config_built and the saved key re-applied there (it could not resolve at __init__, before
-    any config exists)."""
-
-    def _init_cell_picker(self):
-        self.cell_picker = ArtifactPicker(CELL_PATH / "nadrowski")
-        self._saved_cell_key = ""
-
-    def on_config_built(self, cfg):
-        self.cell_picker.repoint(CELL_PATH / cfg.model.lower(), self._saved_cell_key)
-
 
 
 def _hw_batch(cfg) -> int:

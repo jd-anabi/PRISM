@@ -5658,10 +5658,13 @@ def test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width(page, fac
         elsewhere = ("inference", "narrowing") if place == ("inference", "infer") else ("inference", "infer")
         window.go_to(*elsewhere)
         other = next(panel for panel, at in window._places.items() if at == elsewhere)
-        assert other.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W, "a page with no run gave up its width"
+        # A page of the old frame keeps its form's least width; a page of the look has its stack take the form's place.
+        if hasattr(other, "controls_scroll"):
+            assert other.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W, "a page with no run gave up its width"
         stand_in.release()
         turn_until(app, lambda: not controller().is_live())
-        assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
+        if hasattr(host, "controls_scroll"):
+            assert host.controls_scroll.minimumWidth() == design.CONTROLS_MIN_W
 
 
 def _end_and_give_back(how, app, window, host, held, stand_in, past) -> None:
@@ -6171,6 +6174,7 @@ shown_off_screen(window, 1300, 820)
 window.go_to("inference", "narrowing")
 frame = window.part("inference").tsnpe_panel
 checks = window.part("inference").validate_panel
+inference = window.part("inference").infer_panel
 rebuilt = build_step_page(window=window)
 
 
@@ -6201,9 +6205,17 @@ def measured(host, form):
 
 report = {"ratio": window.devicePixelRatioF()}
 for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", rebuilt, None), ("checks", checks, None),
-                         ("listed", None, None)):
+                         ("listed", None, None), ("inference", inference, None)):
     if host is rebuilt:
         window.go_to("inference", "training")
+    if host is inference:
+        window.resize(1300, 820)
+        window.go_to("inference", "infer")
+        settle()
+        host.form.fold.set_open(True)
+        host.form.rows["t_obs"].widget.setText("0")
+        host.redraw()
+        settle()
     if name in ("checks", "listed"):
         if name == "listed":
             host = build_step_page(stand_in_list_page(), window=window, step="checks")
@@ -6242,9 +6254,10 @@ QThreadPool.globalInstance().waitForDone(10000)
 
 def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_path):
     """The same measure at one and a half times the display's scaling, in a process of its own, for a process has one
-    scaling, set before its application exists: on today's frame, on a page whose stack takes the form's place, and on
+    scaling, set before its application exists: on today's frame, on a page whose stack takes the form's place, on
     a list whose detail stood beside it as the run began, the Checks list with the calibration's page open and the
-    stand-in list. The window is told the width in its own pixels, which the scaling does not change."""
+    stand-in list, and on Inference with its fold open and a field in error. The window is told the width in its own
+    pixels, which the scaling does not change."""
     import json
     import os
     import subprocess
@@ -6258,8 +6271,8 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
     assert child.returncode == 0, child.stderr[-2000:]
     report = json.loads(child.stdout.splitlines()[-1])
     assert report["ratio"] == 1.5, "the scaling was not in force"
-    assert len(report["frame"]) == len(report["rebuilt"]) == len(report["checks"]) == len(report["listed"]) == 9, (
-        "a leg measured nothing")
+    assert len(report["frame"]) == len(report["rebuilt"]) == len(report["checks"]) == len(report["listed"]) == len(
+        report["inference"]) == 9, "a leg measured nothing"
     for name in ("checks", "listed"):
         assert report[f"{name}_beside"], (name, "the list's detail did not stand beside it as the run began")
         after = report[f"{name}_after"]
@@ -6267,7 +6280,7 @@ def test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling(tmp_pa
             name, "after the run the detail did not stand in the list's place, then beside it", after)
         for width, _beside, wide, shows in after:
             assert wide <= shows, (name, "after the run the list's page is wider than what shows it", width, wide, shows)
-    for name in ("frame", "rebuilt", "checks", "listed"):
+    for name in ("frame", "rebuilt", "checks", "listed", "inference"):
         for row in report[name]:
             assert row["window"] == row["width"], (name, row)
             assert row["form_right"] <= row["left"], (name, "the form is drawn over the run's page", row)

@@ -17,7 +17,7 @@ from tests._fixtures import build_inference, build_window, qt_app
 from tests._window_helpers import _apply, _line, _pick, _units_file
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
-REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py", "validate_tab.py")
+REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py", "validate_tab.py", "infer_tab.py")
 #: The files of a check's page, its form and its result, beside the Checks list's.
 CHECK_FILES = ("check_page.py", "check_results.py", "check_forms.py")
 #: What every step's "Before you start" says last while no plan is in use and every setting it reads is at its usual
@@ -1385,10 +1385,9 @@ def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch)
         assert session.cfg is old_cfg and session.inf_prior is old_prior
         assert not page.switch_button.isEnabled(), "the way to the other view stood open during the run"
         written = _prior_artifact(default_store(), _nad_cfg(), name="retrain_2").id     # what the stage writes
-        told = []
-        monkeypatch.setattr(screen.infer_panel, "on_config_built",
-                            lambda cfg, kept=screen.infer_panel.on_config_built: (
-                                told.append((cfg, controller().is_live())), kept(cfg))[1])
+        later = screen.infer_panel
+        assert not hasattr(later, "on_config_built"), "step 5 is still handed the configuration"
+        later.read_facts()                                    # step 5 read once, before the prior comes back
         made = SimpleNamespace(kind="prior", id=written, name="retrain_2",
                                manifest=SimpleNamespace(created="2026-10-08T12:04:00+00:00",
                                                         inputs={"bounds": {"path": "Bounds/nadrowski/master.txt"}},
@@ -1404,7 +1403,10 @@ def test_a_prior_comes_into_use_only_when_its_run_returns(tmp_path, monkeypatch)
         stand_in.release(made)
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert taken == [(True, threading.main_thread(), 1)], "the prior was taken after its run, or more than once"
-        assert told == [(candidate, True)], "step 5 was not told of the configuration once, as it came into use"
+        assert later.stale, "step 5, not in sight, is not marked to read the configuration that came into use"
+        later.read_facts()
+        assert later._held()[0] is candidate and later._held_for[0] is candidate, (
+            "step 5 does not read the configuration in use at its next reading")
         assert page.prior_picker.key() == written, "the saved list was not moved to the prior just made"
         assert screen.session is session and session.cfg is candidate and session.inf_prior is made
         assert session.posterior is None and session.observation is None

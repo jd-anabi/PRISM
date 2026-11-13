@@ -1335,7 +1335,8 @@ COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "ma
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration",
                                 "estimate", "runs_of", "last_check", "checks_on", "runs_for_set_id"),
                     "plans": ("list_plans", "read_checked", "file_sha", "taken", "save_plan"),
-                    "check_lineage": ("read_records", "read_text"), "inference_screen": ("prior_label",)}
+                    "check_lineage": ("read_records", "read_text"), "inference_screen": ("prior_label",),
+                    "cli": ("validate_gt_file",)}
 # What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the
 # window that bound one of these at its own import would be read past. The other public functions of the card's package
 # it passes through are not listed here.
@@ -1357,11 +1358,12 @@ def readings_of_a_run(monkeypatch) -> list:
     looked for among the plans and a plan written; and the checks' records: every check record's manifest, a record's
     text by its folder, a list of the check records, which a check's run writes, a record's text by the store, which
     reads every manifest of its kind, the label of the prior a posterior was trained on, which lists every prior, and a
-    record's figures, read as its result is made. Each is passed through to the real call. Home, whose "Last runs" lists the
+    record's figures, read as its result is made; and a cell file's check against the configuration in use. Each is
+    passed through to the real call. Home, whose "Last runs" lists the
     live run, reads the history at every opening, so a test that opens Home during a run finds ``latest`` and ``read``
     here, and says so."""
     import torch
-    from core import orchestrator
+    from core import cli, orchestrator
     from core.artifacts import ArtifactStore
     from core.SBI import fit_state, training_checkpoint
     from core.gui import check_lineage, plans
@@ -1383,7 +1385,7 @@ def readings_of_a_run(monkeypatch) -> list:
 
     spaces = {"orchestrator": orchestrator, "fit_state": fit_state, "training_checkpoint": training_checkpoint,
               "history": history, "plans": plans, "check_lineage": check_lineage,
-              "inference_screen": inference_screen}
+              "inference_screen": inference_screen, "cli": cli}
     for home, names in COUNTED_READINGS.items():
         for name in names:
             counted(spaces[home], name, name)
