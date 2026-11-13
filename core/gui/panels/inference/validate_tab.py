@@ -483,24 +483,70 @@ class ValidatePanel(StepPage):
         training or a narrowing round is live, that it is counted when the simulation ends, where it applies. The one
         shown is kept while it would say the same."""
         held = self._held()
-        status = controller().status
-        if status.live and status.word in TRAINING_WORDS and row.state != "Does not apply":
-            made = (COUNTED_LATER_TEXT, "Running", False)
+        status, model = controller().status, controller().model
+        live = status.live and status.word in TRAINING_WORDS and row.state != "Does not apply"
+        compared = model.comparison() if live and model is not None else None
+        audit = next((one.record for one in found if one.key == "audit" and one.record is not None), None)
+        if live and compared is None:
+            made = (COUNTED_LATER_TEXT, "Running", False, None, "", "")
+        elif live:
+            # the live training's own comparison, from its run's model in memory: nothing is read
+            masked = model.masked()
+            made = (compared.sentence, compared.state, False,
+                    (masked.unusable, masked.total, masked.batches, None if audit is None else audit.manifest),
+                    "live" if compared.state == "Look closer" else "",
+                    check_readings.kept_training_words(model.answers().get("keep_training")))
         elif held is None or row.state not in ("Passed", "Look closer", "Failed", "Waiting for the audit"):
             return None, None
         else:
             compared = check_lineage.comparison_of(held, found)
             if compared is None:
                 return None, None
-            unusable, total = held.set_counts[0], held.set_counts[1]
-            made = (check_readings.compared_sentence(compared, unusable=unusable, total=total,
-                                                     audit_fraction=check_lineage.audit_fraction(found),
-                                                     prior_words=held.prior_words or "the prior in use"),
-                    row.state, held.narrowed)
+            unusable, total, batches = held.set_counts[0], held.set_counts[1], held.set_counts[2]
+            sentence = check_readings.compared_sentence(compared, unusable=unusable, total=total,
+                                                        audit_fraction=check_lineage.audit_fraction(found),
+                                                        prior_words=held.prior_words or "the prior in use")
+            said = check_readings.accepted_words(compared, check_lineage.acceptance(held, found))
+            answered = held.answered if isinstance(held.answered, dict) else {}
+            accepts = ("after" if held.set_in_history and answered.get("run") else "none") if (
+                compared.state == "Look closer") else ""
+            made = (f"{sentence} {said}".rstrip(), row.state, held.narrowed,
+                    (unusable, total, batches, None if audit is None else audit.manifest), accepts,
+                    check_readings.kept_training_words(answered.get("kept_training")))
         if page.result_source == made:
             return page.result, made
-        sentence, state, narrowed = made
-        return comparison_block(sentence, state, narrowed=narrowed, parent=page), made
+        sentence, state, narrowed, counts, accepts, kept = made
+        table = (check_readings.comparison_table(unusable=counts[0], total=counts[1], batches=counts[2],
+                                                 audit=counts[3]) if counts is not None and state == "Look closer"
+                 else None)
+        return comparison_block(sentence, state, narrowed=narrowed, parent=page, table=table,
+                                accept=self._accept_difference if accepts in ("live", "after") else None,
+                                accept_greyed=accepts == "none", kept=kept), made
+
+    def _accept_difference(self) -> None:
+        """"Accept this difference": while the training is live, its run is answered so; after it, the history of the
+        newest training of the posterior's set that holds the comparison is amended with the acceptance, its moment,
+        the audit it is of and the difference accepted, and the checks are read again."""
+        held, status = controller(), controller().status
+        if status.live:
+            if status.word in TRAINING_WORDS:
+                held.answer_comparison("accepted")
+                self.redraw()
+                self._draw(read=False)
+            return
+        checks = self._held()
+        answered = checks.answered if checks is not None and isinstance(checks.answered, dict) else {}
+        found = self._rows() or ()
+        audit, compared = check_lineage.counted_audit(found), check_lineage.comparison_of(checks, found)
+        if not answered.get("run") or audit is None or compared is None:
+            return
+        moment = held.now()
+
+        def accept(record) -> None:
+            record["health"]["comparison"]["accepted"] = {"at": moment, "audit": audit["id"],
+                                                          "difference": compared.difference}
+        held.amend(answered["run"], accept)
+        self.read_facts()
 
     def _audit_prior(self, row) -> str:
         """The prior an audit was made of, as its sentence names it."""

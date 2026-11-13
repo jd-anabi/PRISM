@@ -129,6 +129,26 @@ def _completed(text: "str | None") -> "datetime | None":
         return None
 
 
+def _the_sets_training(simulation: "str | None") -> tuple:
+    """Of the simulation set whose id is ``simulation``, as the run history holds its runs: the comparison with the audit
+    the newest training or narrowing round of it keeps, with the answers given to it and that run's id (None for none),
+    and whether any run of the history names the set. A reading of the run history, by the set's id: the screen makes
+    it only with no run live."""
+    if not simulation:
+        return None, False
+    from ..run import history
+    from ..run.questions import TRAINING_WORDS
+    try:
+        runs = history.runs_for_set_id(controller().folder(), simulation)
+    except OSError:                              # a folder of runs that cannot be read names no set
+        return None, False
+    for record in reversed(runs):
+        compared = (record.get("health") or {}).get("comparison")
+        if record.get("word") in TRAINING_WORDS and isinstance(compared, Mapping):
+            return {**compared, "run": record.get("id")}, True
+    return None, bool(runs)
+
+
 def _name_trouble(store, typed: str) -> "str | None":
     """Why the store would refuse ``typed`` as a posterior's name, in the window's words; None when it is free, or when
     the store cannot be read now (the training stage reads it again at its entry)."""
@@ -346,13 +366,14 @@ class InferenceScreen(QWidget):
         if read is not None:
             refused, counts, done, when = self._read_the_pair_and_the_set(read, prior, posterior, simulation)
             words = prior_label(read, trained_on) if refused else ""
+            answered, named = _the_sets_training(simulation)
             same = True
         else:
             last = self.checks_held.held if self.checks_held is not None else None
             same = last is not None and (last.prior, last.posterior, last.simulation) == ids
-            refused, counts, done, when, words = ((last.pair_refused, last.set_counts, last.set_done, last.set_when,
-                                                   last.posterior_prior_words) if same
-                                                  else ("", None, False, None, ""))
+            refused, counts, done, when, words, answered, named = (
+                (last.pair_refused, last.set_counts, last.set_done, last.set_when, last.posterior_prior_words,
+                 last.answered, last.set_in_history) if same else ("", None, False, None, "", None, False))
         return check_lineage.Held(
             prior=ids[0], posterior=ids[1], posterior_prior=trained_on, simulation=simulation,
             chi=chi if isinstance(chi, bool) else None, config=block, configured=configured,
@@ -362,7 +383,7 @@ class InferenceScreen(QWidget):
             pair_refused=refused, set_counts=counts, set_done=done,
             prior_words=record_words.phrase_of("prior", prior) if prior is not None else "",
             posterior_words=record_words.phrase_of("posterior", posterior) if posterior is not None else "",
-            set_when=when, set_read=same, posterior_prior_words=words)
+            set_when=when, set_read=same, posterior_prior_words=words, answered=answered, set_in_history=named)
 
     @staticmethod
     def _read_the_pair_and_the_set(store, prior, posterior, simulation) -> tuple:

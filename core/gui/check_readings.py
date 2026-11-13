@@ -390,6 +390,19 @@ COMPARED_TEXT = ("{}: {}. {} % in the simulation set; the audit read {} %. The d
                  "fine, up to 5 look closer, beyond 5 stop.")
 #: The narrowing round's sentence under the comparison.
 NARROWED_COMPARISON_TEXT = "The audit measured the whole prior; this round simulated inside a narrowed region."
+#: The comparison's page: the button that accepts a difference to look closer at, why it is greyed for a set no run
+#: history names, and the answer beyond the last band, with its moment.
+ACCEPT_WORDS = "Accept this difference"
+NO_HISTORY_TEXT = ("This simulation set was made outside the window: there is no run history to keep the acceptance "
+                   "in.")
+KEPT_TRAINING_TEXT = "You chose to keep training on {}."
+#: The comparison's table: the simulation set and the audit, each its share, the driven recordings counted, the batches
+#: and the median and the range of the share across its batches.
+COMPARISON_COLUMNS = ("", "Share", "Driven recordings counted", "Batches", "Median per batch", "Range per batch")
+COMPARISON_RIGHT = frozenset({1, 2, 3, 4, 5})
+SET_ROW = "Simulation set"
+AUDIT_ROW = "The audit"
+RANGE_TEXT_POINTS = "{} to {} %"
 #: The calibration's sentence: the rank test, the joint coverage test, and what it was made on.
 RANKS_ALL_TEXT = "All {} parameters pass the rank test"
 RANKS_SOME_TEXT = "{} of {} parameters fail the rank test: {}"
@@ -716,6 +729,47 @@ def compared_sentence(compared: Comparison, *, unusable: int, total: int, audit_
     limit = COMPARISON_FINE_POINTS if compared.difference <= COMPARISON_FAILED_POINTS else COMPARISON_FAILED_POINTS
     return COMPARED_TEXT.format(said_name("comparison"), VERDICT_WORDS[compared.state], _share(unusable / total),
                                 _share(audit_fraction), _points(compared.difference, limit))
+
+
+def accepted_words(compared: Comparison, accepted: "Mapping | None") -> str:
+    """That a difference to look closer at was accepted, and when, as the comparison's page and its state line say it;
+    "" for none."""
+    moment = _when(accepted.get("at")) if isinstance(accepted, Mapping) else ""
+    difference = compared.difference
+    if not moment or difference is None or not COMPARISON_FINE_POINTS < difference <= COMPARISON_FAILED_POINTS:
+        return ""
+    return ACCEPTED_TEXT.format(_points(compared.difference, COMPARISON_FINE_POINTS), moment)
+
+
+def kept_training_words(moment) -> str:
+    """That the person chose to keep training beyond the comparison's last band, and when; "" for no such answer."""
+    said = _when(moment)
+    return KEPT_TRAINING_TEXT.format(said) if said else ""
+
+
+def _per_batch(shares) -> tuple:
+    """The median and the range of the shares, in per cent, as the comparison's table says them; "" for none."""
+    if not shares:
+        return "", ""
+    return (f"{statistics.median(shares):.1f} %",
+            RANGE_TEXT_POINTS.format(f"{min(shares):.1f}", f"{max(shares):.1f}"))
+
+
+def comparison_table(*, unusable: int, total: int, batches, audit: "Mapping | None") -> TableWords:
+    """The comparison's table: the simulation set's share, the driven recordings counted and its batches; and the
+    audit's, from its record's manifest (``audit``), with the median and the range of its share across its batches.
+    Never raises on what a record holds: what cannot be read is said as nothing."""
+    rows = [(SET_ROW, f"{_share(unusable / total)} %" if total else "", number_text(total),
+             number_text(batches) if _is_whole(batches) else "", "", "")]
+    try:
+        body = _body(audit)
+        results, settings = body["results"], body["settings"]
+        shares = [_real(value) * 100 for value in ((results.get("per_batch") or {}).get("fractions") or ())]
+        rows.append((AUDIT_ROW, f"{_share(_real(results['masked_fraction']))} %", number_text(_whole(results["probes"])),
+                     number_text(_whole(settings["num_runs"])), *_per_batch(shares)))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass
+    return TableWords(COMPARISON_COLUMNS, tuple(rows), right=COMPARISON_RIGHT)
 
 
 def run_sentence(key: str, entry_: Mapping) -> str:

@@ -110,8 +110,10 @@ class Held:
     counted and the scope the engine names them by (None when not read or not there), whether the set is complete and
     when it was completed; the prior and the posterior as a sentence names them; whether the posterior's set and text
     were read for the posterior now in use (``set_read``: False between a posterior coming into use and the next
-    reading); and the label of the prior the posterior was trained on, as a reading found it ("" when not read, or
-    when that prior's record is gone)."""
+    reading); the label of the prior the posterior was trained on, as a reading found it ("" when not read, or
+    when that prior's record is gone); and of the training that made the posterior's set, as the run history holds it:
+    the comparison its history keeps with the answers given to it and the id of that run (answered; None for none),
+    and whether any run of the history names the set (set_in_history)."""
     prior: str | None
     posterior: str | None
     posterior_prior: str | None
@@ -131,6 +133,8 @@ class Held:
     set_when: datetime | None = None
     set_read: bool = True
     posterior_prior_words: str = ""
+    answered: "Mapping | None" = None
+    set_in_history: bool = False
 
 
 @dataclass(frozen=True)
@@ -393,8 +397,19 @@ def comparison_of(held: Held, found: Sequence[CheckRow]) -> "check_readings.Comp
         return None
     unusable, total, batches, scope = held.set_counts
     return check_readings.compare(unusable=unusable, total=total, scope=scope, audit_fraction=audit_fraction(found),
-                                  batches=batches, prior_words=held.prior_words or "the prior in use",
+                                  accepted=acceptance(held, found), batches=batches,
+                                  prior_words=held.prior_words or "the prior in use",
                                   kept_set=held.simulation is not None)
+
+
+def acceptance(held: Held, found: Sequence[CheckRow]) -> "Mapping | None":
+    """The acceptance of a difference the history of the training that made the posterior's set keeps, while it is of
+    the audit that counts now among found; None for none, and once another audit counts."""
+    accepted = held.answered.get("accepted") if isinstance(held.answered, Mapping) else None
+    audit = counted_audit(found)
+    if not isinstance(accepted, Mapping) or audit is None or accepted.get("audit") != audit["id"]:
+        return None
+    return accepted
 
 
 def _comparison(one, held: Held, _records, histories, made) -> CheckRow:
@@ -413,7 +428,8 @@ def _comparison(one, held: Held, _records, histories, made) -> CheckRow:
     if compared.state == "Not compared":
         return CheckRow(one.key, compared.state, compared.sentence, None, None, (), "")
     when = held.set_when if compared.state in _DECIDED else None
-    return CheckRow(one.key, compared.state, _line(compared.state, when), when, None, (), "")
+    then = check_readings.accepted_words(compared, acceptance(held, made))
+    return CheckRow(one.key, compared.state, _line(compared.state, when, then), when, None, (), "")
 
 
 def _of_posterior(one, held: Held, records, *, reason: str = "") -> CheckRow:

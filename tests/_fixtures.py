@@ -1333,7 +1333,7 @@ def card_and_programs(monkeypatch) -> list:
 COUNTED_READINGS = {"orchestrator": ("training_preview", "training_reading", "matching_fits"),
                     "fit_state": ("kept_fits",), "training_checkpoint": ("checkpoints_using_prior", "peek"),
                     "history": ("read", "latest", "newest_unseen", "last_on", "last_measured_on", "duration",
-                                "estimate", "runs_of", "last_check", "checks_on"),
+                                "estimate", "runs_of", "last_check", "checks_on", "runs_for_set_id"),
                     "plans": ("list_plans", "read_checked", "file_sha", "taken", "save_plan"),
                     "check_lineage": ("read_records", "read_text"), "inference_screen": ("prior_label",)}
 # What ``card_and_programs`` answers with a stand-in of its own, and the ways it names to start a program: a module of the

@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from PySide6.QtWidgets import QPushButton
+
 from core.artifacts.store import slug
 
 from ... import check_readings
@@ -103,11 +105,25 @@ def card_block(run: Mapping, *, parent, earlier: "Mapping | None" = None) -> Res
     return region
 
 
-def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = False) -> ResultRegion:
-    """The comparison after simulating, which writes no record: its sentence with the marker of its state, and for a
-    posterior from a narrowing round that the audit measured the whole prior; made inside ``parent``."""
+def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = False, table=None, accept=None,
+                     accept_greyed: bool = False, kept: str = "") -> ResultRegion:
+    """The comparison after simulating, which writes no record: its sentence with the marker of its state; for a
+    posterior from a narrowing round, that the audit measured the whole prior; ``kept``, the answer to keep training
+    beyond the last band, with its moment ("" for none); its ``table``, the set's and the audit's shares (None for
+    none); and in the band to look closer at, "Accept this difference", pressed into ``accept``, or greyed, with why,
+    for a set no run history names (``accept_greyed``). Made inside ``parent``."""
     region = ResultRegion(parent)
     region.set_verdict(check_readings.STATE_MARKERS.get(state, "later"), sentence)
-    if narrowed:
-        region.set_sentences((Fact("info", check_readings.NARROWED_COMPARISON_TEXT),))
+    said = ([Fact("info", check_readings.NARROWED_COMPARISON_TEXT)] if narrowed else []) + (
+        [Fact("info", kept)] if kept else [])
+    if said:
+        region.set_sentences(tuple(said))
+    if table is not None:
+        region.set_table(table)
+    if accept is not None or accept_greyed:
+        button = QPushButton(check_readings.ACCEPT_WORDS, region)
+        if accept is not None:
+            button.clicked.connect(accept)
+        button.setEnabled(accept is not None)
+        region.add_action(button, "" if accept is not None else check_readings.NO_HISTORY_TEXT)
     return region

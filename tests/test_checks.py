@@ -4334,3 +4334,166 @@ def test_no_check_says_it_cannot_be_run_from_the_window(tmp_path):
             assert page.foot.main_button.text().replace("&", "") in (check_catalogue.entry(key).button,
                                                                     check_catalogue.AGAIN_WORDS), key
             assert not any("cannot be run" in fact.sentence for fact in page.facts_from_form()), key
+
+
+# ── the comparison after simulating: its answers ──
+#: The training that made the posterior's simulation set, as its history file is named.
+_TRAINED = "20261002T081000-training"
+
+
+def _an_audit(store, cfg, prior, _posterior, *, fraction=0.379) -> None:
+    from tests._fixtures import check_results, write_diagnostic
+    write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
+                     **check_results("audit", masked_fraction=fraction))
+
+
+def _audit_ids(store) -> list:
+    """The audits the store holds, oldest first."""
+    return [summary.id for summary in reversed(store.list("diagnostic"))]
+
+
+def _a_set_of(tmp_path, store, screen, *, masked=92, named=True, compared=None) -> Path:
+    """The posterior in use trained on a simulation set whose batches each counted ``masked`` of 221 driven
+    recordings unusable (92: 41.6 %, 3.7 points from the audit's 37.9 %), and, when ``named``, the history of the
+    training that made it, which keeps ``compared`` as its comparison with the audit."""
+    from core.gui.run import history
+    from tests._fixtures import write_history, write_simulation_set
+    folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100, complete=True,
+                                  chi_masked=[(masked, 221)] * 100)
+    screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, simulation=folder.name)
+    if named:
+        entry = {name: None for name in history.COMPARISON_FIELDS}
+        entry.update({"unusable": masked * 100, "total": 22_100, "scope": WHOLE, "batches": 100, "state": "Look closer",
+                      **(compared or {})})
+        from core.gui.panels.inference.base import TRAINING_STAGES
+        write_history(tmp_path / "runs", id=_TRAINED, word="Training", started=_at(2, 8, 10), ended=_at(3, 9),
+                      outcome="finished", records_root=str(store.root), simulation_set={"folder": str(folder)},
+                      stages=[[stage.name, list(stage.begins), stage.counts] for stage in TRAINING_STAGES],
+                      health={"failed": 0, "simulated": 22_100, "comparison": entry})
+    return folder
+
+
+def test_an_acceptance_is_written_into_the_training_history_during_and_after_the_run(tmp_path):
+    """A difference to look closer at shows the comparison's table and "Accept this difference". Pressed after the
+    training, it writes the acceptance, with its moment, the audit it is of and the difference, into the history of the
+    training that made the posterior's set; from then the check reads "Passed" and its state line and its sentence say
+    the difference was accepted, and when. Pressed while a training is live, its run is answered so, the run's history
+    keeps it, and its page reads the same words."""
+    from core.gui.run import history
+    from core.gui.texts import date_text
+    from tests._runs import StandIn, masked_line, start_run, training_spec, turn_until
+    app = qt_app()
+    with _checks_page(tmp_path, records=_an_audit) as (window, screen, page, store):
+        audit, = _audit_ids(store)
+        _a_set_of(tmp_path, store, screen, compared={"audit": audit, "audit_fraction": 0.379})
+        page.read_facts()
+        page.open_check("comparison")
+        one = page.check_pages["comparison"]
+        assert _row(screen.check_rows(), "comparison").state == "Look closer"
+        assert one.result.table_words().rows[0][:4] == ("Simulation set", "41.6 %", "22,100", "100")
+        assert one.result.table_words().rows[1][:2] == ("The audit", "37.9 %")
+        button, = one.result.actions()
+        assert (button.text(), button.isEnabled()) == ("Accept this difference", True)
+        button.click()
+        accepted = history.read(tmp_path / "runs" / f"{_TRAINED}.json")["health"]["comparison"]["accepted"]
+        assert (accepted["at"], accepted["audit"], round(accepted["difference"], 2)) == (
+            _at(8, 12, 4).isoformat(), audit, 3.73), accepted
+        said = f"A difference of 3.7 points was accepted on {date_text(_at(8, 12, 4).astimezone())}."
+        row = _row(screen.check_rows(), "comparison")
+        assert row.state == "Passed" and row.line.endswith(said), row.line
+        assert one.result.verdict.sentence.plain_text().endswith(said)
+        assert one.result.actions() == [], "a difference accepted asked to be accepted again"
+        training = StandIn(word="Training")
+        start_run(window.part("inference").tsnpe_panel, training, spec=training_spec(
+            place=("inference", "narrowing"), facts={"model": "NADROWSKI", "observation": "chi", "narrowed": False,
+                                                    "network": (256, 10), "cadence": 50,
+                                                    "audit": {"id": audit, "fraction": 0.379, "batches": 100}}))
+        assert training.started.wait(5)
+        run = controller().status.run
+        training.say(masked_line(4163, 10_000, 3, WHOLE))
+        turn_until(app, lambda: controller().model.comparison() is not None)
+        page.refresh_local_gates()
+        assert one.result.verdict.sentence.plain_text().endswith("up to 5 is a reason to look closer.")
+        button, = one.result.actions()
+        button.click()
+        assert "accepted" in controller().model.answers()
+        assert one.result.verdict.sentence.plain_text().endswith(said)
+        assert history.read(tmp_path / "runs" / f"{run}.json")["health"]["comparison"]["accepted"]["audit"] == audit
+        training.release()
+        turn_until(app, lambda: not controller().is_live())
+
+
+def test_an_acceptance_lapses_when_another_audit_counts(tmp_path):
+    """An acceptance is of the audit it names: once another audit counts for the prior, the check reads the difference
+    from that audit again, to look closer at, and says no acceptance."""
+    with _checks_page(tmp_path, records=_an_audit) as (_window, screen, page, store):
+        first, = _audit_ids(store)
+        _a_set_of(tmp_path, store, screen, compared={
+            "audit": first, "audit_fraction": 0.379,
+            "accepted": {"at": _at(3, 9, 14).isoformat(), "audit": first, "difference": 3.73}})
+        page.read_facts()
+        assert _row(screen.check_rows(), "comparison").state == "Passed"
+        _an_audit(store, screen.session.cfg, screen.session.inf_prior.id, None, fraction=0.375)
+        page.read_facts()
+        row = _row(screen.check_rows(), "comparison")
+        assert row.state == "Look closer" and "accepted" not in row.line, row.line
+
+
+def test_accept_is_greyed_for_a_set_with_no_history(tmp_path):
+    """For a simulation set no run history names, made outside the window, "Accept this difference" is greyed, and the
+    page says why: there is no run history to keep the acceptance in."""
+    from core.gui.check_readings import NO_HISTORY_TEXT
+    with _checks_page(tmp_path, records=_an_audit) as (_window, screen, page, store):
+        _a_set_of(tmp_path, store, screen, named=False)
+        page.read_facts()
+        page.open_check("comparison")
+        one = page.check_pages["comparison"]
+        button, = one.result.actions()
+        assert not button.isEnabled() and NO_HISTORY_TEXT in _texts(one.result)
+        assert NO_HISTORY_TEXT == ("This simulation set was made outside the window: there is no run history to keep "
+                                   "the acceptance in.")
+
+
+def test_the_answer_to_keep_training_is_shown_on_the_comparisons_page(tmp_path):
+    """The answer "Keep training" beyond the last band is said on the comparison's page with its moment; it changes no
+    state: the check still reads "Failed"."""
+    from core.gui.texts import date_text
+    with _checks_page(tmp_path, records=_an_audit) as (_window, screen, page, store):
+        audit, = _audit_ids(store)
+        kept = "2026-10-02T09:14:00-07:00"
+        _a_set_of(tmp_path, store, screen, masked=100, compared={"audit": audit, "state": "Failed",
+                                                                  "kept_training": kept})
+        page.read_facts()
+        page.open_check("comparison")
+        one = page.check_pages["comparison"]
+        assert _row(screen.check_rows(), "comparison").state == "Failed"
+        assert [fact.sentence for fact in one.result.sentences()] == [
+            f"You chose to keep training on {date_text(datetime.fromisoformat(kept).astimezone())}."]
+
+
+def test_keep_training_is_not_asked_again_at_a_reopening(tmp_path):
+    """A training whose history keeps the answer "Keep training", its window closed and opened again: nothing asks for
+    the answer again, on the run's past view (no "Keep training", no stop beside it), in the status that Home and the
+    rail's foot read, or anywhere; the comparison's page names the answer and its moment."""
+    from core.gui.texts import date_text
+    from tests._fixtures import build_window
+    from tests._runs import masked_line
+    kept = "2026-10-02T09:14:00-07:00"
+    with _checks_page(tmp_path, records=_an_audit) as (_window, screen, page, store):
+        audit, = _audit_ids(store)
+        _a_set_of(tmp_path, store, screen, masked=100, compared={"audit": audit, "audit_fraction": 0.379,
+                                                                  "state": "Failed", "kept_training": kept})
+        (tmp_path / "runs" / f"{_TRAINED}.txt").write_text(
+            f"2026-10-02 09:10:00 info {masked_line(22_100, 49_000, 100, WHOLE)}\n", encoding="utf-8")
+        again = build_window()
+        assert controller().status.needs_you is None
+        host = again.part("inference").posterior_panel
+        assert controller().show_past(_TRAINED, host)
+        past = host.past_view
+        assert past.answers.isHidden() and not past.keep_training_button.isVisibleTo(past), "the past asked"
+        assert [row.state for row in past._model.health() if row.measure == "Unusable driven recordings"] == ["Failed"]
+        page.read_facts()
+        page.open_check("comparison")
+        said = [fact.sentence for fact in page.check_pages["comparison"].result.sentences()]
+        assert said == [f"You chose to keep training on {date_text(datetime.fromisoformat(kept).astimezone())}."]
+        again.hide()

@@ -53,6 +53,7 @@ class ResultRegion(QWidget):
         self._rows: list = []               # the message row of each fact said
         self._table: "TableWords | None" = None
         self._steps: tuple = ()
+        self._actions: list = []            # buttons of the result's own, after everything it says
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(design.scaled(design.GAP["head_table"]))
@@ -237,10 +238,31 @@ class ResultRegion(QWidget):
         self.set_lines("")
         self.set_next_steps(())
 
+    def add_action(self, button: QPushButton, beneath: str = "") -> None:
+        """A button of the result's own, on a line of its own after everything the region says, and ``beneath`` it,
+        small, why it is greyed ("" for nothing): what a check's result offers to do with itself."""
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        line.addWidget(button)
+        line.addStretch(1)
+        self.layout().addLayout(line)
+        if beneath:
+            said = self._small()
+            said.setText(beneath)
+            self.layout().addWidget(said)
+            said.setVisible(True)
+        self._actions.append(button)
+        self._judge()
+
+    def actions(self) -> list:
+        """The buttons of the result's own, in their order."""
+        return list(self._actions)
+
     def stops(self) -> list:
         """What the Tab key stops at here: the lines' "Copy" while it is offered, then the next steps' buttons offered, in
-        their order."""
-        return [*([self.copy_button] if self.lines.text() else []), *self.next_buttons[:len(self._steps)]]
+        their order, then the result's own buttons that can be pressed."""
+        return [*([self.copy_button] if self.lines.text() else []), *self.next_buttons[:len(self._steps)],
+                *(button for button in self._actions if button.isEnabled())]
 
     def is_empty(self) -> bool:
         return not (self.verdict is not None or self._facts or self._table is not None or self.pictures or self._steps
