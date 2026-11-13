@@ -1862,6 +1862,14 @@ def step_pages() -> dict:
     return found
 
 
+def _clipboard_mark(app) -> tuple:
+    """The clipboard's text as its length and a digest of it: two readings compare as the text does, and neither says
+    it."""
+    import hashlib
+    text = app.clipboard().text()
+    return len(text), hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def process_state(app) -> dict:
     """What the whole program sets on the process, read as values that compare. The whole-program
     test reads it before, during and after; whatever ``whole_program`` learns to put back gets a
@@ -1957,7 +1965,8 @@ def process_state(app) -> dict:
         "fault handler": faulthandler.is_enabled(),
         "Qt message handler": getattr(entry._bound, "qt", None),
         # The text on the clipboard, the process's own offscreen: a "Copy" a test presses puts it back as it found it.
-        "clipboard": app.clipboard().text(),
+        # Held as its length and a digest, so that a comparison that fails never says the person's text.
+        "clipboard": _clipboard_mark(app),
     }
 
 

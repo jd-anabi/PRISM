@@ -243,14 +243,18 @@ def _settings_home(tmp_path_factory):
 def _clipboard_kept():
     """The clipboard's text holds at the end of every test what it held at its start (the process's own clipboard,
     offscreen, or the person's, on the real screen): a test that presses a "Copy" takes the text first and puts it
-    back, and one that does not fails here, before a later test meets what it left."""
+    back, and one that does not fails here, before a later test meets what it left. Compared only when one application
+    stood at the test's start and still stands at its end; read, never written; and its text is never said, its length
+    alone."""
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance()
-    before = app.clipboard().text() if app is not None else ""
+    before = app.clipboard().text() if app is not None else None
     yield
-    app = QApplication.instance()
-    after = app.clipboard().text() if app is not None else ""
-    assert after == before, f"the test left the clipboard holding {after[:80]!r}"
+    if app is None or QApplication.instance() is not app:
+        return
+    after = app.clipboard().text()
+    assert after == before, (f"the test left the clipboard changed: {len(before)} characters at its start, "
+                             f"{len(after)} at its end")
 
 
 @pytest.fixture(autouse=True)

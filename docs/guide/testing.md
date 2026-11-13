@@ -184,7 +184,8 @@ and the session guards).
     gives a new one), because the program's fonts registered again under a changed font would take its
     family for the toolkit's own;
   - `_clipboard_kept`: the clipboard left holding other text than at the test's start (a test that
-    presses a "Copy" takes the text first and puts it back);
+    presses a "Copy" takes the text first and puts it back), compared only where one application stood
+    at both ends, read and never written, its text never said;
   - `_drawing_code_raises_nothing`: an error the window's own drawing code caught and recorded while
     the test ran (`core.gui.reported`); a test that causes one on purpose does it inside
     `reported.expected()`;

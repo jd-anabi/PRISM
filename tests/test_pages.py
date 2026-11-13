@@ -4691,9 +4691,11 @@ def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(t
                 if state != "the longest words":
                     screen.session = SbiSession(cfg=cfg, inf_prior=held, posterior=posterior)
                     page.read_facts()
-                    page.open_check("identifiability")
+                    # identifiability across the prior: it does not apply with the frequency response, and its
+                    # recording length, which opens blank, is in error
+                    page.open_check("across_prior")
                     assert page.foot.reason.text() == (
-                        "Cannot start: this check cannot be run from the window yet, and 1 more above.")
+                        "Cannot start: it does not apply with the frequency response, and 1 more above.")
                 for _ in range(5):
                     app.processEvents()
                 inside = QRect(0, 0, window.width(), window.height())
