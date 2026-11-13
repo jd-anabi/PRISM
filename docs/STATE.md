@@ -1,5 +1,36 @@
 # PRISM — state
 
+**Last updated:** 2026-11-13, afternoon (13:31 by the clock; the weekly bar 86 %, resetting on 15 November at 04:00
+UTC): STAGE 5'S TASK 8-9, THE TIMING OF A SHORT FIT, THE CARD TEST AND THE COMPARISON AFTER SIMULATING, IS COMPLETE, in
+the same chat, started at 09:28 on the owner's word ("please stop insisting to wait for the reset when we have like 18%
+left"): the loop now goes on task after task while the bar has room.
+
+- **The build** (one Opus builder from `stage-5/briefs/task-08-09-builder-dispatch.md`, rulings R1 to R11; no stop):
+  `9535c03` (the scratch store), `54b7b19` (the timing, two runs from one press), `2f50ad7` (the card test), `30b825c`
+  (the first unusable count compared with the audit), `cba6d71` (the answers kept in the run history; an ended run's
+  history amended), `efbc6c0` (check 3's page accepts a difference); the fix round `c537d11`, `64e3924`, `edefab3`,
+  `fd89995` (H1 to H14: no second fit after a stop or a close; nothing said of a saved network by a check that keeps
+  nothing; the card test's own reading tested; the set's per-batch figures on check 3's table; the past view as its
+  history kept it; a window test that reached the card made card-free). Every change under `core/gui/`; the engine
+  closed. The registry amended as built in the plan; the code audit's list gains item 16 (the card test's "about 12
+  points of 37 %").
+- **Its review:** reader one (sonnet) 1 Important, 7 Minor; reader two (opus) 3 Important, 8 Minor after its runs; the
+  gate on `efbc6c0` GREEN; one fix round; the re-read CLEAN (one long line carried into Task 10-11's first commit).
+- **The gates on `fd89995`:** the fast gate 3944 passed, 12 skipped, 3 deselected, 44 min 14 s (3959 collected; not
+  certified quiet); the real-screen run 12 passed; `Artifacts/` 428 entries, the listing identical; `PRISM.ini`
+  unchanged. The carried-over list: 40 rows born, 1852 rows, missing 0.
+- **Measured:** about 4 points (82 % to 86 %): the builder 0.91 M tokens in all, the readers 0.19 M and 0.38 M, the
+  re-read 0.10 M.
+- **For the owner's list at the exit:** the narrowing round is compared on its run page with an audit of the whole
+  prior by the same bands; a timing press flashes the taskbar at each of its two fits; a test writes `sbitest` files
+  into the real `Resources/` while it runs (gone at its end; carried to the last review).
+
+NEXT: Task 10-11 (Inference and the Narrowing round on the step page), from
+`.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-10-11-builder-dispatch.md` (rulings R1 to R12, a
+checkpoint after Task 10's part); then Task 12-13; the last review; Task 14; the code audit; the retrain; one last stage.
+
+What follows is the head as the evening of 12 November left it:
+
 **Last updated:** 2026-11-12, evening (20:47 by the clock; the weekly bar 82 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S TASK 6-7, THE FORMS AND RUNS OF EVERY CHECK, IS COMPLETE. The chat started at 14:59 from
 `docs/superpowers/prompts/2026-11-12-window-redesign-stage-5-from-task-6-7.md`; at 15:06 it judged the task should wait

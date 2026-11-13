@@ -214,6 +214,12 @@ Each task's section gives the exact signatures it produces; the names below are 
 - **R-plans (Task 12).** `core/gui/plans.py`'s `HEADING_OF` keyed by `keys.STEPS` (`checks` → "Calibration", `infer` → "Inference", `narrowing` → "Narrowing round"); `headings_to(step)` from a table of what each step's run reads; `InferenceScreen.step_pages()` lists six pages.
   - *Signatures.* `HEADING_OF: dict[str, str]` (six entries); `FILLED = tuple(HEADING_OF.values())`; `READS: dict[str, tuple[str, ...]]`; `headings_to(step: str) -> tuple[str, ...]` (`READS.get(step, ())`); `departures_from(source: PlanSource, read: Mapping[tuple[str, str], object], usual: Mapping[tuple[str, str], object], labels: Mapping[tuple[str, str], str]) -> tuple[str, ...]`; `plan_facts(screen, headings)` keeps its signature and calls it; `InferenceScreen.step_pages() -> tuple` (`config_panel`, `prior_panel`, `posterior_panel`, `validate_panel`, `infer_panel`, `tsnpe_panel`, those built so far).
 
+- **Amended as built (Task 8-9, 13 November 2026).** `check_scratch.short_fit(..., press: str = "")` (the press's id,
+  which only the page knows, goes into the result alone); `training_spec(..., audit=None, prior=None, prior_words="")`
+  (the prior's words for the "no audit" sentence); `check_readings.CARD_STAGE_WORDS` (the module without the toolkit),
+  re-exported by `check_scratch`; `history.COMPARISON_FIELDS` gains `"batch_median"`, `"batch_low"`, `"batch_high"`
+  (the first masked record's per-batch figures, kept by `Masked`; a missing one is no information).
+
 ### The standing checks the stage leaves behind (each binds every later task and stage)
 
 Stages 1 to 4's and the fit-saving stage's stand. Added:
