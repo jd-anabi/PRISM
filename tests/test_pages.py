@@ -113,9 +113,8 @@ def _in_view(page, widget) -> bool:
     port = page.scroller.viewport()
     room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"]
     edge = _edge_of(widget, port).adjusted(0, -room, 0, room)
-    listing = getattr(page, "listing", None)
-    if edge.height() > port.height() and listing is not None and widget is listing.view() and (
-            widget.currentIndex().isValid()):
+    view = getattr(getattr(page, "listing", None), "view", None)
+    if edge.height() > port.height() and callable(view) and widget is view() and widget.currentIndex().isValid():
         row = widget.visualRect(widget.currentIndex())
         top = widget.viewport().mapTo(port, row.topLeft()).y() - room
         return 0 <= top and top + row.height() + 2 * room <= port.height()
