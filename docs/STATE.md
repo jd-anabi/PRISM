@@ -31,8 +31,11 @@ for the reset, and the owner answered "No, start it now in this chat".
   and 477; the repeated calibration's seed bounded lower by its repeats.
 - **Unpushed:** everything after `cdc80d2`.
 
-NEXT: Task 8-9 (the timing of a short fit and the card test; the comparison after simulating), by the same loop, if the
-bar leaves room to finish it below 90 %; then Tasks 10-11, 12-13; the last review; Task 14 (the exit, with the owner);
+NEXT: Task 8-9 (the timing of a short fit and the card test; the comparison after simulating), by the same loop. Its
+builder's dispatch is written, rulings R1 to R11 (the ledger's line of 20:48):
+`.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-08-09-builder-dispatch.md`. It waits for the reset of
+15 November at 04:00 UTC, since about 6 points from 82 % ends too near 90 %, unless the owner says to start it. Then
+Tasks 10-11, 12-13; the last review; Task 14 (the exit, with the owner);
 the code audit; the retrain from the window; one last stage.
 
 What follows is the head as 14:22 left it:
