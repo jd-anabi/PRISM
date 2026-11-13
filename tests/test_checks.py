@@ -3912,13 +3912,15 @@ def _step_three(screen, width, depth) -> None:
 
 
 @pytest.mark.parametrize("ending", ["two networks", "the same network", "stopped", "failed", "refused",
-                                    "a run live by then"])
+                                    "a run live by then", "a stop taken too late", "a close"])
 def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(ending, tmp_path, monkeypatch):
     """One press of the timing of a short fit starts a run for step 3's network and, once that run has finished and its
     end has been published and drawn, one turn later, a second for the built-in network, each with its own history,
     the two at equal sizes and with one press in their results; one run when step 3's network is the built-in one.
-    A first run stopped, failed or refused starts no second, and neither does one whose end finds another run live by
-    the time its second would start."""
+    A first run stopped, failed or refused starts no second; nor does one asked to stop that finished all the same, the
+    stop taken too late, nor one the window's close asked to stop; nor one whose end finds another run live by the
+    turn its second would start in. The page holds no configuration and no prior of the press once no fit of it is to
+    come."""
     import tempfile
     from core import orchestrator
     from core.gui.run import history
@@ -3928,7 +3930,8 @@ def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(endi
     from tests._fixtures import build_run_host
     from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    stand_in, other = StandIn(word="Check"), StandIn(word="Run")
+    late = ending in ("a stop taken too late", "a close")
+    stand_in, other = StandIn(word="Check", takes_stops=not late), StandIn(word="Run")
     monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
     app = qt_app()
     order = []
@@ -3939,9 +3942,11 @@ def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(endi
         if ending == "a run live by then" and len(order) == 2:
             start_run(build_run_host(), other, spec=RunSpec("Run", None))
 
-    held.run_ended.connect(heard)
     try:
         with _checks_page(tmp_path) as (_window, screen, page, store):
+            # heard after the page's own, so that another run starts between its end and the turn its second would
+            # start in
+            held.run_ended.connect(heard)
             clock = Clock(at(8, 12, 5))
             controller_on(tmp_path, clock)
             if ending != "the same network":
@@ -3959,6 +3964,10 @@ def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(endi
                 stand_in.fail(RuntimeError("the fit broke"))
             elif ending == "refused":
                 stand_in.fail(Refusal("The number of training batches must be at least 1; got 0.", field="num_runs"))
+            elif late:
+                held.request_stop(closing=ending == "a close")
+                turn_until(app, lambda: held.status.stop_requested)
+                stand_in.release(_a_posterior())
             else:
                 clock.advance(90)
                 stand_in.release(_a_posterior())
@@ -3975,8 +3984,12 @@ def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(endi
                 assert asked().kind == "refusal"
             runs = [one for one in history.runs_of(tmp_path / "runs", records_root=str(store.root))
                     if (one.get("check") or {}).get("key") == "timing"]
+            kept = [name for name, value in vars(page).items() if value is screen.session.inf_prior or (
+                isinstance(value, dict) and any(isinstance(one, tuple) and screen.session.inf_prior in one
+                                                for one in value.values()))]
     finally:
         held.run_ended.disconnect(heard)
+    assert kept == [], f"the page holds the press's prior: {kept}"
     networks = [(kwargs["hidden_features"], kwargs["num_transforms"]) for _args, kwargs in stand_in.calls]
     if ending == "two networks":
         assert networks == [(256, 10), (128, 8)], networks
@@ -3990,6 +4003,8 @@ def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(endi
         assert networks == [(128, 8) if ending == "the same network" else (256, 10)], networks
         assert [step for step in order if step[0] == "fit"] == [order[0]], order
         assert len(runs) == (0 if ending == "refused" else 1), runs
+        if late:
+            assert runs[0]["outcome"] == "finished", "the stop was not taken too late"
     assert [path.name for path in tmp_path.glob("prism_check_*")] == [], "a scratch folder was left"
 
 

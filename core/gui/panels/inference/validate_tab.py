@@ -894,6 +894,7 @@ class ValidatePanel(StepPage):
         finally:
             if not started:
                 self._following = None
+                self._let_the_press_go()
 
     def _time_a_fit(self, network) -> bool:
         """One run of the press in hand: a short fit of ``network`` in a scratch store; whether it started."""
@@ -902,18 +903,37 @@ class ValidatePanel(StepPage):
         return self.dispatch(check_scratch.short_fit, cfg, prior, provide_fig_sink=True, press=press["press"],
                              hidden_features=network[0], num_transforms=network[1], **press["arguments"])
 
+    def _status_heard(self, status) -> None:
+        """A run's status: as every page hears it. A stop asked of the first fit of a timing, however late it comes, or
+        the window closing or Windows ending the session, starts no second fit."""
+        if status.stop_requested or status.closing:
+            self._following = None
+        super()._status_heard(status)
+
     def _run_ended(self, status) -> None:
         """A run has ended: read as every page reads. The first fit of a timing that finished asks for the second one
-        turn later, once its end has been drawn; one that was stopped, failed or refused asks for none."""
+        turn later, once its end has been drawn; one that was stopped, failed or refused asks for none. The press lets
+        go of its configuration and its prior once no fit of it is to come."""
         following, self._following = self._following, None
         super()._run_ended(status)
         if following is not None and status.outcome == "finished" and controller().host() is self:
             QTimer.singleShot(0, self, functools.partial(self._time_the_second, following))
+        else:
+            self._let_the_press_go()
 
     def _time_the_second(self, network) -> None:
-        """The second fit of the press in hand, unless a run is live by now."""
-        if self._press is not None and not controller().is_live():
-            self._time_a_fit(network)
+        """The second fit of the press in hand, unless a run is live by now; the press lets go of its configuration and
+        its prior either way."""
+        try:
+            if self._press is not None and self._press.get("call") is not None and not controller().is_live():
+                self._time_a_fit(network)
+        finally:
+            self._let_the_press_go()
+
+    def _let_the_press_go(self) -> None:
+        """The press in hand holds no configuration and no prior any more: its runs let theirs go as they end."""
+        if self._press is not None:
+            self._press["call"] = None
 
     def _start_card_test(self) -> None:
         """The card test: its four stages on a configuration of its own, made as the session's was with no cell loaded
