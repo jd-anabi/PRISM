@@ -1376,8 +1376,8 @@ _GREYED = {
         "fixed_number", dict(pair_refused="refused", posterior_prior_words="older_prior"),
         [("lock", "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")],
         "Cannot start yet: the prior in use is not the posterior's own."),
-    "the timing, which the window cannot run yet": (
-        "timing", dict(), [("lock", "This check cannot be run from the window yet.")],
+    "the card test, which the window cannot run yet": (
+        "card_test", dict(), [("lock", "This check cannot be run from the window yet.")],
         "Cannot start: this check cannot be run from the window yet."),
     "the calibration, free to run": ("calibration", dict(), [], ""),
 }
@@ -2867,7 +2867,8 @@ def check_results_block(tmp_path, *, seed) -> str:
 #: What each kind of field is typed with that a rule refuses: a whole number blank and one below its least; a real
 #: number blank, at 0 and below; a list of numbers holding a word, a 0, a number below 0 and a separator alone; a seed
 #: blank (but the calibration's, which a press draws), below 0 and beyond the largest the rule takes.
-_TYPED = {"whole": lambda one: ("", str(one.least - 1)), "number": lambda one: ("", "0", "-1"),
+_TYPED = {"whole": lambda one: ("", str(one.least - 1)), "epochs": lambda one: ("", str(one.least - 1)),
+          "number": lambda one: ("", "0", "-1"),
           "lengths": lambda one: ("x", "0", "-1", ","), "seed": lambda one: ("", "-1", str(2 ** 64)),
           "blank_seed": lambda one: ("-1", str(2 ** 64))}
 _BROKEN = [(key, one.setting, text)
@@ -2879,7 +2880,7 @@ def _broken_line(one, text, *, added=0) -> str:
     """The line under the field of the row ``one`` typed with ``text``, in the window's words from its label."""
     from core.gui import fields as gui_fields
     from core.rng import SEED_MAX
-    label = gui_fields.label(one.setting)
+    label = one.label or gui_fields.label(one.setting)
     if one.kind == "lengths":
         return (f"{label} must be numbers separated by commas or spaces." if text in ("x", ",")
                 else f"{label} must each be greater than 0.")
@@ -3138,8 +3139,9 @@ def test_the_calibrations_stages_begin_at_their_lines():
 
 def test_every_check_form_row_is_named_from_the_control_table(tmp_path):
     """STANDING. Every row of every check's form whose setting the table of controls names is labelled with that key's
-    one label, but a row that hands a label of its own, which no key of the table holds (a check's own "Epochs"); read
-    on each check's page as it opens."""
+    one label, but a row that hands a label of its own, which no key of the table holds (a check's own "Epochs"), and
+    a row that is only shown, which says its words whole and names no control (the networks a check fits); read on
+    each check's page as it opens."""
     from core.gui import fields as gui_fields
     from core.gui.panels.inference import check_forms
     with _checks_page(tmp_path) as (_window, _screen, page, _store):
@@ -3147,7 +3149,10 @@ def test_every_check_form_row_is_named_from_the_control_table(tmp_path):
             page.open_check(key)
             for one in rows:
                 said = page.form.rows[one.setting].label_text()
-                if one.label is None:
+                if one.kind == "network":
+                    assert page.form.rows[one.setting].widget is None and one.setting not in gui_fields.CONTROL, key
+                    assert said.startswith(("Networks: ", "Network: ")), (key, said)
+                elif one.label is None:
                     assert said == gui_fields.label(one.setting), (key, one.setting, said)
                 else:
                     assert not isinstance(gui_fields.CONTROL.get(one.setting), tuple), (key, one.setting)
@@ -3177,7 +3182,8 @@ def test_the_check_forms_remember_nothing(tmp_path, monkeypatch):
                 widget = page.form.rows[one.setting].widget
                 if hasattr(widget, "setText"):
                     widget.setText("7")
-            page.form.names.name.setText("kept_nowhere")
+            if page.form.names is not None:          # a check that keeps nothing names no record
+                page.form.names.name.setText("kept_nowhere")
         page.open_check("calibration")
         page._main_clicked()
         assert stand_in.started.wait(5)
@@ -3187,9 +3193,11 @@ def test_the_check_forms_remember_nothing(tmp_path, monkeypatch):
     with _checks_page(tmp_path / "again") as (_window, _screen, page, _store):
         for key, rows in check_forms.FORMS.items():
             form = page.check_pages[key].form
-            assert [(one.setting, form.rows[one.setting].at_usual()) for one in rows if one.kind != "cell"] == [
-                (one.setting, True) for one in rows if one.kind != "cell"], key
-            assert form.names.name_value() == "" and form.names.note_value() == "", key
+            settings = [one for one in rows if one.kind not in ("cell", "network")]
+            assert [(one.setting, form.rows[one.setting].at_usual()) for one in settings] == [
+                (one.setting, True) for one in settings], key
+            assert form.names is None or (form.names.name_value(), form.names.note_value()) == ("", ""), key
+            assert (form.names is None) == (key in check_readings.KEEPS_NOTHING), key
     assert set(written) <= untouched, sorted(set(written) - untouched)
 
 
@@ -3200,13 +3208,16 @@ def test_every_check_form_row_is_a_keyword_of_the_function_its_check_starts(tmp_
     configuration. Each check's press is followed to the function it dispatches. And each row opens at the default of
     that parameter, but the few whose usual value is the window's own, each with its reason: the audit's batches, at
     the least that counts; the two calibrations' sizes the stage takes from the settings when it is handed none, as the
-    window opens them."""
+    window opens them; the timing's batches and epochs, the retraining runbook's, which its call has no default for. A
+    row that is only shown hands nothing by its own name: the timing's networks are handed as a network's width and
+    depth."""
     import inspect
     from core import config
     from core.gui.panels.inference import check_forms
     own = {("audit", "mask_num_runs"): check_readings.AUDIT_LEAST_BATCHES,
            ("calibration", "n_cal"): config.SBC_N_CAL, ("calibration", "cal_n_scales"): config.CAL_N_SCALES,
-           ("fixed_number", "cal_n_scales"): config.CAL_N_SCALES}
+           ("fixed_number", "cal_n_scales"): config.CAL_N_SCALES,
+           ("timing", "num_runs"): check_forms.TIMING_BATCHES, ("timing", "epochs"): check_forms.TIMING_EPOCHS}
     seen = _tripwire(monkeypatch)
     pressed = set()
     for chi in (True, False):
@@ -3224,6 +3235,10 @@ def test_every_check_form_row_is_a_keyword_of_the_function_its_check_starts(tmp_
                 for one in rows:
                     if one.kind == "cell":
                         assert one.argument == "" and one.setting not in seen["kwargs"], key
+                        continue
+                    if one.kind == "network":
+                        assert one.setting not in seen["kwargs"] and {"hidden_features", "num_transforms"} <= set(
+                            seen["kwargs"]) <= set(taken) | set(_CONTROLLERS), key
                         continue
                     name = one.argument or one.setting
                     assert name in taken and taken[name].kind in (inspect.Parameter.KEYWORD_ONLY,
@@ -3805,3 +3820,270 @@ def test_the_scratch_folder_is_removed_however_the_check_ends(ending, tmp_path, 
     else:
         assert not folder.exists() and said == [], said
         assert (len(tries), pauses) == ((2, [check_scratch.RMTREE_PAUSE_S]) if ending == "refused once" else (1, []))
+
+
+def _a_posterior(created="2026-10-08T19:11:14+00:00", epochs=10):
+    """What the training stage hands back, as a short fit reads it: the moment its record was made and its epochs."""
+    return SimpleNamespace(manifest=SimpleNamespace(created=created, body={"training": {"epochs_trained": epochs}}))
+
+
+def _said_at(text, moment) -> None:
+    """``text`` said by the engine's logger as a record made at ``moment``, seconds since the epoch."""
+    import logging
+    logger = logging.getLogger("core")
+    record = logger.makeRecord("core.SBI.pipeline", logging.INFO, __file__, 0, text, (), None)
+    record.created = moment
+    logger.handle(record)
+
+
+@contextlib.contextmanager
+def _a_store_of_its_own(tmp_path, made):
+    """A store standing in for the scratch store, which ``made`` keeps."""
+    from core.artifacts import ArtifactStore
+    store = ArtifactStore(tmp_path / f"scratch_{len(made)}")
+    made.append(store)
+    yield store
+
+
+def test_the_short_fit_hands_build_posterior_exactly_these_arguments(tmp_path, monkeypatch):
+    """A short fit makes one call of the training stage, in the store it is handed: the configuration, the prior in use
+    handed as the object, no record named and a new training; the batches, the simulations per batch and the network as
+    handed, an epoch limit one less than its epochs, its simulations not kept, so that no saved set is read or written
+    and no training is kept as it goes, and the figures' sink; nothing else. It hands back its result alone, with the
+    press that started it, and names no record."""
+    from core import orchestrator
+    from core.gui import check_scratch
+    seen, made = [], []
+    monkeypatch.setattr(orchestrator, "build_posterior", lambda *args, **kwargs: (seen.append((args, kwargs)),
+                                                                                  _a_posterior())[1])
+    cfg, prior, sink = object(), object(), object()
+    fit = check_scratch.short_fit(cfg, prior, num_runs=20, run_size_cap=512, epochs=10, hidden_features=256,
+                                  num_transforms=10, press="a1b2", fig_sink=sink,
+                                  store_factory=lambda: _a_store_of_its_own(tmp_path, made))
+    (args, kwargs), = seen
+    assert args == (cfg, prior, None, True) and args[1] is prior, args
+    assert kwargs == {"store": made[0], "num_runs": 20, "run_size_cap": 512, "hidden_features": 256,
+                      "num_transforms": 10, "max_num_epochs": 9, "checkpoint_every": 0, "resume": "auto",
+                      "fig_sink": sink}, kwargs
+    assert fit.check_result["press"] == "a1b2" and fit.check_result["network"] == [256, 10]
+    assert [getattr(fit, part, None) for part in ("kind", "id", "name")] == [None, None, None]
+
+
+def test_the_short_fits_span_runs_from_the_end_of_generation_to_the_posteriors_created(tmp_path, monkeypatch):
+    """The span runs from the first record that ends the generation of the training's rows (the total of failed
+    simulations, or of unusable driven recordings) to the moment the posterior's record was made; seconds per epoch is
+    the span over the epochs trained, and the median epoch the median of the epochs' own seconds; the simulations are
+    the budget's. A record not made gives no span, and no epoch trained no seconds per epoch: None, and nothing
+    raises."""
+    from core import orchestrator
+    from core.gui import check_scratch
+    from tests._runs import BUDGET, epoch_line, masked_line
+    began = datetime(2026, 10, 8, 19, 10, 0, tzinfo=timezone.utc).timestamp()
+    handed = {}
+
+    def build(*_args, **_kwargs):
+        _said_at(BUDGET, began - 600)
+        _said_at("[patho] run total: 0 pathological of 40,960 simulated trajectories (0.0000%) -- 0 non-finite, 0 "
+                 "exactly constant, 0 over 1e+15", began)
+        _said_at(masked_line(410, 1000, 20, WHOLE), began + 1)
+        for epoch, took in enumerate((7.0, 7.4, 9.0), start=1):
+            _said_at(epoch_line(epoch, took=took), began + 10 * epoch)
+        return handed["posterior"]
+    monkeypatch.setattr(orchestrator, "build_posterior", build)
+
+    def fit(**changed):
+        handed["posterior"] = _a_posterior(**changed)
+        return check_scratch.short_fit(None, None, num_runs=20, run_size_cap=512, epochs=10, hidden_features=256,
+                                       num_transforms=10, store_factory=lambda: _a_store_of_its_own(tmp_path, []))
+    made = fit(created="2026-10-08T19:11:14+00:00", epochs=10).check_result
+    assert made == {"network": [256, 10], "simulations": 20_480_000, "epochs": 10, "span": pytest.approx(74.0),
+                    "per_epoch": pytest.approx(7.4), "median_epoch": 7.4, "press": ""}, made
+    assert fit(created=None, epochs=10).check_result | {"press": ""} == {
+        **made, "span": None, "per_epoch": None}
+    assert fit(created="2026-10-08T19:11:14+00:00", epochs=0).check_result["per_epoch"] is None
+
+
+def _step_three(screen, width, depth) -> None:
+    """Step 3's form holding the network ``width`` by ``depth``."""
+    rows = screen.posterior_panel.form.rows
+    rows["hidden_features"].widget.setText(str(width))
+    rows["num_transforms"].widget.setText(str(depth))
+
+
+@pytest.mark.parametrize("ending", ["two networks", "the same network", "stopped", "failed", "refused",
+                                    "a run live by then"])
+def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(ending, tmp_path, monkeypatch):
+    """One press of the timing of a short fit starts a run for step 3's network and, once that run has finished and its
+    end has been published and drawn, one turn later, a second for the built-in network, each with its own history,
+    the two at equal sizes and with one press in their results; one run when step 3's network is the built-in one.
+    A first run stopped, failed or refused starts no second, and neither does one whose end finds another run live by
+    the time its second would start."""
+    import tempfile
+    from core import orchestrator
+    from core.gui.run import history
+    from core.gui.run.model import RunSpec
+    from core.refusals import Refusal
+    from tests._dialogs import answer_in_turn, asked
+    from tests._fixtures import build_run_host
+    from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    stand_in, other = StandIn(word="Check"), StandIn(word="Run")
+    monkeypatch.setattr(orchestrator, "build_posterior", stand_in)
+    app = qt_app()
+    order = []
+    held = controller()
+
+    def heard(status) -> None:
+        order.append(("ended", status.word, status.outcome))
+        if ending == "a run live by then" and len(order) == 2:
+            start_run(build_run_host(), other, spec=RunSpec("Run", None))
+
+    held.run_ended.connect(heard)
+    try:
+        with _checks_page(tmp_path) as (_window, screen, page, store):
+            clock = Clock(at(8, 12, 5))
+            controller_on(tmp_path, clock)
+            if ending != "the same network":
+                _step_three(screen, 256, 10)
+            real = page._time_a_fit
+            page._time_a_fit = lambda network: (order.append(("fit", tuple(network), held.status.state)),
+                                                real(network))[1]
+            page.open_check("timing")
+            page._main_clicked()
+            assert stand_in.started.wait(5)
+            if ending == "stopped":
+                answer_in_turn(monkeypatch, ("Stop and discard it", None))
+                page.run_view.stop_button.click()
+            elif ending == "failed":
+                stand_in.fail(RuntimeError("the fit broke"))
+            elif ending == "refused":
+                stand_in.fail(Refusal("The number of training batches must be at least 1; got 0.", field="num_runs"))
+            else:
+                clock.advance(90)
+                stand_in.release(_a_posterior())
+            if ending == "two networks":
+                turn_until(app, lambda: len(stand_in.calls) == 2, 10.0)
+                stand_in.release(_a_posterior())
+            if ending == "a run live by then":
+                turn_until(app, lambda: other.started.is_set(), 10.0)
+                _settle()                            # the turn the second would have started in has passed
+                other.release(None)
+            turn_until(app, lambda: not held.is_live(), 10.0)
+            _settle()
+            if ending == "refused":
+                assert asked().kind == "refusal"
+            runs = [one for one in history.runs_of(tmp_path / "runs", records_root=str(store.root))
+                    if (one.get("check") or {}).get("key") == "timing"]
+    finally:
+        held.run_ended.disconnect(heard)
+    networks = [(kwargs["hidden_features"], kwargs["num_transforms"]) for _args, kwargs in stand_in.calls]
+    if ending == "two networks":
+        assert networks == [(256, 10), (128, 8)], networks
+        assert order == [("fit", (256, 10), "idle"), ("ended", "Check", "finished"), ("fit", (128, 8), "ended"),
+                         ("ended", "Check", "finished")], order
+        assert [one["check"]["result"]["network"] for one in runs] == [[256, 10], [128, 8]]
+        assert len({one["check"]["result"]["press"] for one in runs}) == 1 and runs[0]["check"]["result"]["press"]
+        assert runs[0]["check"]["sizes"] == runs[1]["check"]["sizes"] == {
+            "num_runs": 20, "epochs": 10, "run_size_cap": 0, "network": [[256, 10], [128, 8]]}
+    else:
+        assert networks == [(128, 8) if ending == "the same network" else (256, 10)], networks
+        assert [step for step in order if step[0] == "fit"] == [order[0]], order
+        assert len(runs) == (0 if ending == "refused" else 1), runs
+    assert [path.name for path in tmp_path.glob("prism_check_*")] == [], "a scratch folder was left"
+
+
+def test_the_timings_time_last_time_is_found_at_the_same_sizes(tmp_path):
+    """"Before you start" of the timing says how long its last press took on this computer at the sizes its form and
+    step 3's hold, the runs of that press together, though their results name the press that the sizes never hold; at
+    other sizes it was not timed here. It trains two short fits, or one when step 3's network is the built-in one, and
+    keeps nothing but the result."""
+    from core.gui.memory_limit import computer
+    from tests._fixtures import write_history
+    sizes = {"num_runs": 20, "epochs": 10, "run_size_cap": 0, "network": [[256, 10], [128, 8]]}
+
+    def ran(at, seconds, press, network):
+        write_history(tmp_path / "runs", id=f"2026100812{at:02d}00-check", word="Check", started=_at(8, 12, at),
+                      outcome="finished", memory_limit={"gib": None, "source": "none", "computer": computer()},
+                      check={"key": "timing", "sizes": sizes, "seconds": seconds, "stages": {},
+                             "result": {"network": network, "press": press}})
+
+    ran(1, 30.0, "first", [256, 10])
+    ran(2, 100.0, "second", [256, 10])
+    ran(3, 80.0, "second", [128, 8])
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        _step_three(screen, 256, 10)
+        page.open_check("timing")
+        page.read_facts()
+        said = [fact.sentence for fact in page.facts_from_form()]
+        assert said[:2] == ["Trains two short fits, one per network, each on 20 batches for 10 epochs; each computes "
+                            "its own rotation first.", "Took 3 minutes here last time at these sizes."], said
+        assert said[said.index("Nothing else can run until it ends.") + 1] == "Nothing is kept but the result.", said
+        page.form.rows["epochs"].widget.setText("12")
+        assert "Not timed on this computer yet." in [fact.sentence for fact in page.facts_from_form()]
+        page.form.rows["epochs"].widget.setText("10")
+        _step_three(screen, 128, 8)
+        page.redraw()
+        said = [fact.sentence for fact in page.facts_from_form()]
+        assert said[:2] == ["Trains one short fit, on 20 batches for 10 epochs; it computes its own rotation first.",
+                            "Not timed on this computer yet."], said
+        assert page.form.rows["network"].label_text() == (
+            "Network: 128 by 8, as step 3's form holds it, which is the built-in one.")
+
+
+def _timing_runs(per_epoch=(7.4, 5.2)) -> list:
+    """The two runs of one press of the timing, as their histories hold them: step 3's network, then the built-in."""
+    return [{"id": f"2026100812{at}000-check", "outcome": "finished",
+             "check": {"key": "timing", "seconds": 90.0,
+                       "result": {"network": network, "simulations": 40_960, "epochs": 10, "span": pace * 10,
+                                  "per_epoch": pace, "median_epoch": pace - 0.1, "press": "one"}}}
+            for at, (network, pace) in enumerate((([256, 10], per_epoch[0]), ([128, 8], per_epoch[1])), start=1)]
+
+
+def test_the_timings_result_reads_both_runs_and_projects_with_trainings_expected_epochs(tmp_path):
+    """The timing's result reads the two runs of its newest press: each network's time per epoch on the simulations
+    timed, a row for each in its table, and the projection for the training step 3's form holds, by the retraining
+    runbook's rule (seconds per epoch times the simulations planned over those timed, times the epochs expected),
+    naming where its epochs came from; with no epochs expected, it says to type them in step 3."""
+    from core.gui.check_readings import NO_EPOCHS_TEXT, newest_press, timing_words
+    from core.gui.panels.inference.check_results import timing_block
+    runs = _timing_runs()
+    last = (130, "about 130 epochs: the last training of this kind, retrain_aug, ran 130")
+    sentence, table, projection = timing_words(runs, expected=last, planned=20_480_000)
+    assert sentence == ("Timing of a short fit: done. One epoch of the 256 × 10 network took 7.4 s on 40,960 "
+                        "simulations; of the 128 × 8 network, 5.2 s.")
+    assert (table.columns, table.rows) == (
+        ("Network", "Epochs timed", "Span", "Seconds per epoch", "Median epoch"),
+        (("256 × 10", "10", "1 min 14 s", "7.4", "7.3 s"), ("128 × 8", "10", "52.0 s", "5.2", "5.1 s")))
+    assert projection == ("About 134 hours of fitting, if the fit takes 130 epochs (the last training of this kind, "
+                          "retrain_aug).")
+    assert timing_words(runs, expected=None, planned=20_480_000)[2] == NO_EPOCHS_TEXT == (
+        "There is no epoch count to project with. Type one in \"Expected epochs\" in step 3.")
+    older = [{**one, "check": {**one["check"], "result": {**one["check"]["result"], "press": "older"}}}
+             for one in runs[:1]]
+    assert newest_press([*older, *runs], "timing") == tuple(runs)
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        screen.posterior_panel.form.rows["expected_epochs"].widget.setText("130")
+        region = timing_block(runs, parent=page, expected=screen.posterior_panel.expected(), planned=20_480_000)
+        assert [fact.sentence for fact in region.sentences()] == [
+            "About 134 hours of fitting, if the fit takes 130 epochs (the number given on the Training page)."]
+        assert region.verdict.sentence.plain_text() == sentence
+        screen.posterior_panel.form.rows["expected_epochs"].widget.setText("")
+        assert screen.posterior_panel.expected() is None
+        region = timing_block(runs, parent=page, expected=screen.posterior_panel.expected(), planned=20_480_000)
+        assert [fact.sentence for fact in region.sentences()] == [NO_EPOCHS_TEXT]
+
+
+def test_the_not_kept_message_is_not_shown_for_a_check_that_keeps_nothing():
+    """A check that keeps nothing but its result keeps no training, so its run's page says nothing of a training not
+    kept as it goes; a training's run says it."""
+    from core.gui.panels.inference import check_forms
+    from core.gui.run.model import RunModel
+    from tests._runs import NOT_SAVED, training_spec
+    not_kept = ("[fit] the simulation set is not kept (checkpointing off), so this training is not saved as it goes "
+                "and cannot be resumed.")
+    timing = RunModel(check_forms.check_spec("timing", sizes={"epochs": 10}), clock=lambda: _at(8))
+    training = RunModel(training_spec(), clock=lambda: _at(8))
+    for model in (timing, training):
+        model.feed([(not_kept, "info"), (NOT_SAVED, "info")])
+    assert timing.messages() == ()
+    assert [message.kind for message in training.messages()] == ["info", "info"]

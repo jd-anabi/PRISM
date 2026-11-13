@@ -23,9 +23,11 @@ from ... import check_readings, fields
 from ...check_catalogue import entry
 from ...check_readings import before_you_start  # noqa: F401 -- "Before you start" of a check, words with no widget
 from ...run.model import SIMULATION_ROW, RunSpec, Said, Stage
+from ...texts import number_text
 from ...widgets.artifact_picker import ArtifactPicker
 from ...widgets.form import Form, NameAndNote, TickedField
 from ...widgets.labeled_inputs import FloatField, IntField
+from .base import TRAINING_STAGES
 from .help_text import HELP
 
 #: What greys the button of a check whose form is not built yet.
@@ -64,9 +66,15 @@ CALIBRATION_STAGES = (Stage("Simulating the test datasets", counts=SIMULATION_RO
 RANKING_WORDS = ("Ranking repeat {done} of {of}: no progress is reported during this part, and Stop takes effect when "
                  "it ends")
 REPEATED_STAGES = (Stage(MEASURING, said=Said("patho_total", "sbc_repeat", RANKING_WORDS, "repeats")),)
+#: The timing of a short fit's stages, each begun at the lines a training's begins at: the rotation, the simulation
+#: counted by the row that counts a training's, and the fit, counted by its epochs.
+TIMING_STAGES = (Stage("Rotation", TRAINING_STAGES[0].begins),
+                 Stage("Simulation", TRAINING_STAGES[1].begins, TRAINING_STAGES[1].counts),
+                 Stage("Fit", TRAINING_STAGES[2].begins, TRAINING_STAGES[2].counts))
 #: The kinds of row a check's form holds, and those whose value is no size of the run: a cell file is loaded on the
 #: check's own configuration, and a seed changes no cost.
 KINDS = ("whole", "number", "lengths", "cell", "seed", "blank_seed", "epochs", "ticked_count", "network")
+#: "epochs" is a whole number of epochs the stage is sent one less of; "network", the networks a check fits, only shown.
 NOT_SIZES = ("cell", "seed", "blank_seed")
 #: The usual sizes of the checks below, each as its stage takes it when none is handed: the identifiability check's
 #: weakest directions and largest contributions; what the observations can pin down, its simulations for each
@@ -84,6 +92,23 @@ DRIVE_LENGTH_S = 5.0
 DRIVE_SIMULATIONS = 16
 DRIVE_DETUNE = 1.4
 POINTS_ACROSS = 6
+#: The timing of a short fit, at the retraining runbook's sizes for timing an epoch before a full training: its batches
+#: and its epochs; and the least number of epochs, one more than the least limit the stage takes, since the limit it is
+#: sent is one less than the epochs it trains.
+TIMING_BATCHES = 20
+TIMING_EPOCHS = 10
+LEAST_EPOCHS = 2
+EPOCHS_LABEL = "Epochs"
+EPOCHS_HELP = "At least 2 epochs: the limit sent is one less."
+#: The network the training stage builds when it is handed none, read from its settings, which the timing times after
+#: the Training form's; and the two rows that are a check's network, which its sizes hold as one.
+BUILT_IN_NETWORK = (config.NSF_HIDDEN_FEATURES, config.NSF_NUM_TRANSFORMS)
+NETWORK_ROWS = ("hidden_features", "num_transforms")
+#: What the timing's row that is only shown says of the networks it times, and of a network as it is said.
+NETWORKS_TEXT = "Networks: {}, as step 3's form holds them, then the built-in {}."
+NETWORK_ONE_TEXT = "Network: {}, as step 3's form holds it, which is the built-in one."
+NETWORK_UNREAD_TEXT = "Networks: as step 3's form holds them, which cannot be used now, then the built-in {}."
+NETWORK_WORDS = "{} by {}"
 #: What separates the numbers of a list typed in one field.
 _BETWEEN = re.compile(r"[,\s]+")
 
@@ -163,6 +188,10 @@ FORMS: dict[str, tuple[FormRow, ...]] = {
                      FormRow("t_obs", None, "number", None, unit="s", rule="positive", argument="t_obs_s"),
                      FormRow("n_points", None, "whole", POINTS_ACROSS, rule="at_least"),
                      *_SIMULATED),
+    "timing": (FormRow("num_runs", None, "whole", TIMING_BATCHES, rule="at_least"),
+               FormRow("epochs", EPOCHS_LABEL, "epochs", TIMING_EPOCHS, least=LEAST_EPOCHS, help_text=EPOCHS_HELP,
+                       rule="epochs"),
+               FormRow("network", None, "network", None, folded=True)),
 }
 
 
@@ -184,7 +213,7 @@ class _Numbers(QLineEdit):
 def _field(row: FormRow, form: Form):
     """The field of ``row``, made for ``form``: a whole number grouped, a seed copied as typed, a number, numbers in one
     field, or the list of the cell files of a model's folder, which keeps its selection and opens on none."""
-    if row.kind == "whole":
+    if row.kind in ("whole", "epochs"):
         return IntField(row.usual, grouped=True)
     if row.kind in ("seed", "blank_seed"):
         return IntField(row.usual)
@@ -210,6 +239,9 @@ def build_form(key: str) -> Form:
     form.cell_picker, form.names = None, None
     rows = FORMS.get(key, ())
     for row in rows:
+        if row.kind == "network":            # only shown: its words are the page's, at each drawing
+            form.add_text(row.setting, "", "", folded=row.folded)
+            continue
         form.add(row.setting, _field(row, form), row.unit, usual=row.usual, folded=row.folded,
                  help_text=row.help_text, label=row.label)
     if rows and entry(key).kind:
@@ -249,6 +281,8 @@ def _rule(one: FormRow, value, *, slots=None, added: int = 0):
     stage adds to, ``added`` at most, held so that its largest passes too."""
     if one.rule == "at_least":
         return require_at_least(one.setting, value, one.least)
+    if one.rule == "epochs":                 # the stage is sent a limit one less, held to the stage's own rule
+        return require_at_least("max_num_epochs", None if value is None else value - 1, one.least - 1) + 1
     if one.rule == "positive":
         return require_positive(one.setting, value)
     if one.rule == "seed":
@@ -265,7 +299,7 @@ def _rule(one: FormRow, value, *, slots=None, added: int = 0):
 
 def _rule_line(one: FormRow, label: str, *, slots=None) -> str:
     """The rule of ``one`` as the line under its field says it, from its label."""
-    if one.rule == "at_least":
+    if one.rule in ("at_least", "epochs"):
         return AT_LEAST_TEXT.format(label, one.least)
     if one.rule == "lengths":
         return EACH_ABOVE_TEXT.format(label)
@@ -357,18 +391,57 @@ def call_arguments(key: str, form: Form, *, slots=None) -> dict:
     for setting, (_line, said) in problems(key, form, slots=slots).items():
         raise Refusal(said, field=setting)
     return {one.argument or one.setting: _handed(one, form.rows[one.setting].value())
-            for one in FORMS.get(key, ()) if one.kind != "cell"}
+            for one in FORMS.get(key, ()) if one.kind not in ("cell", "network")}
+
+
+def _as_sizes(key: str, read) -> dict:
+    """The sizes of the check ``key``, each row's read by ``read``: every row but a cell file, a seed and what is only
+    shown, the two rows of a network held as one, ``network``, the width and the depth."""
+    sizes = {}
+    for one in FORMS.get(key, ()):
+        if one.kind in NOT_SIZES or one.kind == "network":
+            continue
+        if one.setting in NETWORK_ROWS:
+            sizes["network"] = [read(name) for name in NETWORK_ROWS]
+        else:
+            sizes[one.setting] = read(one)
+    return sizes
 
 
 def sizes_of(key: str, form: Form) -> dict:
-    """The sizes the form of the check ``key`` holds, by field key: every row but a cell file and a seed, as it reads."""
-    return {one.setting: form.rows[one.setting].value() for one in FORMS.get(key, ()) if one.kind not in NOT_SIZES}
+    """The sizes the form of the check ``key`` holds, by field key, as they read: every row but a cell file, a seed and
+    what is only shown, a network's two rows as one, ``network``."""
+    return _as_sizes(key, lambda one: form.rows[getattr(one, "setting", one)].value())
 
 
 def sizes_from_call(key: str, kwargs: Mapping) -> dict:
     """The sizes a call of the stage of the check ``key`` was handed, by field key, as ``sizes_of`` names them."""
-    return {one.setting: kwargs.get(one.argument or one.setting) for one in FORMS.get(key, ())
-            if one.kind not in NOT_SIZES}
+    def handed(one):
+        name = one if isinstance(one, str) else one.argument or one.setting
+        return kwargs.get(name)
+    return _as_sizes(key, handed)
+
+
+def network_words(network) -> str:
+    """A network's width and depth as the window says them: "256 by 10"."""
+    return NETWORK_WORDS.format(*(number_text(part) for part in network))
+
+
+def timing_networks(trained) -> tuple:
+    """The networks the timing of a short fit times, in their order: ``trained``, as the Training form holds it, then
+    the built-in one; the one alone when the two are the same."""
+    trained = tuple(trained)
+    return (trained,) if trained == BUILT_IN_NETWORK else (trained, BUILT_IN_NETWORK)
+
+
+def networks_line(trained) -> str:
+    """What the timing's row of its networks says: the Training form's ``trained`` (None while it holds no network that
+    can be used) and the built-in one."""
+    if trained is None:
+        return NETWORK_UNREAD_TEXT.format(network_words(BUILT_IN_NETWORK))
+    if tuple(trained) == BUILT_IN_NETWORK:
+        return NETWORK_ONE_TEXT.format(network_words(trained))
+    return NETWORKS_TEXT.format(network_words(trained), network_words(BUILT_IN_NETWORK))
 
 
 # ── the run ──
@@ -379,7 +452,14 @@ def check_spec(key: str, *, sizes: dict, facts: Mapping = {}, plan: dict | None 
     with ``facts``, what is known of it before it says it."""
     one = entry(key)
     stages = (CALIBRATION_STAGES if key == "calibration" else REPEATED_STAGES if key == "fixed_number"
-              else (Stage(MEASURING),))
+              else TIMING_STAGES if key == "timing" else (Stage(MEASURING),))
+    # A check that keeps nothing says so to its run, which then says nothing of a training not kept; the timing's fit
+    # ends at the limit its epochs set, or by the training's own patience before it.
+    kept_nothing = {"keeps_nothing": True} if key in check_readings.KEEPS_NOTHING else {}
+    epochs = sizes.get("epochs") if key == "timing" else None
+    timed = isinstance(epochs, int) and not isinstance(epochs, bool)
     return RunSpec("Check", PLACE, name=one.name, stop_button=one.stop_words, stages=stages,
-                   kinds=(one.kind,) if one.kind else (), facts=dict(facts), plan=plan,
-                   check={"key": key, "sizes": dict(sizes)})
+                   kinds=(one.kind,) if one.kind else (), facts={**facts, **kept_nothing}, plan=plan,
+                   check={"key": key, "sizes": dict(sizes)},
+                   patience=config.TRAINING_STOP_AFTER_EPOCHS if timed else None,
+                   epoch_limit=epochs - 1 if timed else None)

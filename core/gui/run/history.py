@@ -63,7 +63,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import settings
-from ..texts import is_size
+from ..texts import date_text, is_size
 
 log = logging.getLogger(__name__)
 
@@ -263,14 +263,23 @@ def estimate(folder: Path, *, word: str, per: str, size: dict) -> tuple[float, s
     (``size["per_batch"]``), "the last training of this size, retrain_aug, took 9.7 s per batch". ``per="epoch"``:
     the median seconds per epoch of the newest such run fitted with the same network (``size["network"]``, hidden
     features and transforms) on the same number of simulations (``size["simulations"]``), "... took about 63 minutes
-    per epoch". A run with no pace of that kind is passed over."""
+    per epoch"; with no such run, the newest finished timing of a short fit of the same network, its seconds per epoch
+    scaled by these simulations over those it timed, "the timing of a short fit on 3 Oct 2026, 14:02, scaled to these
+    simulations". A run with no pace of that kind is passed over."""
     if per not in ("batch", "epoch"):
         raise ValueError(f"a pace is per batch or per epoch, not per {per!r}")
     wanted = ((size.get("per_batch"),) if per == "batch"
               else (_listed(size.get("network")), size.get("simulations")))
     if any(value is None for value in wanted):
         return None
-    for record in reversed(_records(folder)):
+    records = _records(folder)
+    found = _same_word(records, word, per, wanted)
+    return found if found is not None or per == "batch" else _timed(records, *wanted)
+
+
+def _same_word(records, word: str, per: str, wanted: tuple) -> tuple[float, str] | None:
+    """The pace of ``estimate``'s first rule: the newest ended run of ``word`` of the size ``wanted``."""
+    for record in reversed(records):
         if record.get("word") != word or record.get("outcome") in (None, "running"):
             continue
         if per == "batch":
@@ -285,6 +294,24 @@ def estimate(folder: Path, *, word: str, per: str, size: dict) -> tuple[float, s
         pace = f"{seconds:.1f} s per batch" if per == "batch" else f"about {_duration(seconds)} per epoch"
         who = f", {record['name']}," if record.get("name") else ""
         return seconds, f"the last {word.lower()} of this size{who} took {pace}"
+    return None
+
+
+def _timed(records, network, simulations) -> tuple[float, str] | None:
+    """The pace of ``estimate``'s second rule: the newest finished timing of a short fit of ``network``, its seconds per
+    epoch scaled by ``simulations`` over the simulations it was timed on."""
+    for record in reversed(records):
+        held = record.get("check")
+        result = held.get("result") if isinstance(held, dict) else None
+        if (not isinstance(result, dict) or held.get("key") != "timing" or record.get("outcome") != "finished"
+                or _listed(result.get("network")) != network):
+            continue
+        per_epoch, timed = result.get("per_epoch"), result.get("simulations")
+        if not (is_size(per_epoch) and per_epoch > 0 and is_size(timed) and timed > 0):
+            continue
+        when = _time(record.get("started"))
+        said = f" on {date_text(when)}" if when is not None else ""
+        return float(per_epoch) * simulations / timed, f"the timing of a short fit{said}, scaled to these simulations"
     return None
 
 

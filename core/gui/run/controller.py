@@ -226,6 +226,7 @@ class _Run:
         self.closing = False                       # the window closes once the run has ended
         self.ended: datetime | None = None
         self.result: tuple | None = None           # (kind, id, name) of the record a finished run wrote
+        self.check_result: dict | None = None      # the result a check that keeps nothing but it handed back
         self.asked = ""                            # the name that record was asked to have ("" for none)
         self.record: dict | None = None            # the history its end wrote, which every later write starts from
         self.waiting: RunStatus | None = None      # the end that waited to be seen as it started, until it is set aside
@@ -1026,11 +1027,14 @@ class RunController(QObject):
 
     def _on_result(self, payload) -> None:
         """The run returned: it finished, and the record it wrote, when it hands one back, is noted by its kind, its
-        id and its name (never the record itself, which holds what the run computed)."""
+        id and its name (never the record itself, which holds what the run computed); a check that keeps nothing but its
+        result hands that back instead, names and numbers, which its history's check entry keeps."""
         if self._run is not None and self._run.outcome is None:
             self._run.outcome = "finished"
             found = tuple(getattr(payload, part, None) for part in ("kind", "id", "name"))
             self._run.result = found if all(isinstance(part, str) for part in found) and found[0] else None
+            handed = getattr(payload, "check_result", None)
+            self._run.check_result = history.plain(handed) if isinstance(handed, dict) else None
 
     def _on_error(self, exc, tb: str, cancel_noted: bool = False, kept_fit=None) -> None:
         run = self._run
@@ -1512,17 +1516,18 @@ class RunController(QObject):
                     "per_batch": budget.get("rows"), "seconds_per_batch": model.seconds_per_batch()},
                 "health": None if not known else {"failed": failed[0], "simulated": failed[1], "memory_peak": peak,
                                                   "batches_split": split, "out_of_memory": lacked},
-                "fit": fit, "check": _check_entry(spec.check, model, run.ended),
+                "fit": fit, "check": _check_entry(spec.check, model, run.ended, run.check_result),
                 "result": None if run.result is None else dict(zip(("kind", "id", "name"), run.result),
                                                                asked=run.asked),
                 "failure": failure, "text": f"{run.id}.txt"}
 
 
-def _check_entry(check, model, ended) -> dict | None:
+def _check_entry(check, model, ended, result=None) -> dict | None:
     """A check's run, as its history keeps it: which check and at what sizes, as its page handed them; how long it took,
     from its start to its end (None while it runs); each stage it began, by its name, with the seconds to the next one's
-    beginning, the last to the run's end (None while it runs); and its own result, which a check that keeps nothing but
-    its result hands over (none yet). None for a run that is no check's."""
+    beginning, the last to the run's end (None while it runs); and its own ``result``, which a check that keeps nothing
+    but its result hands over as it returns (empty until then, and for any other check). None for a run that is no
+    check's."""
     if not isinstance(check, dict):
         return None
     begun = model.stages_begun()
@@ -1532,7 +1537,7 @@ def _check_entry(check, model, ended) -> dict | None:
         stages[name] = None if until is None else (until - began).total_seconds()
     return {"key": check.get("key"), "sizes": check.get("sizes"),
             "seconds": None if ended is None else (ended - model.started).total_seconds(),
-            "stages": stages, "result": {}}
+            "stages": stages, "result": dict(result) if isinstance(result, dict) else {}}
 
 
 def _discarded(record: dict) -> dict:

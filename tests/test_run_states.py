@@ -1439,7 +1439,8 @@ _DISPATCHES = {("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchest
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "sbc.sbc_repeats"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_drive"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel",
-                "identifiability.identifiability_laplace")}
+                "identifiability.identifiability_laplace"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "check_scratch.short_fit")}
 
 
 def _entries(path) -> list:
@@ -1802,6 +1803,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     import ast
     from core import config, orchestrator
     from core.diagnostics import ablation, identifiability, probes, sbc
+    from core.gui import check_scratch
     from core.gui.panels.inference import check_forms
     from core.gui.run.model import Stage
     from tests import _runs
@@ -1809,7 +1811,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     qt_app()
     entry_of = {"calibration": "calibration", "frequency band": "band", "audit": "audit", "input use": "input_use",
                 "identifiability": "identifiability", "pin down": "pin_down", "fixed number": "fixed_number",
-                "drive study": "drive_study", "across the prior": "across_prior"}
+                "drive study": "drive_study", "across the prior": "across_prior", "timing": "timing"}
     found, forwards = set(), []
     for path in sorted((REPO / "core" / "gui").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1870,6 +1872,9 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "across the prior": (inference.validate_panel, identifiability.identifiability_laplace, (cfg, None), {},
                              ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes,
                               no, yes)),
+        "timing": (inference.validate_panel, check_scratch.short_fit, (cfg, None),
+                   {"num_runs": 20, "run_size_cap": 0, "epochs": 10, "hidden_features": 256, "num_transforms": 10},
+                   ("Check", ("inference", "checks"), "Stop this check…", (), no, yes, no, yes)),
         "inference, simulated": (inference.infer_panel, orchestrator.simulated_inference, (cfg, None, 1.5), {},
                                  ("Inference", ("inference", "infer"), "Stop the inference…",
                                   ("observation", "inference"), no, yes, no, yes)),
@@ -1890,8 +1895,15 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         assert (spec.simulation_set, spec.stages == _TRAINING) == (trains, trains), kind
         if spec.word == "Check":
             stages = (check_forms.CALIBRATION_STAGES if kind == "calibration" else check_forms.REPEATED_STAGES
-                      if kind == "fixed number" else (Stage(check_forms.MEASURING),))
-            assert (spec.stages, spec.facts, spec.check["key"]) == (stages, {}, entry_of[kind]), kind
+                      if kind == "fixed number" else check_forms.TIMING_STAGES if kind == "timing"
+                      else (Stage(check_forms.MEASURING),))
+            facts = ({"network": (256, 10), "rotated": True, "keeps_nothing": True} if kind == "timing" else {})
+            assert (spec.stages, spec.facts, spec.check["key"]) == (stages, facts, entry_of[kind]), kind
+            if kind == "timing":
+                assert spec.check["sizes"] == {"num_runs": 20, "epochs": 10, "run_size_cap": 0,
+                                               "network": [[256, 10]]}, spec.check
+                assert (spec.patience, spec.epoch_limit) == (config.TRAINING_STOP_AFTER_EPOCHS, 9)
+                assert [stage.begins for stage in spec.stages] == [stage.begins for stage in _TRAINING[:3]]
         elif not trains:
             assert (spec.stages, spec.facts) == ((), {}), kind
         assert not spec.own_view and spec.records == (), kind

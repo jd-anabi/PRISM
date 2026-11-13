@@ -964,11 +964,19 @@ READS_ONLY = ("input_use", "identifiability")
 #: and what is said when it never has.
 TOOK_TEXT = "Took {} here last time at these sizes."
 NOT_TIMED_TEXT = "Not timed on this computer yet."
-#: The one-run rule, and what a check's run writes.
+#: The one-run rule, and what a check's run writes; what the two checks that keep nothing keep.
 ONE_AT_A_TIME_TEXT = "Nothing else can run until it ends."
 ONE_RECORD_TEXT = "One record, under Records."
+KEPT_NOTHING_TEXT = "Nothing is kept but the result."
+#: The checks that keep nothing but their result, which their run's history holds.
+KEEPS_NOTHING = ("timing", "card_test")
 #: The checks that simulate on the graphics card: beside them the memory limit in force and the last run are said.
-ON_THE_CARD = ("band", "audit", "calibration", "pin_down", "fixed_number", "drive_study", "across_prior")
+ON_THE_CARD = ("band", "audit", "calibration", "pin_down", "timing", "fixed_number", "drive_study", "across_prior")
+#: The timing of a short fit: its two fits, one per network, or one when the Training form's network is the built-in
+#: one, each computing the rotation of its own simulations first.
+TIMING_COUNTS_TEXT = ("Trains two short fits, one per network, each on {} batches for {} epochs; each computes its own "
+                      "rotation first.")
+TIMING_ONE_TEXT = "Trains one short fit, on {} batches for {} epochs; it computes its own rotation first."
 
 
 def _is_whole(value) -> bool:
@@ -1013,6 +1021,12 @@ def _counts_of(key: str, sizes: Mapping) -> str:
     if key == "across_prior":
         points = sizes.get("n_points")
         return ACROSS_COUNTS_TEXT.format(number_text(points)) if _is_whole(points) else ""
+    if key == "timing":
+        batches, epochs, networks = sizes.get("num_runs"), sizes.get("epochs"), sizes.get("network")
+        if not (_is_whole(batches) and _is_whole(epochs)):
+            return ""
+        one = isinstance(networks, (list, tuple)) and len(networks) == 1
+        return (TIMING_ONE_TEXT if one else TIMING_COUNTS_TEXT).format(number_text(batches), number_text(epochs))
     return ""
 
 
@@ -1074,5 +1088,144 @@ def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: 
     lines = " ".join(line for line in memory if line)
     if key in ON_THE_CARD and lines:
         said.append(Fact("info", lines))
-    said += [Fact("info", ONE_AT_A_TIME_TEXT), Fact("info", ONE_RECORD_TEXT)]
+    said += [Fact("info", ONE_AT_A_TIME_TEXT), Fact("info", KEPT_NOTHING_TEXT if key in KEEPS_NOTHING
+                                                     else ONE_RECORD_TEXT)]
     return tuple(said)
+
+
+# ── the two checks that keep nothing: their runs in the history and their results ──
+#: How a network is said in a result, its width and its depth, the two parts it is held as.
+NETWORK_PARTS = ("width", "depth")
+NETWORK_TIMES_TEXT = "{} × {}"
+#: The timing's result: each network's time per epoch, the first with the simulations both were fitted on.
+TIMING_DONE_TEXT = "Timing of a short fit: done. One epoch of the {} network took {} on {} simulations{}."
+TIMING_OTHER_TEXT = "; of the {} network, {}"
+UNTIMED_WORDS = "no time that could be measured"
+TIMING_COLUMNS = ("Network", "Epochs timed", "Span", "Seconds per epoch", "Median epoch")
+TIMING_RIGHT = frozenset({1, 2, 3, 4})
+#: The projection for the training step 3's form holds, by the retraining runbook's rule: the seconds per epoch of
+#: step 3's network, scaled by the simulations planned over those timed, times the epochs expected.
+PROJECTION_TEXT = "About {} of fitting, if the fit takes {} epochs ({})."
+NO_EPOCHS_TEXT = "There is no epoch count to project with. Type one in \"Expected epochs\" in step 3."
+NO_PLAN_TEXT = "There is no budget in step 3 to project with: its batches or its simulations per batch cannot be used."
+#: The seconds of a minute and of an hour, as a length of time is said in them.
+MINUTE_S = 60
+HOUR_S = 3600
+
+
+def press_runs(runs, newest: Mapping) -> tuple:
+    """The runs of ``runs`` that the press which started ``newest`` started, oldest first: those whose check is of its
+    key and whose result names the same press; ``newest`` alone when its result names none."""
+    held = newest.get("check") if isinstance(newest, Mapping) else None
+    key = held.get("key") if isinstance(held, Mapping) else None
+    press = _press(newest)
+    if not press:
+        return (newest,)
+    return tuple(record for record in runs if isinstance(record, Mapping) and _press(record) == press
+                 and isinstance(record.get("check"), Mapping) and record["check"].get("key") == key)
+
+
+def _press(record: Mapping) -> str:
+    held = record.get("check") if isinstance(record, Mapping) else None
+    result = held.get("result") if isinstance(held, Mapping) else None
+    press = result.get("press") if isinstance(result, Mapping) else None
+    return press if isinstance(press, str) else ""
+
+
+def newest_press(histories, key: str) -> tuple:
+    """The runs of the newest press of the check ``key`` among ``histories`` (oldest first), oldest first; none when
+    the history holds no run of it."""
+    ran = [record for record in histories if isinstance(record, Mapping) and isinstance(record.get("check"), Mapping)
+           and record["check"].get("key") == key]
+    return press_runs(ran, ran[-1]) if ran else ()
+
+
+def took_together(runs) -> "Mapping | None":
+    """How long the finished ``runs`` of one press took in all, as a run's history says how long its check took; None
+    for no run, or one whose time its history does not hold."""
+    seconds = [((record.get("check") or {}).get("seconds")) for record in runs]
+    if not seconds or any(isinstance(one, bool) or not isinstance(one, (int, float)) for one in seconds):
+        return None
+    return {"check": {"seconds": float(sum(seconds))}}
+
+
+def seconds_words(seconds: float) -> str:
+    """A short length of time as a check's result says it: "7.4 s" under a minute, "5 min 36 s" under an hour, "2 h
+    14 min" from one."""
+    if round(seconds, 1) < MINUTE_S:
+        return f"{seconds:.1f} s"
+    whole = round(seconds)
+    if whole < HOUR_S:
+        minutes, rest = divmod(whole, MINUTE_S)
+        return f"{minutes} min {rest} s" if rest else f"{minutes} min"
+    hours, rest = divmod(whole, HOUR_S)
+    return f"{hours} h {rest // MINUTE_S} min" if rest // MINUTE_S else f"{hours} h"
+
+
+def _number(value) -> "float | None":
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _network_said(network) -> str:
+    if isinstance(network, (list, tuple)) and len(network) == len(NETWORK_PARTS):
+        return NETWORK_TIMES_TEXT.format(*(number_text(part) for part in network))
+    return "unnamed"
+
+
+def _fitted(record: Mapping) -> Mapping:
+    held = record.get("check") if isinstance(record, Mapping) else None
+    result = held.get("result") if isinstance(held, Mapping) else None
+    return result if isinstance(result, Mapping) else {}
+
+
+def _hours_words(seconds: float) -> str:
+    """A projected length in whole hours, or in whole minutes while it comes to less than an hour."""
+    hours = round(seconds / HOUR_S)
+    if hours >= 1:
+        return f"{number_text(hours)} hour{'' if hours == 1 else 's'}"
+    minutes = max(1, round(seconds / MINUTE_S))
+    return f"{number_text(minutes)} minute{'' if minutes == 1 else 's'}"
+
+
+def _source_words(expected) -> str:
+    """Where an expected number of epochs comes from, as the projection says it in brackets: the words after the
+    number of the Training page's own sentence, without the count it ends with."""
+    count, words = expected
+    _number_said, _, said = words.partition(": ")
+    said = said or words
+    return said.removesuffix(f", ran {count}")
+
+
+def timing_words(runs, *, expected=None, planned: "int | None" = None) -> tuple:
+    """The result of the timing of a short fit, from the finished ``runs`` of one press, oldest first: its sentence, its
+    table, and its projection for the training step 3's form holds, from the seconds per epoch of the first network,
+    the one step 3's form held at the press, scaled by ``planned``, the simulations that training would fit on, over
+    those timed, times ``expected`` (the epochs and the words of where they come from; None for none); the projection
+    says what is missing instead when either is. Never divides by nought."""
+    fits = [_fitted(record) for record in runs]
+    said = [(_network_said(fit.get("network")), _number(fit.get("per_epoch"))) for fit in fits]
+    first, *others = said
+    simulations = _number(fits[0].get("simulations"))
+    sentence = TIMING_DONE_TEXT.format(first[0], UNTIMED_WORDS if first[1] is None else seconds_words(first[1]),
+                                       number_text(int(simulations)) if simulations else "an unknown number of",
+                                       "".join(TIMING_OTHER_TEXT.format(name, UNTIMED_WORDS if pace is None
+                                                                        else seconds_words(pace))
+                                               for name, pace in others))
+    rows = []
+    for fit in fits:
+        span, median = _number(fit.get("span")), _number(fit.get("median_epoch"))
+        pace, epochs = _number(fit.get("per_epoch")), fit.get("epochs")
+        rows.append((_network_said(fit.get("network")), number_text(epochs) if _is_whole(epochs) else "",
+                     "" if span is None else seconds_words(span), "" if pace is None else f"{pace:.1f}",
+                     "" if median is None else seconds_words(median)))
+    table = TableWords(TIMING_COLUMNS, tuple(rows), right=TIMING_RIGHT)
+    if first[1] is None or not simulations:
+        projection = ""                      # nothing was timed to project from: the sentence says so
+    elif expected is None:
+        projection = NO_EPOCHS_TEXT
+    elif not planned:
+        projection = NO_PLAN_TEXT
+    else:
+        seconds = first[1] * (planned / simulations) * expected[0]
+        projection = PROJECTION_TEXT.format(_hours_words(seconds), number_text(expected[0]), _source_words(expected))
+    return sentence, table, projection

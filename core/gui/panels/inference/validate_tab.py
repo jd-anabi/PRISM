@@ -18,19 +18,20 @@ import dataclasses
 import functools
 import random
 import traceback
+import uuid
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from core import cli, orchestrator
 from core.config import CELL_PATH
 from core.diagnostics import ablation, identifiability, probes, sbc
 from core.Helpers import labels
-from core.refusals import Refusal
+from core.refusals import Refusal, require_at_least
 
-from ... import check_lineage, check_readings, design, fonts, record_words, style
+from ... import check_lineage, check_readings, check_scratch, design, fonts, record_words, style
 from ...check_catalogue import AGAIN_WORDS, CHECKS, DECIDING, GROUPS, entry
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...reported import reported
@@ -46,7 +47,7 @@ from ...widgets.page import Sentence, _ring_room
 from ...widgets.rule_table import Column, RuleTable, StateCell, TextCell
 from . import check_forms
 from .check_page import CheckPage
-from .check_results import comparison_block, history_block, result_block
+from .check_results import comparison_block, history_block, result_block, timing_block
 from .step_page import StepPage
 
 TITLE = "Checks"
@@ -81,17 +82,21 @@ BOUNDS_UNREAD_TEXT = "The bounds file cannot be read: {}"
 CELL_UNREAD_TEXT = "The cell file cannot be read: {}"
 #: A calibration's seed left blank is drawn at the press, below this, and its record names it.
 DRAWN_SEED_BELOW = 2 ** 31
+#: What stops the timing of a short fit while step 3's form holds no network or simulations per batch it can use.
+TRAINING_FORM_TEXT = ("The timing uses step 3's network and simulations per batch, and its form holds one that cannot "
+                      "be used: correct it in step 3, Training.")
 #: Each check's stage by the module that holds it and its name there, read at each look, so that what a test puts in
 #: its place is the function looked for; and the method of this page that starts it.
 _ENGINE = {"band": (probes, "probe_band"), "audit": (probes, "probe_mask"),
            "calibration": (orchestrator, "validate_calibration"), "input_use": (ablation, "channel_ablation"),
            "identifiability": (identifiability, "identifiability_rotation"),
            "pin_down": (identifiability, "identifiability_jacobian"), "fixed_number": (sbc, "sbc_repeats"),
-           "drive_study": (probes, "probe_drive"), "across_prior": (identifiability, "identifiability_laplace")}
+           "drive_study": (probes, "probe_drive"), "across_prior": (identifiability, "identifiability_laplace"),
+           "timing": (check_scratch, "short_fit")}
 _STARTS = {"band": "_start_band", "audit": "_start_audit", "calibration": "_start_calibration",
            "input_use": "_start_input_use", "identifiability": "_start_identifiability",
-           "pin_down": "_start_pin_down", "fixed_number": "_start_fixed_number", "drive_study": "_start_drive_study",
-           "across_prior": "_start_across_prior"}
+           "pin_down": "_start_pin_down", "timing": "_start_timing", "fixed_number": "_start_fixed_number",
+           "drive_study": "_start_drive_study", "across_prior": "_start_across_prior"}
 #: The keys that open the check of the row the keyboard is on.
 _OPENING_KEYS = (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space)
 
@@ -260,6 +265,12 @@ class ValidatePanel(StepPage):
         self._ran_here: list = []
         self._last = self._measured = None
         self._history_read = False
+        # The timing of a short fit's press in hand (its id, its sizes, its call), the network its second run fits
+        # while its first is live, and the simulations a training of step 3's form would fit on, as the last reading
+        # resolved them.
+        self._press: "dict | None" = None
+        self._following = None
+        self._planned: "int | None" = None
         self.list_detail = ListAndDetail(self.listing, beside_width=design.scaled(CHECK_BESIDE_WIDTH))
         self.list_detail.back_pressed.connect(self._all_checks)
         self.list_detail.switched.connect(self._switched)
@@ -359,6 +370,8 @@ class ValidatePanel(StepPage):
             return None, None
         if key == "comparison":
             return self._comparison_result(row, found, page)
+        if key == "timing":
+            return self._timing_result(kept, page)
         if key in ("timing", "card_test"):
             ran = [one for one in kept.histories
                    if isinstance(one.get("check"), dict) and one["check"].get("key") == key]
@@ -382,6 +395,55 @@ class ValidatePanel(StepPage):
             return (page.result, page.result_source) if same_folder else (None, None)
         return self._record_result(key, row, kept, others=others, prior_words=prior_words, units=units,
                                    force_unit=force_unit, page=page), source
+
+    def _timing_result(self, kept, page) -> tuple:
+        """The timing's result, from the runs of its newest press in the run history the reading found, and the
+        projection for the training step 3's form holds: its expected epochs as the Training page resolves them, at the
+        simulations the last reading found it would fit on. Kept while it would say the same; none before any run."""
+        runs = check_readings.newest_press(kept.histories, "timing")
+        if not runs:
+            return None, None
+        panel = getattr(self._screen, "posterior_panel", None)
+        expected = panel.expected() if panel is not None and hasattr(panel, "expected") else None
+        source = (tuple((one.get("id"), one.get("outcome")) for one in runs), expected, self._planned)
+        if page.result_source == source:
+            return page.result, source
+        return timing_block(runs, parent=page, expected=expected, planned=self._planned), source
+
+    def _trained(self) -> tuple:
+        """What step 3's form holds that the timing of a short fit uses, each held to the training stage's own rule:
+        its network (width, depth), its simulations per batch and its batches; None for each that breaks it, and for all
+        with no Training page."""
+        rows = getattr(getattr(getattr(self._screen, "posterior_panel", None), "form", None), "rows", None) or {}
+
+        def held(key, rule):
+            try:
+                return rule(rows[key].value())
+            except (KeyError, Refusal, TypeError, ValueError):
+                return None
+        network = (held("hidden_features", lambda value: require_at_least("hidden_features", value, 1)),
+                   held("num_transforms", lambda value: require_at_least("num_transforms", value, 1)))
+        return (None if None in network else network,
+                held("run_size_cap", lambda value: require_at_least("run_size_cap", value, 0)),
+                held("num_runs", lambda value: require_at_least("num_runs", value, 1)))
+
+    def _sizes(self, key: str, form) -> dict:
+        """The sizes of a run of the check ``key`` its form holds; the timing's with step 3's simulations per batch and
+        the networks it times."""
+        sizes = check_forms.sizes_of(key, form)
+        if key == "timing":
+            network, cap, _batches = self._trained()
+            sizes.update(run_size_cap=cap, network=None if network is None else
+                         [list(one) for one in check_forms.timing_networks(network)])
+        return sizes
+
+    def _took(self, key: str, sizes: dict):
+        """This computer's newest finished run of the check ``key`` at ``sizes``, as the last reading held them; for the
+        timing, the runs of that run's press together. None for none."""
+        last = history.check_at(self._ran_here, check=key, sizes=sizes)
+        if key == "timing" and last is not None:
+            return check_readings.took_together(check_readings.press_runs(self._ran_here, last))
+        return last
 
     def _others_open(self, key, found) -> int:
         """How many deciding checks other than ``key`` apply, have not passed and a run can still pass."""
@@ -512,12 +574,17 @@ class ValidatePanel(StepPage):
         if fixed is not None and not fixed.widget.is_ticked() and not getattr(self.session.cfg, "chi_mode", False):
             # a fixed number of driven recordings means something only with the frequency response
             blocks = (*blocks, Fact("lock", check_lineage.FREQUENCY_ONLY_TEXT, FREQUENCY_ONLY_BLOCKS))
-        sizes = check_forms.sizes_of(key, form)
+        if key == "timing":
+            # the networks it times and the simulations per batch it fits on are step 3's form's, read as they stand
+            network, cap, _batches = self._trained()
+            form.rows["network"].set_value(check_forms.networks_line(network))
+            if network is None or cap is None:
+                fields = (*fields, Fact("err", TRAINING_FORM_TEXT, SETTING_BLOCKS))
+        sizes = self._sizes(key, form)
         # A size in error leaves out the count it is said in: the line under its field says what is wrong with it.
         counted = {setting: value for setting, value in sizes.items() if setting not in found}
-        said = check_forms.before_you_start(key, sizes=counted, last=history.check_at(self._ran_here, check=key,
-                                                                                        sizes=sizes),
-                                            memory=self._memory(), read=self._history_read)
+        said = check_forms.before_you_start(key, sizes=counted, last=self._took(key, sizes), memory=self._memory(),
+                                            read=self._history_read)
         return (*said, *others, *names, *blocks, *cell, *fields)
 
     def _memory(self) -> tuple:
@@ -595,8 +662,24 @@ class ValidatePanel(StepPage):
         self._ran_here = history.checks_on(folder, computer=here)
         self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
         self._history_read = True
+        self._planned = self._planned_simulations()
         self._point_the_cells()
         self._draw(read=True)
+
+    def _planned_simulations(self) -> "int | None":
+        """The simulations a training of step 3's form would fit on: its batches times the simulations per batch the
+        training stage resolves for its cap on the configuration in use, read with no simulation set looked at; None
+        while the form holds none it can use, or with no configuration."""
+        _network, cap, batches = self._trained()
+        cfg = getattr(getattr(self._screen, "session", None), "cfg", None)
+        if cap is None or batches is None or cfg is None:
+            return None
+        try:
+            width = orchestrator.training_reading(cfg, None, num_runs=batches, run_size_cap=cap,
+                                                  checkpoint_every=0).width
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its width plans nothing
+            return None
+        return batches * width if isinstance(width, int) and width > 0 else None
 
     def _point_the_cells(self) -> None:
         """Each check's list of cell files, listed in the folder of the model in use, its choice kept while the file is
@@ -728,6 +811,50 @@ class ValidatePanel(StepPage):
             self.dispatch(identifiability.identifiability_jacobian, cfg, provide_fig_sink=True,
                           on_result=self._made_by("pin_down"), **arguments)
 
+    def _start_timing(self) -> None:
+        """The timing of a short fit from one press: a fit of step 3's network on the prior in use, at step 3's
+        simulations per batch and the form's batches and epochs, then, once that run has finished, the same of the
+        built-in network; one fit when the two are the same network. Each run keeps nothing but its result."""
+        session = self.session
+        network, cap, _batches = self._trained()
+        if session.inf_prior is None or network is None or cap is None:
+            return                           # the facts say why, and the button is greyed with them
+        form = self.check_pages["timing"].form
+        try:
+            arguments = check_forms.call_arguments("timing", form, slots=self._slots())
+        except Refusal as refused:
+            self._refusal(refused)
+            return
+        networks = check_forms.timing_networks(network)
+        self._press = {"press": uuid.uuid4().hex, "sizes": self._sizes("timing", form),
+                       "call": (session.cfg, session.inf_prior), "arguments": {**arguments, "run_size_cap": cap}}
+        self._following, started = (networks[1] if len(networks) > 1 else None), False
+        try:
+            started = self._time_a_fit(networks[0])
+        finally:
+            if not started:
+                self._following = None
+
+    def _time_a_fit(self, network) -> bool:
+        """One run of the press in hand: a short fit of ``network`` in a scratch store; whether it started."""
+        press = self._press
+        cfg, prior = press["call"]
+        return self.dispatch(check_scratch.short_fit, cfg, prior, provide_fig_sink=True, press=press["press"],
+                             hidden_features=network[0], num_transforms=network[1], **press["arguments"])
+
+    def _run_ended(self, status) -> None:
+        """A run has ended: read as every page reads. The first fit of a timing that finished asks for the second one
+        turn later, once its end has been drawn; one that was stopped, failed or refused asks for none."""
+        following, self._following = self._following, None
+        super()._run_ended(status)
+        if following is not None and status.outcome == "finished" and controller().host() is self:
+            QTimer.singleShot(0, self, functools.partial(self._time_the_second, following))
+
+    def _time_the_second(self, network) -> None:
+        """The second fit of the press in hand, unless a run is live by now."""
+        if self._press is not None and not controller().is_live():
+            self._time_a_fit(network)
+
     def _start_fixed_number(self) -> None:
         """The calibration repeated at a fixed number of driven recordings, of the posterior in use with the prior in
         use."""
@@ -835,8 +962,18 @@ class ValidatePanel(StepPage):
         key = self._check_of(fn)
         if key is None:
             return super().run_spec(fn, *args, **kwargs)
-        return check_forms.check_spec(key, sizes=check_forms.sizes_from_call(key, kwargs),
-                                      plan=self._screen.plan_entry() if self._screen is not None else None)
+        plan = self._screen.plan_entry() if self._screen is not None else None
+        if key == "timing":
+            # Both runs of a press are at its sizes, its two networks among them; each fits its own, which its pace is
+            # looked up by.
+            network = (kwargs.get("hidden_features"), kwargs.get("num_transforms"))
+            sizes = (self._press or {}).get("sizes") or {**check_forms.sizes_from_call(key, kwargs),
+                                                         "run_size_cap": kwargs.get("run_size_cap"),
+                                                         "network": [list(network)]}
+            rotated = bool(getattr(args[0], "reparam_rotate", True)) if args else True
+            return check_forms.check_spec(key, sizes=sizes, facts={"network": network, "rotated": rotated},
+                                          plan=plan)
+        return check_forms.check_spec(key, sizes=check_forms.sizes_from_call(key, kwargs), plan=plan)
 
 
 def _limits_of(cfg) -> tuple:

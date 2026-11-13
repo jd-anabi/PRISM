@@ -1283,7 +1283,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     sentences = {
         # one step; two steps, the second beginning with its own number
         "t_obs": "Set it in the 'Recording length' box in step 4, Checks, or step 5, Inference.",
-        "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.",
+        "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 4, Checks, or step 6, Narrowing round.",
         "run_size_cap": ("Set it in the 'Simulations per batch' box in step 3, Training, or step 6, "
                          "Narrowing round."),
         # the consents and the dialogs quote their controls' own text (tsnpe_tab.py:102,
@@ -1379,7 +1379,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
               if rendered.get(key) != sentences.get(key)}
     assert not differ, f"(as rendered, as written here): {differ}"
     # the budget boxes sit in two steps, and a refusal raised in either must name the one the user is in
-    assert gui_fields.CONTROL["num_runs"] == (("training", "narrowing"), "Batches")
+    assert gui_fields.CONTROL["num_runs"] == (("training", "checks", "narrowing"), "Batches")
 
     # (d) no window control: the settings the window does not expose, and the tool-only set
     assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}

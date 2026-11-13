@@ -73,6 +73,24 @@ def history_block(key: str, entry_: Mapping, *, parent) -> ResultRegion:
     return region
 
 
+def timing_block(runs, *, parent, expected=None, planned: "int | None" = None) -> ResultRegion:
+    """The result of the timing of a short fit, from the runs of one press in the run history, oldest first: from those
+    that finished, each network's time per epoch, the table and the projection for the training step 3's form holds,
+    at ``planned`` simulations for ``expected`` epochs (with where they come from); when none finished, how the last
+    run ended. Made inside ``parent``."""
+    finished = [one for one in runs if isinstance(one, Mapping) and one.get("outcome") == "finished"
+                and ((one.get("check") or {}).get("result") or {})]
+    if not finished:                         # none finished, or one written before a check kept its result
+        return history_block("timing", runs[-1], parent=parent)
+    sentence, table, projection = check_readings.timing_words(finished, expected=expected, planned=planned)
+    region = ResultRegion(parent)
+    region.set_verdict("done", sentence)
+    region.set_table(table)
+    if projection:
+        region.set_sentences((Fact("info", projection),))
+    return region
+
+
 def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = False) -> ResultRegion:
     """The comparison after simulating, which writes no record: its sentence with the marker of its state, and for a
     posterior from a narrowing round that the audit measured the whole prior; made inside ``parent``."""

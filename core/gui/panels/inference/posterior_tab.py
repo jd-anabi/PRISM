@@ -53,7 +53,7 @@ from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
 from ...reported import reported
 from ...run import ends, history
 from ...run.controller import controller
-from ...run.model import RunSpec
+from ...run.model import TYPED_EPOCHS_TEXT, RunSpec
 from ...run.view import SelectableLines, WrappedWords
 from ...step_facts import (CANCEL, CONTINUING, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
                            Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
@@ -1049,6 +1049,15 @@ class PosteriorPanel(StepPage):
         question = self._from_zero() or new_set_question(batches=knobs["num_runs"], never=self._never())
         if self._asked_from_zero(question):
             self._start(knobs, True)
+
+    def expected(self) -> "tuple[int, str] | None":
+        """The epochs a training started now is expected to run, with the words that say where the number comes from,
+        as the fit's time estimate takes them: the number typed in the form, else that of the last finished training of
+        its kind as the page's last reading found it; None for neither. Reads nothing."""
+        typed = None if "expected_epochs" in self.problems() else self.form.rows["expected_epochs"].value()
+        if typed:
+            return typed, TYPED_EPOCHS_TEXT.format(typed)
+        return self._expected
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
         """A training, which writes a posterior, its simulation set and its kept training, and may be tried again: with

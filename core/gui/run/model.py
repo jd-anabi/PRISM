@@ -99,7 +99,8 @@ class RunSpec:
     by ("model", "observation": the kind of observation, "narrowed", "network": hidden features and transforms), and
     what is known before the run says it ("rotated": False for a training with no rotation; "memory_limit": the graphics
     card's limit in GiB; "memory_source": where that limit was set, as the history keeps it; "computer": this computer's
-    name; "cadence": the batches between two saves of a simulation set the run continues)."""
+    name; "cadence": the batches between two saves of a simulation set the run continues; "keeps_nothing": True for a
+    check that keeps nothing but its result, whose training is never kept and is not said to be)."""
     word: str
     place: tuple[str, str | None]
     name: str = ""
@@ -797,6 +798,8 @@ class RunModel:
         """A message, when the line is one: a warning or an error, in the window's own words where its row has
         them and from the engine as written where it has none, or a line of information its row makes one."""
         row = None if reading is None else next(r for r in readings.ROWS if r.name == reading.name)
+        if row is not None and row.name in ("fit_saving_off", "fit_not_kept") and self.spec.facts.get("keeps_nothing"):
+            return                           # a check that keeps nothing keeps no training: there is nothing to say
         if level in ("warning", "error"):
             kind = "err" if level == "error" else "warn"
         elif level == "info" and row is not None and row.message == "information":

@@ -15,7 +15,7 @@ Three shapes of entry:
   ``core/gui/keys.py`` -- a step ("infer") or a part that has no steps ("models") -- and the label is
   the row as the panel passes it to ``add_help_row``. A tuple of places is how one input names every
   place it appears, in the window's order (the parts as the rail lists them, a part's steps as it
-  shows them): the batch count is in two of them.
+  shows them): the batch count is in three of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
   control in Records, whose list and Note box are not form rows, the model builder's forcing
   fields, whose rows are labelled by parameter name, or a plan, whose file is what is corrected; the
@@ -35,9 +35,9 @@ parameter's name, every value whole.
 
 A place is written in the words the rail's places are written in (``keys.place_words``), and several
 are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
-written in one place. ``num_runs`` and ``run_size_cap`` sit in both training and the narrowing round
-with the same label, so their place is a tuple of both and the sentence names both: one place would
-send a user refused in the narrowing round to training. The narrowing round's row of the second reads
+written in one place. ``num_runs`` and ``run_size_cap`` sit in training, in the narrowing round and on
+a check's form with the same label, so their place is a tuple of every one and the sentence names each:
+one place would send a user refused in the narrowing round to training. The narrowing round's row of the second reads
 "(0 = automatic)" after the label, where the Training page has its tick "Automatic". The three drive keys
 are static strings built exactly as the Infer tab builds its rows (``labels.gui_forcing_label``
 with ``config.FORCING_DISPLAY_UNITS``); ``_rebuild_forcing_fields`` keeps deriving its rows from
@@ -70,7 +70,7 @@ def _in(place) -> str:
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
     "t_obs": (("checks", "infer"), "Recording length"),
-    "num_runs": (("training", "narrowing"), "Batches"),
+    "num_runs": (("training", "checks", "narrowing"), "Batches"),
     "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
     "checkpoint_every": ("training", "Save the simulations every … batches"),
     "resume": ("training", "Continue or start new"),

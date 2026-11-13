@@ -1324,3 +1324,57 @@ def test_a_check_runs_history_holds_its_entry_as_names_and_numbers(tmp_path):
     plain.release(None)
     turn_until(app, lambda: not controller().is_live(), 10.0)
     assert history.read(tmp_path / "runs" / f"{other_run}.json")["check"] is None
+
+
+def test_a_check_that_writes_no_record_keeps_its_result_in_the_run_history(tmp_path):
+    """A check that keeps nothing but its result hands it back as it returns, and its history's check entry keeps it,
+    made plain, names and numbers; it names no record, and its run's end names none either."""
+    from core.gui.run import history
+    from core.gui.run.controller import controller
+    from core.gui.panels.inference import check_forms
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
+    app = qt_app()
+    held = controller_on(tmp_path, Clock(at(8, 12, 0)))
+    sizes = {"num_runs": 20, "epochs": 10, "run_size_cap": 0, "network": [[256, 10], [128, 8]]}
+    spec = check_forms.check_spec("timing", sizes=sizes)
+    stand_in = StandIn(word="Check")
+    start_run(build_run_host(), stand_in, spec=spec)
+    assert stand_in.started.wait(5)
+    run = held.status.run
+    handed = {"network": (256, 10), "simulations": 40_960, "epochs": 10, "span": 74.0, "per_epoch": 7.4,
+              "median_epoch": 7.3, "press": "a1b2"}
+    stand_in.release(SimpleNamespace(check_result=handed))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    record = history.read(tmp_path / "runs" / f"{run}.json")
+    assert record["check"]["result"] == {**handed, "network": [256, 10]}, record["check"]
+    assert record["check"]["sizes"] == sizes and record["result"] is None
+    assert held.status.records == () and held.status.kinds == ()
+
+
+def test_the_estimate_before_the_first_epoch_reads_the_timing_check(tmp_path):
+    """With no training of the network and the simulations asked for in the history, the pace of an epoch is the newest
+    finished timing of a short fit of that network, its seconds per epoch scaled by the simulations asked for over those
+    it timed, and its source says so; a timing of another network, or one that did not finish, is passed over, and a
+    training of that size is taken first."""
+    from core.gui.run import history
+    from tests._fixtures import write_history
+    folder = tmp_path / "runs"
+
+    def timed(run_id, day, *, network=(256, 10), outcome="finished", per_epoch=7.4):
+        write_history(folder, id=run_id, word="Check", started=_at(day, 14, 2), outcome=outcome,
+                      check={"key": "timing", "sizes": {}, "seconds": 90.0, "stages": {},
+                             "result": {"network": list(network), "simulations": 40_960, "per_epoch": per_epoch,
+                                        "press": run_id}})
+
+    timed("20261002T140200-check", 2, per_epoch=6.0)
+    timed("20261003T140200-check", 3)
+    timed("20261004T140200-check", 4, network=(128, 8), per_epoch=5.2)
+    timed("20261005T140200-check", 5, outcome="stopped", per_epoch=9.9)
+    size = {"network": [256, 10], "simulations": 20_480_000}
+    assert history.estimate(folder, word="Training", per="epoch", size=size) == (
+        pytest.approx(7.4 * 500), "the timing of a short fit on 3 Oct 2026, 14:02, scaled to these simulations")
+    assert history.estimate(folder, word="Training", per="epoch", size={**size, "network": [64, 3]}) is None
+    write_history(folder, id="20261006T120000-training", word="Training", started=_at(6), outcome="finished",
+                  fit={"network": [256, 10], "simulations": 20_480_000, "seconds_per_epoch": 3780.0})
+    assert history.estimate(folder, word="Training", per="epoch", size=size)[0] == 3780.0

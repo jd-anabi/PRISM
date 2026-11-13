@@ -2993,7 +2993,7 @@ def _the_checks_lists_blocks(tmp_path) -> None:
     cfg = _nad_cfg(chi_mode=True)
     assert beside(SbiSession(), None) == "Cannot start yet: needs a prior."
     assert beside(SbiSession(cfg=cfg, inf_prior=held), "calibration") == "Cannot start yet: needs a posterior."
-    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "timing") == (
+    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "card_test") == (
         "Cannot start: this check cannot be run from the window yet.")
     beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "band")
     check_forms.cell_picker(page.form).restore_key("")
@@ -4483,7 +4483,7 @@ def test_the_fix_sentence_names_this_page_or_the_steps_that_show_the_setting():
     assert fields.fix_sentence("num_runs", here="training") == "Set it in 'Batches' on this page."
     assert fields.fix_sentence("num_runs", here="narrowing") == "Set it in 'Batches' on this page."
     assert fields.fix_sentence("num_runs", here="prior") == (
-        "Set it in 'Batches' in step 3, Training, or step 6, Narrowing round.")
+        "Set it in 'Batches' in step 3, Training, or step 4, Checks, or step 6, Narrowing round.")
     assert fields.fix_sentence("bounds", here="training") == "Set it in 'Bounds file' in step 2, Prior."
     assert fields.fix_sentence("new_run", here="training") == "Answer the question that the start button asks on this page."
     assert fields.fix_sentence("name", here="prior") == "Choose another name in 'Name' on this page."
@@ -4525,7 +4525,7 @@ def test_a_refusal_on_the_run_page_of_a_rebuilt_page_says_what_the_page_says(tmp
     turn_until(app, lambda: not controller().is_live())
     _settle()
     assert panel.run_view.failure_message.text().endswith(
-        "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.")
+        "Set it in the 'Batches' box in step 3, Training, or step 4, Checks, or step 6, Narrowing round.")
     panel.run_view.back_button.click()
 
 
