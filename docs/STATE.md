@@ -1,12 +1,39 @@
 # PRISM — state
 
-**Last updated:** 2026-11-12, afternoon (15:08 by the clock; the weekly bar 78 %, resetting on 15 November at 04:00
-UTC): TASK 6-7 WAITS FOR THE RESET. A chat started at 14:59 from
-`docs/superpowers/prompts/2026-11-12-window-redesign-stage-5-from-task-6-7.md`, read the ground (all as handed over)
-and judged that 78 % plus Task 6-7's expected 10 points or more ends too near 90 %. Its builder's dispatch is written, with the controller's rulings R1 to R12 (the ledger's
-line of 15:06): `.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-06-07-builder-dispatch.md`. Nothing is
-built or running. NEXT: after the reset, dispatch that builder (in that chat, on the owner's word, or a new chat from the
-same prompt and this dispatch), then the loop as the Re-plan section has it.
+**Last updated:** 2026-11-12, evening (20:47 by the clock; the weekly bar 82 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S TASK 6-7, THE FORMS AND RUNS OF EVERY CHECK, IS COMPLETE. The chat started at 14:59 from
+`docs/superpowers/prompts/2026-11-12-window-redesign-stage-5-from-task-6-7.md`; at 15:06 it judged the task should wait
+for the reset, and the owner answered "No, start it now in this chat".
+
+- **The build** (one Opus builder from `stage-5/briefs/task-06-07-builder-dispatch.md`, rulings R1 to R12; stopped once,
+  Q1 and Q2 ruled at 17:24): `c391452` (the carried items: no label shown as a window of its own, with a standing guard;
+  a kept result keyed on its units; `docs/guide/testing.md`'s line; three docstrings), `f1b9fed` (the labels Recording
+  length, Cell file, Test datasets, Operating points), `7ba534e` (the five deciding checks' forms, facts and runs),
+  `b3a5399` (the four informing checks' and tools'); the fix round `8b0d351`, `1d67842`, `0b3bce8`, `88da60c` (F1 to
+  F10, the guide's labels), and `7d532ee` (two faults the real-screen run found: the clipboard's guard, a stale display
+  expectation). Every change under `core/gui/`, the engine closed; `FIELDS` 98; the no-control set 37 to 26 to 16;
+  `NOT_BUILT_TEXT` stays for checks 8 and 10 (Task 8-9). Departures 476 (the words under a check's field are the
+  window's, the rule the engine's) and 477 (the audit greyed while its record could not count): `f5ad3ab`, `21e6a0a`,
+  `cda81f3`. The code audit's list gains items 14 (the repeated calibration's seed refused only inside the run) and 15
+  (two default clauses of the refusals' table read wrong in the window).
+- **Its review:** reader one (sonnet) 2 Important, 8 Minor; reader two (opus) 4 Important, 7 Minor, its faults run (five
+  test gaps shown green under their faults); the gate on `b3a5399` RED (4 legs of the keyboard walk, a test fault); one
+  fix round; the re-read CLEAN (3 Minor: two carried to the stage's last review, one no action).
+- **The gates on `7d532ee`:** the fast gate 3865 passed, 12 skipped, 3 deselected, 39 min 50 s (3880 collected; not
+  certified quiet); the real-screen run 12 passed; the listing of `Artifacts/` after equals the one before (428
+  entries); `PRISM.ini` unchanged. The carried-over list: 35 rows born, one closed naming its successor, 1812 rows,
+  missing 0.
+- **Measured:** Task 6-7 cost about 4 points of the weekly bar (78 % to 82 %): the builder 0.89 M tokens in all, the
+  readers 0.25 M and 0.40 M, the re-read 0.12 M.
+- **Carried:** to Task 8-9, the calibration's run page shows a training's health table (its first stage is counted by
+  "Generating training data"); to the last review, `_own_config` saying any `ValueError` as an unreadable file, and a
+  forcing line's one long token that cannot wrap. For the owner's list at the exit: seeds ungrouped; departures 476
+  and 477; the repeated calibration's seed bounded lower by its repeats.
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: Task 8-9 (the timing of a short fit and the card test; the comparison after simulating), by the same loop, if the
+bar leaves room to finish it below 90 %; then Tasks 10-11, 12-13; the last review; Task 14 (the exit, with the owner);
+the code audit; the retrain from the window; one last stage.
 
 What follows is the head as 14:22 left it:
 

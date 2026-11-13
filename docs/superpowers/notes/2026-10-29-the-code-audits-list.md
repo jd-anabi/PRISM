@@ -550,3 +550,10 @@ From Task 6-7's fix round (the forms and runs of every check):
     passes `require_seed` (`core/gui/panels/inference/check_forms.py`, `seed_problem` with `added`); the command line's
     `sbc` does not. Cure if wanted: `require_seed(seed + repeats - 1, key="seed")` at the stage's entry, before
     `store.create`.
+15. **Two default clauses of the refusals' table read wrong in the window.** `core/refusals.py:144` gives `seed` the
+    clause "none: one is drawn and recorded", the calibration's; the checks that hold a seed of their own with a
+    default of 0 (what the observations can pin down, the calibration repeated at fixed numbers, identifiability across
+    the prior) refuse a blank seed at a press with it. `core/refusals.py:183` gives `mask_num_runs` "12", the engine's
+    `probe_mask` default, while the window's audit form opens at 100, the least size that counts. Both are said only
+    past a greyed button (the field's own line blocks first). Cure if wanted: a default clause per stage, or none in
+    the window's sentence.
