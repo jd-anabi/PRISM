@@ -108,7 +108,9 @@ class RunSpec:
     what is known before the run says it ("rotated": False for a training with no rotation; "memory_limit": the graphics
     card's limit in GiB; "memory_source": where that limit was set, as the history keeps it; "computer": this computer's
     name; "cadence": the batches between two saves of a simulation set the run continues; "keeps_nothing": True for a
-    check that keeps nothing but its result, whose training is never kept and is not said to be)."""
+    check that keeps nothing but its result, whose training is never kept and is not said to be; "uncompared": True for a
+    run read back from a history that kept no comparison with the audit, as every history written before runs kept one:
+    its total is said, not compared)."""
     word: str
     place: tuple[str, str | None]
     name: str = ""
@@ -577,8 +579,12 @@ class RunModel:
             return ()
         out = [self._failed_row()]
         if self.spec.facts.get("observation") == "chi" or self._chi_seen:
-            compared = self.comparison()
-            if compared is None:
+            compared, masked = self.comparison(), self._masked
+            if compared is None and masked is not None:      # read back from a history that kept no comparison
+                said = (f"{number_text(round(100.0 * masked.unusable / masked.total, 1))} %" if masked.total
+                        else "None counted")
+                out.append(HealthRow(UNUSABLE_MEASURE, said, "Not compared"))
+            elif compared is None:
                 out.append(HealthRow(UNUSABLE_MEASURE, "Counted when simulation ends", ""))
             else:
                 said = compared.sentence.removeprefix(f"{UNUSABLE_MEASURE} ")
@@ -618,7 +624,7 @@ class RunModel:
         share; None for none that counted), made once, at that total, with the difference accepted when it was;
         whether the simulation set is kept, which the advice to stop says, from the run's own settings. None before
         the total."""
-        if self._masked is None:
+        if self._masked is None or self.spec.facts.get("uncompared"):
             return None
         if self._compared is None or ("accepted" in self._answers) != self._compared[0]:
             masked, audit = self._masked, self.spec.facts.get("audit")
@@ -817,7 +823,7 @@ class RunModel:
                 self._masked = (Masked(values["masked"], values["total"], values["batches"], values["scope"])
                                 if name == "chi_total" else Masked(0, 0, 0, values["scope"]))
                 compared = self.comparison()
-                if compared.message:
+                if compared is not None and compared.message:
                     self._kept = [("comparison", Message("warn", compared.message, self._clock(), 1, True))] + [
                         (key, message) for key, message in self._kept if key != "comparison"]
                     del self._kept[MESSAGES_KEPT:]

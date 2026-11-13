@@ -6966,3 +6966,65 @@ def test_above_five_points_the_run_needs_you_until_one_answer_is_chosen(tmp_path
     assert tuple(entry) == history.COMPARISON_FIELDS
     stand_in.release()
     turn_until(app, lambda: not held.is_live(), 10.0)
+
+
+def test_a_check_that_keeps_nothing_says_nothing_of_a_saved_network(tmp_path):
+    """The end of a timing's fit, which its epoch limit ends, says the epochs it ran and nothing of a saved network: a
+    check that keeps nothing kept none."""
+    from core.gui.panels.inference import check_forms
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, StandIn, start_run, turn_until
+    app = qt_app()
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 0)))
+    spec = check_forms.check_spec("timing", sizes={"num_runs": 20, "epochs": 10, "run_size_cap": 0,
+                                                   "network": [[256, 10]]}, facts={"network": (256, 10)})
+    stand_in = StandIn(word="Check")
+    start_run(build_run_host(), stand_in, spec=spec)
+    assert stand_in.started.wait(5)
+    for epoch in range(1, 11):
+        stand_in.say(_epoch(epoch, took=7.4))
+    turn_until(app, lambda: len(held.model.epochs()) == 10)
+    assert held.model.fit_ended_by() == "limit"
+    stand_in.release(None)
+    turn_until(app, lambda: not held.is_live(), 10.0)
+    said = held.status.sentence
+    assert said.endswith("The fit ran 10 epochs.") and "saved network" not in said, said
+
+
+def _past(tmp_path, run, line, **record) -> RunModel:
+    """The past view's model of the run ``run``, its history ``record`` and its text the one ``line``."""
+    from tests._fixtures import build_run_host, write_history
+    from tests._runs import Clock
+    held = _controller_on(tmp_path, Clock(_at(8, 12, 0)))
+    folder = tmp_path / "runs"
+    write_history(folder, id=run, started=_at(2, 8, 10), ended=_at(2, 9, 0), outcome="finished", **record)
+    (folder / f"{run}.txt").write_text(f"2026-10-02 09:10:00 info {line}\n", encoding="utf-8")
+    host = build_run_host()
+    assert held.show_past(run, host)
+    return host.past_view._model
+
+
+def test_the_past_view_reads_the_comparison_and_what_is_kept_from_the_history(tmp_path):
+    """A run drawn again from its two files reads what its history kept: a check that keeps nothing says nothing of a
+    training not kept; a training whose history kept no comparison with the audit, written before runs kept one, says
+    its total not compared, as it did, and asks for no audit; and one whose history keeps an accepted difference reads
+    it accepted, as Checks reads it."""
+    from core.gui.panels.inference import check_forms
+    from tests._runs import SCOPE_WHOLE, masked_line
+    stages = [[stage.name, list(stage.begins), stage.counts] for stage in _TRAINING]
+    timing = _past(tmp_path, "20261002T081000-check", _LINES["fit_not_kept"], word="Check",
+                   stages=[[stage.name, list(stage.begins), stage.counts] for stage in check_forms.TIMING_STAGES],
+                   check={"key": "timing", "sizes": {}, "seconds": 90.0, "stages": {}, "result": {}})
+    assert timing.messages() == ()
+    older = _past(tmp_path, "20261002T081000-training", masked_line(401, 1000, 3, SCOPE_WHOLE), word="Training",
+                  stages=stages, health={"failed": 0, "simulated": 1000})
+    assert _row_and_messages(older) == (("40.1 %", "Not compared"), [])
+    compared = {"unusable": 417, "total": 1000, "scope": SCOPE_WHOLE, "batches": 3, "audit": _AUDIT["id"],
+                "audit_fraction": _AUDIT["fraction"], "difference": 3.8, "state": "Look closer",
+                "accepted": {"at": "2026-10-03T09:14:00-07:00", "audit": _AUDIT["id"], "difference": 3.8},
+                "kept_training": None}
+    accepted = _past(tmp_path, "20261002T091000-training", masked_line(417, 1000, 3, SCOPE_WHOLE), word="Training",
+                     stages=stages, simulation_set={"folder": "eda5c2a1e468"},
+                     health={"failed": 0, "simulated": 1000, "comparison": compared})
+    (now, state), messages = _row_and_messages(accepted)
+    assert state == "Fine" and "A difference of 3.8 points was accepted on" in now and messages == [], (now, state)

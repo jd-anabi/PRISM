@@ -40,7 +40,7 @@ from PySide6.QtGui import (QDesktopServices, QFontMetrics, QKeySequence, QPainte
 from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
-from .. import design, fonts, style
+from .. import check_readings, design, fonts, style
 from ..reported import reported
 from ..widgets.ask import ask
 from ..widgets.log_pane import LINES_KEPT, LogPane
@@ -829,7 +829,8 @@ class RunView(QWidget):
         self._figures.setContentsMargins(0, design.scaled(design.GAP["block"]), 0, 0)
         self.figures.setMinimumHeight(design.scaled(FIGURES_LEAST_H))
         for part in (self.end, self._end_gap, self.health_head, self._health_head_gap, self.health, self.answers,
-                     self._health_gap, self.loss, self._loss_gap, self.messages_head, self._messages_gap, self.messages, self.figures):
+                     self._health_gap, self.loss, self._loss_gap, self.messages_head, self._messages_gap, self.messages,
+                     self.figures):
             column.addWidget(part)
         self.body = Scroller(body)
 
@@ -1042,9 +1043,13 @@ class RunView(QWidget):
         health = record.get("health") if isinstance(record.get("health"), dict) else {}
         compared = health.get("comparison") if isinstance(health.get("comparison"), dict) else {}
         kept_set = isinstance(record.get("simulation_set"), dict)
-        # the comparison with the audit as the run made it: the audit it was handed, and the answers its history keeps
-        facts = {"audit": {"id": compared.get("audit"), "fraction": compared.get("audit_fraction")},
-                 "cadence": 1 if kept_set else 0} if compared else {}
+        check = record.get("check") if isinstance(record.get("check"), dict) else {}
+        # the comparison with the audit as the run made it: the audit it was handed, and the answers its history keeps;
+        # none for a history that kept none; and a check that keeps nothing says nothing of a training not kept
+        facts = ({"audit": {"id": compared.get("audit"), "fraction": compared.get("audit_fraction")},
+                  "cadence": 1 if kept_set else 0} if compared else {"uncompared": True})
+        if check.get("key") in check_readings.KEEPS_NOTHING:
+            facts["keeps_nothing"] = True
         spec = RunSpec(str(record.get("word") or ""), tuple(place) if isinstance(place, list) and len(place) == 2
                        else None, name=str(record.get("name") or ""), stages=tuple(stages), simulation_set=kept_set,
                        facts=facts)

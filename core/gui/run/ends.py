@@ -12,6 +12,7 @@ tested with no window.
 """
 from datetime import datetime
 
+from ..check_readings import KEEPS_NOTHING
 from ..texts import date_text, duration_text, is_size, number_text
 from .model import OUTCOMES, RunStatus, _gib
 from .questions import TRAINING_WORDS, what_a_stop_keeps
@@ -184,9 +185,13 @@ def _saved(record: dict) -> list[str]:
 
 def _fit_ended(record: dict) -> list[str]:
     """How a fit ended by itself: validation no longer improving for its patience, earlier than the estimate when
-    there was one; or its epoch limit reached before it had stopped improving."""
+    there was one; or its epoch limit reached before it had stopped improving. A check that keeps nothing kept no
+    network: of its fit, only the epochs it ran are said."""
     fit = record.get("fit") if isinstance(record.get("fit"), dict) else {}
     epochs, best, how, expected = fit.get("epochs"), fit.get("best_epoch"), fit.get("ended_by"), fit.get("expected")
+    check = record.get("check") if isinstance(record.get("check"), dict) else {}
+    if check.get("key") in KEEPS_NOTHING:
+        return [f"The fit ran {number_text(epochs)} epoch{'' if epochs == 1 else 's'}."] if _count(epochs) else []
     if not _count(epochs) or not _count(best):
         return []
     if how == "patience":

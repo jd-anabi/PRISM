@@ -35,11 +35,11 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
   ``health`` is ``{"failed", "simulated", "memory_peak", "batches_split", "out_of_memory", "comparison"}`` once any of
   it is known, else None; a file written before these were kept holds the first two alone. ``comparison``, of
   ``COMPARISON_FIELDS``, is a training's or a narrowing round's first total of unusable driven recordings against the
-  audit it was handed, with the answers given to it; None for any other run, and before the total. ``check``, of ``CHECK_FIELDS``, is a
-  check's run's: which check (its key) and at what sizes, as its page handed them, how long it took in seconds (None
-  while it runs), the seconds of each stage it began, by the stage's name, and the check's own result, names and
-  numbers only; None for a run that is no check's, and in every file written before checks kept it. A name a reader
-  finds missing or None, in a file of any age, is no information.
+  audit it was handed, with the answers given to it; None for any other run, and before the total.
+  ``check``, of ``CHECK_FIELDS``, is a check's run's: which check (its key) and at what sizes, as its page handed
+  them, how long it took in seconds (None while it runs), the seconds of each stage it began, by the stage's name,
+  and the check's own result, names and numbers only; None for a run that is no check's, and in every file written
+  before checks kept it. A name a reader finds missing or None, in a file of any age, is no information.
 
 ``fit``, of ``FIT_FIELDS``: the epochs, the best epoch and its validation loss, the median seconds per epoch, what
 ended the fit by itself ("patience" or "limit"), the network (hidden features, transforms) and the number of
