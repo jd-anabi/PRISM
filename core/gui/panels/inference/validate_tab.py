@@ -308,8 +308,9 @@ class ValidatePanel(StepPage):
 
     def _result(self, key, row, found, kept, *, read: bool, page) -> tuple:
         """The result the page of the check ``key`` shows for its ``row``, and what it was made from: kept when it would
-        say the same; a record's made only at a reading, from its folder with the count of the other checks still open
-        and the audit's prior, which its words say, and kept between readings while its folder decides."""
+        say the same; a record's made only at a reading, from its folder with the count of the other checks still open,
+        the audit's prior and the units in use, which its words say, and kept between readings while its folder
+        decides."""
         if row is None or kept is None:
             return None, None
         if key == "comparison":
@@ -325,16 +326,18 @@ class ValidatePanel(StepPage):
         if row.record is None:
             return None, None
         # What the block's words say beside the record: the count of the others still open, which the calibration's
-        # says, and the prior an audit was made of.
+        # says, the prior an audit was made of, and the units in use, each parameter's and the cell's of force.
         others = self._others_open(key, found) if key == "calibration" else 0
         prior_words = self._audit_prior(row)
-        source = (row.record.folder, others, prior_words)
+        units, force_unit = self._units()
+        source = (row.record.folder, others, prior_words, tuple(sorted(units.items())), force_unit)
         if page.result_source == source:
             return page.result, source
         if not read:
             same_folder = isinstance(page.result_source, tuple) and page.result_source[0] == row.record.folder
             return (page.result, page.result_source) if same_folder else (None, None)
-        return self._record_result(key, row, kept, others=others, prior_words=prior_words, page=page), source
+        return self._record_result(key, row, kept, others=others, prior_words=prior_words, units=units,
+                                   force_unit=force_unit, page=page), source
 
     def _others_open(self, key, found) -> int:
         """How many deciding checks other than ``key`` apply, have not passed and a run can still pass."""
@@ -343,9 +346,8 @@ class ValidatePanel(StepPage):
                    and one.state not in ("Passed", "Does not apply")
                    and not (held is not None and check_lineage.no_run_passes(one, held=held)))
 
-    def _record_result(self, key, row, kept, *, others: int, prior_words: str, page):
+    def _record_result(self, key, row, kept, *, others: int, prior_words: str, units, force_unit: str, page):
         """The result of the record that decides the row of the check ``key``, made inside its page."""
-        units, force_unit = self._units()
         return result_block(key, row.record.manifest, row.record.folder, parent=page, units=units,
                             force_unit=force_unit, others_open=others, prior_words=prior_words,
                             text=kept.texts.get(row.record.folder))

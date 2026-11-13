@@ -100,7 +100,7 @@ and the session guards).
     make for real the requests a run makes of Windows, each on a window never shown, and release each:
     keeping the computer awake, the reason against ending the session, the taskbar's flash, and the
     answer to Windows' question whether the session may end.
-- **The window's suites**, among the test files. The look's, with no engine: `tests/test_look.py`.
+- **The window's suites.** The look's, with no engine: `tests/test_look.py`.
   The shell: `tests/test_shell.py` (the rail, the places, the keys, Home, "Continue with these", the
   reopening's offers, one PRISM at a time) and `tests/test_step_chain.py` (the torch-free rules of the
   places and the six steps' states). The run: `tests/test_run_states.py` (its model, controller and

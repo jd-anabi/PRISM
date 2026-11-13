@@ -1097,6 +1097,39 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     assert found == [], f"{len(found)} constructions written by hand: {found}"
 
 
+def test_no_widget_the_builders_make_is_shown_as_a_window_of_its_own(monkeypatch):
+    """STANDING. A widget made with no parent and made visible is a window of its own, shown on the screen at once, a
+    flash in the real program before its page takes it in: a page gives each widget its parent first, then its
+    visibility. Every widget the window, each of its parts, each step and a bare step page are built with, each check's
+    page and form among them, and a configuration installed on Parameter inference, is watched as it is made visible,
+    shown or unhidden: none is a window then but the window itself and a dialog, which the question's own guard
+    records."""
+    from PySide6.QtWidgets import QDialog, QWidget
+    from core.gui import keys
+    from core.gui.main_window import MainWindow
+    from tests._fixtures import build_step_page, build_window, forced_cfg, qt_app
+    qt_app()
+    shown = []
+    real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
+
+    def heard(widget, on: bool) -> None:
+        if on and widget.isWindow() and not isinstance(widget, (MainWindow, QDialog)):
+            words = getattr(widget, "text", None)
+            shown.append((type(widget).__name__, words() if callable(words) else ""))
+
+    monkeypatch.setattr(QWidget, "setVisible", lambda widget, on: (heard(widget, on), real["setVisible"](widget, on)))
+    monkeypatch.setattr(QWidget, "show", lambda widget: (heard(widget, True), real["show"](widget)))
+    monkeypatch.setattr(QWidget, "setHidden", lambda widget, on: (heard(widget, not on), real["setHidden"](widget, on)))
+    window = build_window()
+    for part in keys.PARTS:
+        window.part(part.key)
+    window.part("inference").install_config(forced_cfg())
+    build_step_page()
+    for name, method in real.items():
+        monkeypatch.setattr(QWidget, name, method)
+    assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"
+
+
 def test_int_field_value_or_none_tells_a_blank_from_a_zero():
     """``IntField.value()`` returns 0 for "" and for "-" mid-typing, and 0 is a legal value for the
     two "0 = automatic" boxes (the rows-per-batch cap, the candidates per sweep round), so a tab that

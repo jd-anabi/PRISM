@@ -1858,6 +1858,34 @@ def test_a_kept_result_is_made_again_when_its_words_would_change(tmp_path, monke
         assert calls.count("a record's figures") == 1, calls
 
 
+def test_a_kept_result_is_made_again_when_the_units_in_use_change(tmp_path):
+    """A record's result says each parameter's unit and the cell's unit of force as the configuration in use names
+    them, so it is kept only while those stay: once the units in use change, the next reading makes the result again in
+    the new ones, and one that would say the same is kept."""
+    from tests._fixtures import check_results, write_calibration, write_diagnostic
+
+    def records(store, cfg, prior, posterior):
+        write_calibration(store, cfg, posterior=posterior, prior=prior,
+                          results=_calibration_of(["k", "x_scale", "t_scale"], ks=[0.5] * 3))
+        write_diagnostic(store, cfg, diagnostic="probes", variant="drive", cell=str(_cell_file()),
+                         **check_results("drive_study"))
+
+    with _checks_page(tmp_path, records=records) as (_window, screen, page, _store):
+        calibration, drive = page.check_pages["calibration"], page.check_pages["drive_study"]
+        made = (calibration.result, drive.result)
+        assert [row[:2] for row in calibration.result.table_words().rows[:2]] == [("k", ""), ("x_scale", "nm")]
+        said = drive.result.verdict.sentence.plain_text()
+        assert screen.session.cfg.force_unit in said, said
+        screen.session.cfg.length_unit, screen.session.cfg.force_unit = "um", "nN"
+        page.read_facts()
+        assert calibration.result is not made[0] and drive.result is not made[1], "a result kept in the old units"
+        assert [row[:2] for row in calibration.result.table_words().rows[:2]] == [("k", ""), ("x_scale", "um")]
+        assert "nN" in drive.result.verdict.sentence.plain_text(), drive.result.verdict.sentence.plain_text()
+        made = (calibration.result, drive.result)
+        page.read_facts()
+        assert (calibration.result, drive.result) == made, "a result that would say the same was made again"
+
+
 def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_path, monkeypatch):
     """With no run live, the comparison after simulating is worked out afresh from the posterior's simulation set: the
     counts its saved state holds for each batch, summed while there is one pair for each batch done; else, with the set
@@ -1928,8 +1956,9 @@ def test_the_comparison_is_read_afterwards_from_the_sets_counts_or_the_log(tmp_p
 
 
 def test_check_3_is_counted_later_only_where_it_applies(tmp_path):
-    """While a training is live, check 3's page says it is counted when the simulation ends only where the check
-    applies: with the frequency response off it does not apply and its page says nothing more."""
+    """While a training is live, the comparison after simulating says on its page it is counted when the simulation
+    ends only where the check applies: with the frequency response off it does not apply and its page says nothing
+    more."""
     from tests._runs import StandIn, start_run, training_spec, turn_until
     app = qt_app()
     with _checks_page(tmp_path, chi=False) as (window, _screen, page, _store):
@@ -1945,9 +1974,9 @@ def test_check_3_is_counted_later_only_where_it_applies(tmp_path):
 
 
 def test_check_3_waiting_for_the_audit_says_which_check_to_run(tmp_path):
-    """With the posterior's set counted and no audit of its prior that counts, check 3's page says, with no run live,
-    that there is no audit to compare with, the set's share, and which check of the list to run; not the run's own
-    words for after its end."""
+    """With the posterior's set counted and no audit of its prior that counts, the comparison after simulating says on
+    its page, with no run live, that there is no audit to compare with, the set's share, and which check of the list to
+    run; not the run's own words for after its end."""
     from tests._fixtures import write_simulation_set
     with _checks_page(tmp_path) as (_window, screen, page, store):
         folder = write_simulation_set(store.kind_dir("simulation"), {"a set of": "the comparison"}, 100,
@@ -1962,8 +1991,8 @@ def test_check_3_waiting_for_the_audit_says_which_check_to_run(tmp_path):
 
 
 def test_check_3_is_counted_later_during_a_narrowing_round(tmp_path):
-    """While a narrowing round is live, check 3's page says it is counted when the round's simulation ends, as during a
-    training, and nothing is worked out from the counts read before."""
+    """While a narrowing round is live, the comparison after simulating says on its page it is counted when the round's
+    simulation ends, as during a training, and nothing is worked out from the counts read before."""
     from tests._fixtures import check_results, write_diagnostic, write_simulation_set
     from tests._runs import StandIn, start_run, training_spec, turn_until
 

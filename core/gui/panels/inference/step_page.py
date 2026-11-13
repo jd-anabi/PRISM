@@ -168,8 +168,8 @@ class StepPage(RunHost, QWidget):
         self.plan_line = style.set_class(QLabel(), cls="small")
         self.plan_line.setTextFormat(Qt.PlainText)
         self.plan_line.setWordWrap(True)
-        self.plan_line.setVisible(step in plans.HEADING_OF)
         self._body.addWidget(self.plan_line)
+        self.plan_line.setVisible(step in plans.HEADING_OF)  # in the body first: a label with no parent is a window
         self._body.addWidget(self.in_use)
         self._body.addWidget(self.result)
         self._body.addWidget(self.run_view.how_link, 0, Qt.AlignLeft)

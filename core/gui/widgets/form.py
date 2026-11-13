@@ -210,7 +210,10 @@ class Row:
         self.origin.setWordWrap(True)
         self.unit = QLabel(unit)
         self.unit.setTextFormat(Qt.PlainText)
-        self.unit.setVisible(bool(unit))
+        # Hidden while it has no unit, and never made visible here: a label with no parent yet, made visible, is a
+        # window of its own; one not hidden stands with the row once the row stands in its form.
+        if not unit:
+            self.unit.setVisible(False)
         self.line = _Line()
         self.under: list = []
         self._heard: list = []
