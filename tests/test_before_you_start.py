@@ -877,3 +877,45 @@ def test_the_pre_run_checks_line_stands_after_the_memory_and_never_blocks():
     for kind in ("fine", "info", "warn"):
         held = training_facts(**TRAINING, checks=(Fact(kind, "The two checks."),))
         assert not any(fact.blocks for fact in held) and (kind, "The two checks.") in _said(held), kind
+
+
+# ── the fifth step, Inference ──
+def test_the_driven_readings_in_the_windows_words():
+    """Under each driven recording the window's words for the engine's verdict on it, read from its numbers: used
+    whole, the drive cycles it gives; cut at the lock-in limit, the cycles and the seconds used; too short, the cycles
+    against those needed and the length it needs at its frequency, an "Attention."; refused, the engine's reason as an
+    "Error.". Never the engine's word for a probe, nor "MASKED"."""
+    from core.SBI.chi import ProbeVerdict
+    from core.gui.step_facts import driven_reading
+    used = ProbeVerdict("use", "", 23.4, 4680, 0.087, 0.87)
+    cut = ProbeVerdict("truncate", "9000 samples give 45.0 drive cycles, above the 20-cycle ceiling; only the first "
+                       "4000 samples (3.2 s) are used", 20.0, 4000, 0.32, 3.2)
+    short = ProbeVerdict("mask", "280 samples give only 1.40 drive cycles, below the 2-cycle floor, so this probe is "
+                         "MASKED and contributes nothing. Record >= 0.4 s at this frequency to use it", 1.4, 280, 0.4,
+                         4.0)
+    refused = ProbeVerdict("refuse", "40 Hz is outside the band this posterior was trained over. For this cell "
+                           "(Omega_0 = 10 Hz) that is 3.7-37 Hz", 0.0, 0, 0.05, 0.5)
+    assert driven_reading(used, least_cycles=2) == ("fine", "23 drive cycles.")
+    assert driven_reading(cut, least_cycles=2) == ("fine", "20 drive cycles: only the first 3.2 s are used.")
+    assert driven_reading(short, least_cycles=2) == (
+        "warn", "Unusable: 1.4 drive cycles, fewer than the 2 needed. Record at least 0.4 s at this frequency.")
+    assert driven_reading(refused, least_cycles=2) == (
+        "err", "40 Hz is outside the band this posterior was trained over. For this cell (Omega_0 = 10 Hz) that is "
+               "3.7-37 Hz.")
+    for verdict in (used, cut, short):
+        words = driven_reading(verdict, least_cycles=2)[1]
+        assert "probe" not in words and "MASKED" not in words, words
+
+
+def test_more_driven_recordings_than_slots_blocks_and_names_how_many():
+    """More driven recordings than the posterior's slots block, saying the most it takes and how many to remove, beside
+    the button as words a person lifts on the page; as many as the slots, or a simulated cell, say nothing of them."""
+    from core.gui.step_facts import inference_facts
+    uses = "Posterior retrain_posterior: frequency response, up to 12 driven recordings."
+    held = inference_facts(mode="recordings", uses=uses, slots=12, rows=14)
+    assert ("err", "This posterior takes at most 12 driven recordings; remove 2.") in _said(held)
+    assert reason_beside(held, live=False, nothing_to_apply=False) == "Cannot start yet: too many driven recordings."
+    for kept in (inference_facts(mode="recordings", uses=uses, slots=12, rows=12),
+                 inference_facts(mode="simulated", uses=uses, slots=12, rows=14),
+                 inference_facts(mode="recordings", uses=uses, slots=None, rows=14)):
+        assert not any("at most" in fact.sentence for fact in kept), _said(kept)

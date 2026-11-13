@@ -38,6 +38,11 @@ PRIOR_KEY = "inference_prior/prior"
 POSTERIOR_KEY = "inference_posterior/posterior"
 NUM_RUNS_KEY = "inference_posterior/num_runs"
 RUN_SIZE_KEY = "inference_posterior/run_size_cap"
+#: The driven recordings of a frequency response an inference started with, how many and each one's file and
+#: frequency, put back as the rows of its table at the next launch, every one.
+DRIVEN_SIZE_KEY = "inference_infer/driven/size"
+DRIVEN_FILE_KEY = "inference_infer/driven/{}/file"
+DRIVEN_FREQUENCY_KEY = "inference_infer/driven/{}/frequency"
 #: The plan last used with a model, by its name, and when, each written with what comes into use or starts with it,
 #: blank when that had no plan: the hint beside the list of plans on step 1. The model's name in lower case completes
 #: each.

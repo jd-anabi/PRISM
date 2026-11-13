@@ -464,6 +464,32 @@ def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots()
         fact.sentence for fact in panel.facts_from_form()]
 
 
+def test_every_driven_recording_remembered_is_put_back_and_too_many_are_said():
+    """The driven recordings the last inference started with are put back as the table's rows at the next launch, every
+    one, none dropped, each its file beside its frequency: with more than the posterior in use takes, the page says how
+    many to remove. With none remembered the table opens with one blank row."""
+    from core.gui import settings as st
+    from core.gui.remembered import DRIVEN_FILE_KEY, DRIVEN_FREQUENCY_KEY, DRIVEN_SIZE_KEY
+
+    qt_app()
+    assert [row.value() for row in build_inference().infer_panel.driven.rows()] == [(None, None)]
+    held = st.settings()
+    held.setValue(DRIVEN_SIZE_KEY, "14")
+    for at in range(14):
+        held.setValue(DRIVEN_FILE_KEY.format(at), f"C:/recordings/driven_{at}.npy")
+        held.setValue(DRIVEN_FREQUENCY_KEY.format(at), f"{1.5 + at}")
+    held.sync()
+    inf = build_inference(cfg=_chi_cfg(k=3, pad=12))
+    inf.session.posterior = _posterior_stub()
+    inf.refresh_gates()
+    panel = inf.infer_panel
+    panel.modes.set_value("recordings")
+    assert [row.value() for row in panel.driven.rows()] == [
+        (f"C:/recordings/driven_{at}.npy", 1.5 + at) for at in range(14)], "a remembered row was dropped or moved"
+    assert "This posterior takes at most 12 driven recordings; remove 2." in [
+        fact.sentence for fact in panel.facts_from_form()]
+
+
 def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency(monkeypatch):
     """The one-widget-per-row invariant. Parallel path/frequency lists let a MIDDLE deletion pair
     recording k with frequency k+1 -- silent, because a lock-in at the wrong frequency decays like a

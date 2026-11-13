@@ -7223,6 +7223,55 @@ def test_enter_presses_the_button_that_shows_the_ring(tmp_path, monkeypatch):
             assert controller().is_live() and not controller().status.stop_requested
 
 
+def test_enter_on_a_driven_recordings_remove_button_asks_when_the_row_holds_something(tmp_path, monkeypatch):
+    """STANDING. Enter on the ring of a driven recording's remove button presses it as a click does: a row that holds
+    nothing goes at once, asking nothing; one that holds a file or a frequency typed asks first, "Remove this driven
+    recording?", with "Keep it" preselected, so that Enter on the question keeps the row and what was typed in it, and
+    only the other answer removes it. Enter keeps pressing the ringed button wherever it stands."""
+    from types import SimpleNamespace
+    from core.gui.panels.inference_tabs import InferPanel
+    from core.gui.session import SbiSession
+    from tests._dialogs import choose
+    from tests._fixtures import all_asked, forget_asked, prior_stub
+    with _the_whole_window(tmp_path, monkeypatch) as window:
+        screen = window.part("inference")
+        cfg = SimpleNamespace(model="NADROWSKI", params_dict={}, rescale_params={}, force_params_dict={},
+                              has_forcing=False, chi_mode=True, chi_n_freqs=3, chi_k_pad=12, observation_mode="chi")
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior_stub(),
+                                    posterior=SimpleNamespace(kind="posterior", id="q1", name="retrain_posterior",
+                                                              posterior=SimpleNamespace(x_obs_digest=None)))
+        screen.refresh_gates()
+        window.go_to("inference", "infer")
+        panel = window.panel(InferPanel)
+        panel.modes.set_value("recordings")
+        table = panel.driven
+        typed, blank = table.rows()[0], table.add_row()
+        typed.path.edit.setText("C:/recordings/driven_0.npy")
+        typed.hz.setText("12.5")
+        QApplication.processEvents()
+        forget_asked()
+        _ring_on(table.remove_button(blank))
+        QTest.keyClick(table.remove_button(blank), Qt.Key_Return)
+        assert table.rows() == [typed] and all_asked() == [], "a blank row asked, or stayed"
+        button = table.remove_button(typed)
+        for answer in ("the guard's", "Enter on the question"):
+            if answer == "Enter on the question":
+                choose(monkeypatch, default=True)
+            forget_asked()
+            _ring_on(button)
+            QTest.keyClick(button, Qt.Key_Return)
+            asked = all_asked()
+            assert [(said.title, said.sentence, said.safe, said.default) for said in asked] == [
+                ("Remove this driven recording?", "The file and the frequency typed in this row go with it.",
+                 "Keep it", "Keep it")], (answer, asked)
+            assert table.rows() == [typed] and typed.value() == ("C:/recordings/driven_0.npy", 12.5), answer
+        choose(monkeypatch, words="Remove it")
+        _ring_on(button)
+        QTest.keyClick(button, Qt.Key_Return)
+        assert table.rows() == [], "the other answer did not remove the row"
+        assert window.focusWidget() is table.add_button, "the keyboard did not go to the button that adds one"
+
+
 def test_a_held_enter_cannot_land_on_the_stop_button(tmp_path, monkeypatch):
     """A start pressed with Enter leaves the keyboard on the run's stop button, where the key's repeats land: they press
     nothing and ask nothing, so a run cannot be stopped by the key that started it, and the start is pressed once however

@@ -28,8 +28,9 @@ from core.Helpers import file_manager, labels
 from core.refusals import Refusal, require_at_least, require_file, require_finite, require_positive
 from core.SBI.observations import RecordingSet
 
-from ... import design, record_words
+from ... import design, record_words, settings
 from ...fields import label
+from ...remembered import DRIVEN_FILE_KEY, DRIVEN_FREQUENCY_KEY, DRIVEN_SIZE_KEY
 from ...run.model import RunSpec
 from ...step_facts import (CELL_PROBLEM_TEXT, INFER_BLANKS, INFER_REMOVE, NO_OBSERVATION_WORDS, NOT_MEASURED_TEXT,
                            PLAN_NEEDS_LENGTH_TEXT, PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact, driven_reading,
@@ -313,7 +314,7 @@ class InferPanel(StepPage):
         self._names = NameAndNote("inference", required=False, label=INFERENCE_NAME,
                                   other=OtherName("observation_name", "observation", OBSERVATION_NAME, True))
         self.use_names(self._names)
-        self.driven.add_row()
+        self.restore_settings(settings.settings())
         self.modes.changed.connect(self._mode_changed)
         self.typed_tick.toggled.connect(self._typed_toggled)
         self.cell_picker.combo.currentIndexChanged.connect(self._cell_chosen)
@@ -702,6 +703,24 @@ class InferPanel(StepPage):
             return super().run_spec(fn, *args, **kwargs)
         return RunSpec("Inference", _PLACE, name=kwargs.get("name", ""), stop_button=STOP_WORDS,
                        kinds=("observation", "inference"))
+
+    # ── what is remembered ──
+    def restore_settings(self, qs) -> None:
+        """The driven recordings the last inference started with, every one, put back as the table's rows, never run;
+        one blank row when none is remembered."""
+        try:
+            count = int(settings.get_str(qs, DRIVEN_SIZE_KEY, "0") or 0)
+        except ValueError:
+            count = 0
+        driven = []
+        for at in range(max(count, 0)):
+            path = settings.get_str(qs, DRIVEN_FILE_KEY.format(at), "")
+            try:
+                hz = float(settings.get_str(qs, DRIVEN_FREQUENCY_KEY.format(at), ""))
+            except ValueError:
+                hz = None
+            driven.append((path or None, hz))
+        self.driven.set_value(driven or [(None, None)])
 
     def _on_inference(self, payload) -> None:
         """The run returned its observation and the inference made on it, while it is still live: the observation comes
