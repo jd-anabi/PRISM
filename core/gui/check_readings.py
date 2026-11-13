@@ -945,6 +945,18 @@ BAND_CHOSEN_WORDS = "five lengths chosen for this cell"
 BAND_TYPED_WORDS = ("{} recording length", "{} recording lengths")
 #: The audit's counts: batches simulated as training simulates them.
 AUDIT_COUNTS_TEXT = "Simulates {} batches of {}, as training would: {} simulations."
+#: What the observations can pin down: its simulations for each comparison and for the noise level.
+PIN_DOWN_COUNTS_TEXT = "Simulates {} recordings for each comparison and {} for the noise level."
+#: The calibration repeated at fixed numbers: its calibrations, each of its test datasets.
+FIXED_COUNTS_TEXT = "Runs {} calibrations of {} test datasets each, about {} times the calibration's time."
+#: The drive study: its simulations at each strength, at the strengths typed or at the engine's own sixteen, to which it
+#: adds the set drive amplitude.
+DRIVE_COUNTS_TEXT = "Simulates {} recordings at each of {} strengths."
+DRIVE_USUAL_STRENGTHS = 16
+#: Identifiability across the prior: its points, at each of which it simulates as the check of what the observations
+#: can pin down does at one.
+ACROSS_COUNTS_TEXT = ("Simulates at {} points across the prior, at each as the check of what the observations can pin "
+                      "down does at one.")
 #: What a check that reads records and simulates nothing says of its cost.
 READS_ONLY_TEXT = "Reads records and simulates nothing; takes seconds."
 READS_ONLY = ("input_use", "identifiability")
@@ -956,7 +968,7 @@ NOT_TIMED_TEXT = "Not timed on this computer yet."
 ONE_AT_A_TIME_TEXT = "Nothing else can run until it ends."
 ONE_RECORD_TEXT = "One record, under Records."
 #: The checks that simulate on the graphics card: beside them the memory limit in force and the last run are said.
-ON_THE_CARD = ("band", "audit", "calibration")
+ON_THE_CARD = ("band", "audit", "calibration", "pin_down", "fixed_number", "drive_study", "across_prior")
 
 
 def _is_whole(value) -> bool:
@@ -982,7 +994,62 @@ def _counts_of(key: str, sizes: Mapping) -> str:
         if not (_is_whole(batches) and _is_whole(each)):
             return ""
         return AUDIT_COUNTS_TEXT.format(number_text(batches), number_text(each), number_text(batches * each))
+    if key == "pin_down":
+        each, noise = sizes.get("m"), sizes.get("m_noise")
+        return PIN_DOWN_COUNTS_TEXT.format(number_text(each), number_text(noise)) if (
+            _is_whole(each) and _is_whole(noise)) else ""
+    if key == "fixed_number":
+        repeats, datasets = sizes.get("repeats"), sizes.get("n_cal")
+        return FIXED_COUNTS_TEXT.format(number_text(repeats), number_text(datasets), number_text(repeats)) if (
+            _is_whole(repeats) and _is_whole(datasets)) else ""
+    if key == "drive_study":
+        each, strengths = sizes.get("drive_repeats"), sizes.get("drive_strengths")
+        if not _is_whole(each) or not (strengths is None or isinstance(strengths, (list, tuple))):
+            return ""
+        return DRIVE_COUNTS_TEXT.format(number_text(each), number_text(
+            len(strengths) if strengths else DRIVE_USUAL_STRENGTHS + 1))
+    if key == "across_prior":
+        points = sizes.get("n_points")
+        return ACROSS_COUNTS_TEXT.format(number_text(points)) if _is_whole(points) else ""
     return ""
+
+
+#: The drive study's suggested Forcing sections, as a cell file and a bounds file write them: each drive the record
+#: suggests, under a heading the cell file reads as its Forcing section, then the limits for a bounds file.
+FORCING_HEAD_TEXT = "# Forcing Parameters: {}"
+FORCING_SUGGESTED = (("free_running", "the strongest drive that keeps the cell's own oscillation"),
+                     ("captured", "the weakest drive that captures the cell"))
+FORCING_BOX_HEAD = "# Forcing Parameters of a bounds file"
+#: The order a cell file writes its drive in; a name not here follows, in the record's order.
+FORCING_ORDER = ("amp", "freq", "phase", "offset")
+
+
+def _in_order(given: Mapping) -> list:
+    return sorted(given.items(), key=lambda pair: FORCING_ORDER.index(pair[0]) if pair[0] in FORCING_ORDER
+                  else len(FORCING_ORDER))
+
+
+def forcing_lines(manifest: Mapping) -> str:
+    """The Forcing sections a drive study's record suggests, as lines a cell file and a bounds file take: each drive
+    under its heading, "amp = 0.2", then the bounds file's limits, "amp in (0, 6)"; "" for a record that suggests none.
+    The engine writes them to no file."""
+    try:
+        suggested = _body(manifest)["results"]["suggested_forcing"]
+    except (KeyError, TypeError):
+        return ""
+    if not isinstance(suggested, Mapping):
+        return ""
+    parts = []
+    for key, words in FORCING_SUGGESTED:
+        drive = suggested.get(key)
+        if isinstance(drive, Mapping) and drive:
+            parts.append("\n".join([FORCING_HEAD_TEXT.format(words),
+                                     *(f"{name} = {_real(value):.10g}" for name, value in _in_order(drive))]))
+    box = suggested.get("box")
+    if isinstance(box, Mapping) and box:
+        parts.append("\n".join([FORCING_BOX_HEAD, *(f"{name} in ({_real(ends[0]):.10g}, {_real(ends[-1]):.10g})"
+                                                     for name, ends in _in_order(box))]))
+    return "\n\n".join(parts)
 
 
 def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: tuple[str, ...]) -> tuple[Fact, ...]:

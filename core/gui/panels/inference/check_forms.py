@@ -16,15 +16,15 @@ from PySide6.QtWidgets import QLineEdit
 
 from core import config
 from core.config import CELL_PATH
-from core.refusals import Refusal, require_at_least, require_positive
+from core.refusals import Refusal, require_at_least, require_between, require_positive
 from core.rng import SEED_MAX, require_seed
 
 from ... import check_readings, fields
 from ...check_catalogue import entry
 from ...check_readings import before_you_start  # noqa: F401 -- "Before you start" of a check, words with no widget
-from ...run.model import SIMULATION_ROW, RunSpec, Stage
+from ...run.model import SIMULATION_ROW, RunSpec, Said, Stage
 from ...widgets.artifact_picker import ArtifactPicker
-from ...widgets.form import Form, NameAndNote
+from ...widgets.form import Form, NameAndNote, TickedField
 from ...widgets.labeled_inputs import FloatField, IntField
 from .help_text import HELP
 
@@ -34,6 +34,12 @@ NOT_BUILT_TEXT = "This check cannot be run from the window yet."
 CHOOSE_CELL = "Choose a cell file"
 NO_CELL_TEXT = "Choose a cell file."
 NO_CELL_BLOCKS = "no cell file is chosen"
+#: The line under a recording length left blank, which the two identifiability checks must be given.
+TYPE_A_LENGTH_TEXT = "Type a recording length."
+#: The tick of a fixed number of driven recordings that stands for none, and the line under a number of them outside
+#: the posterior's slots.
+MIXED_WORDS = "Mixed, as in training"
+SLOTS_TEXT = "{} must be a whole number from 1 to {}."
 #: The line under a list of numbers that holds something else, and under one that holds a number at or below 0.
 NUMBERS_TEXT = "{} must be numbers separated by commas or spaces."
 EACH_ABOVE_TEXT = "{} must each be greater than 0."
@@ -53,13 +59,31 @@ CALIBRATION_STAGES = (Stage("Simulating the test datasets", counts=SIMULATION_RO
                       Stage("Rank test", begins=("patho_total",)),
                       Stage("Joint coverage test", begins=("sbc_uniformity",)),
                       Stage("Saving", begins=("tarp_atc",)))
+#: What the repeated calibration says while it ranks a repeat, which reports no progress and takes no stop until it
+#: ends: from the line that ends a repeat's simulation to the line that ends the repeat.
+RANKING_WORDS = ("Ranking repeat {done} of {of}: no progress is reported during this part, and Stop takes effect when "
+                 "it ends")
+REPEATED_STAGES = (Stage(MEASURING, said=Said("patho_total", "sbc_repeat", RANKING_WORDS, "repeats")),)
 #: The kinds of row a check's form holds, and those whose value is no size of the run: a cell file is loaded on the
 #: check's own configuration, and a seed changes no cost.
 KINDS = ("whole", "number", "lengths", "cell", "seed", "blank_seed", "epochs", "ticked_count", "network")
 NOT_SIZES = ("cell", "seed", "blank_seed")
-#: The identifiability check's two sizes, as its stage takes them when none is handed.
+#: The usual sizes of the checks below, each as its stage takes it when none is handed: the identifiability check's
+#: weakest directions and largest contributions; what the observations can pin down, its simulations for each
+#: comparison and for the noise level, its step and the least of the second, which the stage refuses below 10; the
+#: calibration repeated, its repeats; the drive study, its recording length in seconds, its simulations for each
+#: strength and its drive frequency, as a multiple of the cell's own; identifiability across the prior, its points.
 WEAKEST_DIRECTIONS = 3
 LARGEST_CONTRIBUTIONS = 4
+COMPARISON_SIMULATIONS = 32
+NOISE_SIMULATIONS = 128
+NOISE_LEAST = 10
+STEP_SHARE = 0.02
+REPEATS = 10
+DRIVE_LENGTH_S = 5.0
+DRIVE_SIMULATIONS = 16
+DRIVE_DETUNE = 1.4
+POINTS_ACROSS = 6
 #: What separates the numbers of a list typed in one field.
 _BETWEEN = re.compile(r"[,\s]+")
 
@@ -84,6 +108,11 @@ class FormRow:
     argument: str = ""
 
 
+#: The rarely changed rows of the two identifiability checks that simulate, which they share.
+_SIMULATED = (FormRow("m", None, "whole", COMPARISON_SIMULATIONS, folded=True, rule="at_least"),
+              FormRow("m_noise", None, "whole", NOISE_SIMULATIONS, folded=True, least=NOISE_LEAST, rule="at_least"),
+              FormRow("rel", None, "number", STEP_SHARE, folded=True, rule="positive"),
+              FormRow("seed", None, "seed", 0, folded=True, least=0, rule="seed"))
 #: Each check's rows, by its key, each opening at the size its stage takes as usual; the audit at the least size that
 #: counts, the retraining runbook's, not the stage's.
 FORMS: dict[str, tuple[FormRow, ...]] = {
@@ -109,6 +138,30 @@ FORMS: dict[str, tuple[FormRow, ...]] = {
                           rule="at_least")),
     "identifiability": (FormRow("n_worst", None, "whole", WEAKEST_DIRECTIONS, folded=True, rule="at_least"),
                         FormRow("top_n", None, "whole", LARGEST_CONTRIBUTIONS, folded=True, rule="at_least")),
+    "pin_down": (FormRow("cell", None, "cell", None),
+                 FormRow("t_obs", None, "number", None, unit="s", rule="positive", argument="t_obs_s"),
+                 *_SIMULATED),
+    "fixed_number": (FormRow("chi_k_fixed", None, "ticked_count", None, rule="slots"),
+                     FormRow("repeats", None, "whole", REPEATS, rule="at_least"),
+                     FormRow("n_cal", None, "whole", config.SBC_N_CAL, unit="per repeat", rule="at_least"),
+                     FormRow("cal_n_scales", None, "whole", config.CAL_N_SCALES, folded=True, rule="at_least"),
+                     FormRow("num_posterior_samples", None, "whole", check_readings.CALIBRATION_LEAST_SAMPLES,
+                             folded=True, rule="at_least"),
+                     FormRow("seed", None, "seed", 0, folded=True, least=0, rule="seed")),
+    "drive_study": (FormRow("cell", None, "cell", None),
+                    FormRow("drive_t_obs", None, "number", DRIVE_LENGTH_S, unit="s", rule="positive",
+                            argument="t_obs_s"),
+                    FormRow("drive_repeats", None, "whole", DRIVE_SIMULATIONS, folded=True, least=2, rule="at_least",
+                            argument="repeats"),
+                    FormRow("drive_detune", None, "number", DRIVE_DETUNE, folded=True, rule="positive",
+                            argument="detune"),
+                    FormRow("drive_strengths", None, "lengths", None, folded=True, rule="lengths",
+                            argument="strengths"),
+                    FormRow("probe_seed", None, "seed", 0, folded=True, least=0, rule="seed", argument="seed")),
+    "across_prior": (FormRow("cell", None, "cell", None),
+                     FormRow("t_obs", None, "number", None, unit="s", rule="positive", argument="t_obs_s"),
+                     FormRow("n_points", None, "whole", POINTS_ACROSS, rule="at_least"),
+                     *_SIMULATED),
 }
 
 
@@ -137,6 +190,8 @@ def _field(row: FormRow, form: Form):
         return FloatField(row.usual)
     if row.kind == "lengths":
         return _Numbers()
+    if row.kind == "ticked_count":
+        return TickedField(IntField(row.usual, grouped=True), MIXED_WORDS, None)
     if row.kind == "cell":
         form.cell_picker = ArtifactPicker(CELL_PATH / "nadrowski", parent=form, keeps_selection=True,
                                           hint=CHOOSE_CELL)
@@ -195,15 +250,19 @@ def _rule(one: FormRow, value, *, slots=None):
         return require_seed(value, key=one.setting)
     if one.rule == "lengths":
         return [require_positive(one.setting, part) for part in value]
+    if one.rule == "slots":
+        return value if value is None or slots is None else int(require_between(one.setting, value, 1, slots))
     return value
 
 
-def _rule_line(one: FormRow, label: str) -> str:
+def _rule_line(one: FormRow, label: str, *, slots=None) -> str:
     """The rule of ``one`` as the line under its field says it, from its label."""
     if one.rule == "at_least":
         return AT_LEAST_TEXT.format(label, one.least)
     if one.rule == "lengths":
         return EACH_ABOVE_TEXT.format(label)
+    if one.rule == "slots":
+        return SLOTS_TEXT.format(label, slots)
     return ABOVE_TEXT.format(label)
 
 
@@ -235,13 +294,15 @@ def _problem(one: FormRow, row, *, slots=None) -> "tuple[str, str] | None":
         said = row.reading()
         if said is not None:
             typed = getattr(row.widget, "field", row.widget).text().strip()
+            if not typed and one.setting == "t_obs":
+                said = TYPE_A_LENGTH_TEXT
             return said, said if typed else _press_words(one, None, said, slots=slots)
         if value is None:
             return None
     try:
         _rule(one, value, slots=slots)
     except Refusal as refused:
-        return _rule_line(one, label), refused.message
+        return _rule_line(one, label, slots=slots), refused.message
     return None
 
 
@@ -301,7 +362,8 @@ def check_spec(key: str, *, sizes: dict, facts: Mapping = {}, plan: dict | None 
     kind of record, its run keeping the ``plan`` in use and its key and sizes, and no settings, which its record holds;
     with ``facts``, what is known of it before it says it."""
     one = entry(key)
-    stages = CALIBRATION_STAGES if key == "calibration" else (Stage(MEASURING),)
+    stages = (CALIBRATION_STAGES if key == "calibration" else REPEATED_STAGES if key == "fixed_number"
+              else (Stage(MEASURING),))
     return RunSpec("Check", PLACE, name=one.name, stop_button=one.stop_words, stages=stages,
                    kinds=(one.kind,) if one.kind else (), facts=dict(facts), plan=plan,
                    check={"key": key, "sizes": dict(sizes)})

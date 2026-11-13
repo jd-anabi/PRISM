@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from core import cli, orchestrator
 from core.config import CELL_PATH
-from core.diagnostics import ablation, identifiability, probes
+from core.diagnostics import ablation, identifiability, probes, sbc
 from core.Helpers import labels
 from core.refusals import Refusal
 
@@ -37,7 +37,8 @@ from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
 from ...run.questions import TRAINING_WORDS
-from ...step_facts import NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS, NOT_BUILT_BLOCKS, Fact, parameter_units
+from ...step_facts import (FREQUENCY_ONLY_BLOCKS, NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS, NOT_BUILT_BLOCKS, Fact,
+                           parameter_units)
 from ...texts import date_text
 from ...widgets.list_detail import ListAndDetail
 from ...widgets.page import Sentence, _ring_room
@@ -83,9 +84,13 @@ DRAWN_SEED_BELOW = 2 ** 31
 #: its place is the function looked for; and the method of this page that starts it.
 _ENGINE = {"band": (probes, "probe_band"), "audit": (probes, "probe_mask"),
            "calibration": (orchestrator, "validate_calibration"), "input_use": (ablation, "channel_ablation"),
-           "identifiability": (identifiability, "identifiability_rotation")}
+           "identifiability": (identifiability, "identifiability_rotation"),
+           "pin_down": (identifiability, "identifiability_jacobian"), "fixed_number": (sbc, "sbc_repeats"),
+           "drive_study": (probes, "probe_drive"), "across_prior": (identifiability, "identifiability_laplace")}
 _STARTS = {"band": "_start_band", "audit": "_start_audit", "calibration": "_start_calibration",
-           "input_use": "_start_input_use", "identifiability": "_start_identifiability"}
+           "input_use": "_start_input_use", "identifiability": "_start_identifiability",
+           "pin_down": "_start_pin_down", "fixed_number": "_start_fixed_number", "drive_study": "_start_drive_study",
+           "across_prior": "_start_across_prior"}
 #: The keys that open the check of the row the keyboard is on.
 _OPENING_KEYS = (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space)
 
@@ -502,6 +507,10 @@ class ValidatePanel(StepPage):
         cell = (Fact("err", check_forms.NO_CELL_TEXT, check_forms.NO_CELL_BLOCKS),) if (
             picker is not None and not picker.key()) else ()
         names = tuple(fact for fact in (form.names.name_fact(), form.names.note_fact()) if fact) if form.names else ()
+        fixed = form.rows.get("chi_k_fixed")
+        if fixed is not None and not fixed.widget.is_ticked() and not getattr(self.session.cfg, "chi_mode", False):
+            # a fixed number of driven recordings means something only with the frequency response
+            blocks = (*blocks, Fact("lock", check_lineage.FREQUENCY_ONLY_TEXT, FREQUENCY_ONLY_BLOCKS))
         sizes = check_forms.sizes_of(key, form)
         said = check_forms.before_you_start(key, sizes=sizes, last=history.check_at(self._ran_here, check=key,
                                                                                       sizes=sizes),
@@ -706,6 +715,46 @@ class ValidatePanel(StepPage):
             cfg, arguments = made
             self.dispatch(identifiability.identifiability_rotation, cfg, posterior, provide_fig_sink=True,
                           on_result=self._made_by("identifiability"), **arguments)
+
+    def _start_pin_down(self) -> None:
+        """What the observations can pin down, on a configuration of its own with the frequency response as the session
+        holds it, the cell chosen loaded on it."""
+        made = self._prepared("pin_down", own=True, cell=True)
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(identifiability.identifiability_jacobian, cfg, provide_fig_sink=True,
+                          on_result=self._made_by("pin_down"), **arguments)
+
+    def _start_fixed_number(self) -> None:
+        """The calibration repeated at a fixed number of driven recordings, of the posterior in use with the prior in
+        use."""
+        session = self.session
+        if session.posterior is None or session.inf_prior is None:
+            return                           # the facts say why, and the button is greyed with them
+        made = self._prepared("fixed_number")
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(sbc.sbc_repeats, cfg, session.posterior, session.inf_prior, provide_fig_sink=True,
+                          on_result=self._made_by("fixed_number"), **arguments)
+
+    def _start_drive_study(self) -> None:
+        """The drive study, on a configuration of its own without the frequency response, as its stage drives the cell
+        itself, the cell chosen loaded on it."""
+        made = self._prepared("drive_study", own=True, chi_mode=False, cell=True)
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(probes.probe_drive, cfg, provide_fig_sink=True, on_result=self._made_by("drive_study"),
+                          **arguments)
+
+    def _start_across_prior(self) -> None:
+        """Identifiability across the prior of the posterior in use, on a configuration of its own as the session holds
+        it, the cell chosen loaded on it."""
+        posterior = self.session.posterior
+        made = self._prepared("across_prior", own=True, cell=True) if posterior is not None else None
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(identifiability.identifiability_laplace, cfg, posterior, provide_fig_sink=True,
+                          on_result=self._made_by("across_prior"), **arguments)
 
     def _prepared(self, key: str, *, own: bool = False, chi_mode=None, cell: bool = False) -> "tuple | None":
         """What the press of the check ``key`` hands its stage: the configuration (the session's, or with ``own`` one of

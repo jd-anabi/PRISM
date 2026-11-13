@@ -1,5 +1,6 @@
 """What a page says after its run, under what the step holds: a verdict, sentences, a ruled table, pictures with their
-captions, and up to two plain buttons for the next steps, each of which carries what the step it opens is to take.
+captions, lines a person copies into a file of their own with the button that copies them, and up to two plain
+buttons for the next steps, each of which carries what the step it opens is to take.
 A verdict is a check's: one message row with the marker of its state and no lead word, its sentence beginning with
 the check's name.
 
@@ -16,9 +17,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from .. import design, style
+from .. import design, fonts, style
 from ..step_facts import LEADS, Fact, TableWords
 from .figure_stack import _FitLabel
 from .message_row import MessageRow
@@ -26,6 +27,8 @@ from .rule_table import Column, RuleTable, TextCell, ValueCell
 
 #: The most next steps a result offers: one where a person goes on, one where they look again.
 MOST_NEXT_STEPS = 2
+#: The words of the button beside lines to copy.
+COPY_WORDS = "Copy"
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,22 @@ class ResultRegion(QWidget):
         self._pictures.setSpacing(design.scaled(design.GAP["head_table"]))
         box.addLayout(self._pictures)
         self.pictures: list = []             # (its caption, the picture) for each picture shown
+        # Lines a person copies into a file of their own, in the fixed face, selectable, with the button that copies them.
+        self.lines = QLabel()
+        self.lines.setTextFormat(Qt.PlainText)
+        self.lines.setFont(fonts.fixed())
+        self.lines.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.lines.setVisible(False)
+        self.copy_button = QPushButton(COPY_WORDS)
+        self.copy_button.setVisible(False)
+        self.copy_button.clicked.connect(self._copy)
+        copying = QHBoxLayout()
+        copying.setContentsMargins(0, 0, 0, 0)
+        copying.setSpacing(design.scaled(design.GAP["action"]))
+        copying.addWidget(self.lines, 0, Qt.AlignTop)
+        copying.addWidget(self.copy_button, 0, Qt.AlignTop)
+        copying.addStretch(1)
+        box.addLayout(copying)
         line = QHBoxLayout()
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(design.scaled(design.GAP["action"]))
@@ -197,20 +216,34 @@ class ResultRegion(QWidget):
         if at < len(self._steps):
             self.next_pressed.emit(self._steps[at])
 
+    def set_lines(self, text: str) -> None:
+        """Lines to copy, ``text``, in the fixed face, with "Copy" beside them, which puts them on the clipboard as they
+        stand; an empty text shows neither."""
+        self.lines.setText(text)
+        for part in (self.lines, self.copy_button):
+            part.setVisible(bool(text))
+        self._judge()
+
+    def _copy(self) -> None:
+        QApplication.clipboard().setText(self.lines.text())
+
     def clear(self) -> None:
         """Nothing said, shown or offered: the region hidden."""
         self.set_verdict("", "")
         self.set_sentences(())
         self.set_table(None)
         self.set_pictures(())
+        self.set_lines("")
         self.set_next_steps(())
 
     def stops(self) -> list:
-        """What the Tab key stops at here: the next steps' buttons offered, in their order."""
-        return [button for button in self.next_buttons[:len(self._steps)]]
+        """What the Tab key stops at here: the lines' "Copy" while it is offered, then the next steps' buttons offered, in
+        their order."""
+        return [*([self.copy_button] if self.lines.text() else []), *self.next_buttons[:len(self._steps)]]
 
     def is_empty(self) -> bool:
-        return not (self.verdict is not None or self._facts or self._table is not None or self.pictures or self._steps)
+        return not (self.verdict is not None or self._facts or self._table is not None or self.pictures or self._steps
+                    or self.lines.text())
 
     def _judge(self) -> None:
         self.setVisible(not self.is_empty())

@@ -69,7 +69,7 @@ def _in(place) -> str:
 
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
-    "t_obs": ("infer", "Recording length"),
+    "t_obs": (("checks", "infer"), "Recording length"),
     "num_runs": (("training", "narrowing"), "Batches"),
     "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
     "checkpoint_every": ("training", "Save the simulations every … batches"),
@@ -172,12 +172,21 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "band_repeats": ("checks", "Simulations per point"),
     "mask_num_runs": ("checks", "Batches to audit"),
     "mask_run_size": ("checks", "Simulations per batch"),
-    # the checks' settings no form offers yet, and those no form offers: what decides a check's verdict
-    "repeats": None, "n_points": None, "m": None, "m_noise": None, "rel": None, "min_valid": None, "chi_k_fixed": None,
-    "probe_multipliers": None, "probe_drives": None, "probe_cycle_caps": None, "cv_max": None, "phase_max": None,
-    "snr_min": None, "sup_min": None, "band_peak_window": None,
-    "drive_t_obs": None, "drive_repeats": None, "drive_detune": None, "drive_strengths": None,
-    "free_min": None, "captured_max": None, "drive_peak_window": None, "clarity_min": None,
+    "m": ("checks", "Simulations per comparison"),
+    "m_noise": ("checks", "Simulations for the noise level"),
+    "rel": ("checks", "Step, as a share of each range"),
+    "repeats": ("checks", "Repeats"),
+    "chi_k_fixed": ("checks", "Fixed number of driven recordings"),
+    "n_points": ("checks", "Points across the prior"),
+    # the drive study's recording length reads as the recording length does, on a form that holds no other
+    "drive_t_obs": ("checks", "Recording length"),
+    "drive_repeats": ("checks", "Simulations per strength"),
+    "drive_detune": ("checks", "Drive frequency, × the cell's own"),
+    "drive_strengths": ("checks", "Strengths"),
+    # the checks' settings no form offers: what decides a check's verdict
+    "min_valid": None, "probe_multipliers": None, "probe_drives": None, "probe_cycle_caps": None, "cv_max": None,
+    "phase_max": None, "snr_min": None, "sup_min": None, "band_peak_window": None, "free_min": None,
+    "captured_max": None, "drive_peak_window": None, "clarity_min": None,
 }
 
 

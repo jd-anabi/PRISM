@@ -203,9 +203,10 @@ ROWS: tuple[Row, ...] = (
          "training are not all said.", _TRAIN,
          sentence="An epoch's record could not be read from the training library (<error>), so not every epoch "
                   "is shown.", message="warning"),
-    # a check's own stages: the calibration's two tests
+    # a check's own stages: the calibration's two tests, and the end of a repeat of the repeated calibration
     _row("sbc_uniformity", "SBC uniformity checks:", _ORCH),
     _row("tarp_atc", "TARP: ATC=<atc>  KS p=<p>", _ORCH),
+    _row("sbc_repeat", "[sbc] repeat <k>/<n>: n_valid=<rows>  worst KS p=<p>", "core.diagnostics.sbc"),
     # the window's own file
     _row("text_file_broken", "The run's text file could not be written (<error>); the full text is still on the "
          "page.", "core.gui.run.textfile",

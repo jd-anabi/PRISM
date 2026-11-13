@@ -58,6 +58,8 @@ def result_block(key: str, manifest: Mapping, folder: "Path | str", *, parent, u
                        check_readings.verdict_sentence(key, manifest, others_open=others_open,
                                                        prior_words=prior_words, force_unit=force_unit))
     region.set_table(check_readings.table_words(key, manifest, units=units, force_unit=force_unit, text=text))
+    if key == "drive_study":
+        region.set_lines(check_readings.forcing_lines(manifest))
     region.set_pictures(figures_of(key, manifest, folder))
     return region
 

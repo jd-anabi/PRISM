@@ -65,12 +65,26 @@ _OWN = "own"        # the samples of a run counted by its driving row or by set_
 
 
 @dataclass(frozen=True)
+class Said:
+    """What a stage says in place of its name between two of its run's lines: from each line the reading ``after``
+    reads to the next the reading ``until`` reads, ``words``, with ``{done}`` how many lines ``after`` reads have come
+    so far and ``{of}`` the size its check's run was handed under the name ``of`` (its stage's name is said while that
+    size is no whole number)."""
+    after: str
+    until: str
+    words: str
+    of: str
+
+
+@dataclass(frozen=True)
 class Stage:
-    """One stage of a run: its name ("Simulation"), the readings that begin it (none: it begins with the run), and
-    what counts it, a progress row's description or a reading's name ("Generating training data", "fit_epoch")."""
+    """One stage of a run: its name ("Simulation"), the readings that begin it (none: it begins with the run), what
+    counts it, a progress row's description or a reading's name ("Generating training data", "fit_epoch"), and what it
+    says in place of its name between two of its run's lines (None for nothing)."""
     name: str
     begins: tuple[str, ...] = ()
     counts: str | None = None
+    said: Said | None = None
 
 
 @dataclass(frozen=True)
@@ -282,6 +296,8 @@ class RunModel:
         self._unusable: tuple[int, int] | None = None
         self._unusable_counted = False
         self._chi_seen = False
+        self._heard_lines: dict[str, int] = {}   # how many lines each reading has read
+        self._saying = False                 # the stage in progress says its words in place of its name
         self._peak: float | None = None
         self._card: float | None = None
         self._memory_trouble = False
@@ -606,10 +622,21 @@ class RunModel:
         if kind == "saving":
             return "Saving the posterior"
         if self._current is not None:
-            return self._stages[self._current].name
+            return self._said_words() or self._stages[self._current].name
         if _OWN in self._samples:
             return self._own_count()
         return "Running"
+
+    def _said_words(self) -> str:
+        """The words the stage in progress says in place of its name now, "" for none."""
+        said = self._stages[self._current].said
+        if said is None or not self._saying:
+            return ""
+        sizes = (self.spec.check or {}).get("sizes") if isinstance(self.spec.check, dict) else None
+        of = sizes.get(said.of) if isinstance(sizes, dict) else None
+        if not isinstance(of, int) or isinstance(of, bool):
+            return ""
+        return said.words.format(done=number_text(self._heard_lines.get(said.after, 0)), of=number_text(of))
 
     def stages_begun(self) -> tuple[tuple[str, datetime], ...]:
         """Each stage the run has begun, by its name, with the moment it began, in the order they began."""
@@ -673,6 +700,7 @@ class RunModel:
     # ── reading a line ──
     def _take(self, reading: readings.Reading) -> None:
         name, values = reading.name, reading.values
+        self._heard_lines[name] = self._heard_lines.get(name, 0) + 1
         for index, stage in enumerate(self._stages):
             if name in stage.begins and index not in self._began and (self._current is None
                                                                        or index > self._current):
@@ -684,6 +712,9 @@ class RunModel:
             self._add_sample(counted, values["i"], values["n"])
         if name in LEAVES_OUT and self._current is not None and self._state != "ended":
             self._left_out.add(self._current)
+        said = self._stages[self._current].said if self._current is not None else None
+        if said is not None and name in (said.after, said.until):
+            self._saying = name == said.after
         if name == "budget":
             self._budget = values
         elif name == "rotation_begins":

@@ -1282,7 +1282,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # (c) verbatim: every sentence a user can read under a refusal, in the table's order
     sentences = {
         # one step; two steps, the second beginning with its own number
-        "t_obs": "Set it in the 'Recording length' box in step 5, Inference.",
+        "t_obs": "Set it in the 'Recording length' box in step 4, Checks, or step 5, Inference.",
         "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.",
         "run_size_cap": ("Set it in the 'Simulations per batch' box in step 3, Training, or step 6, "
                          "Narrowing round."),
@@ -1308,6 +1308,16 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "mask_num_runs": "Set it in the 'Batches to audit' box in step 4, Checks.",
         "mask_run_size": "Set it in the 'Simulations per batch' box in step 4, Checks.",
         "seed": "Set it in the 'Seed' box in step 4, Checks.",
+        "m": "Set it in the 'Simulations per comparison' box in step 4, Checks.",
+        "m_noise": "Set it in the 'Simulations for the noise level' box in step 4, Checks.",
+        "rel": "Set it in the 'Step, as a share of each range' box in step 4, Checks.",
+        "repeats": "Set it in the 'Repeats' box in step 4, Checks.",
+        "chi_k_fixed": "Set it in the 'Fixed number of driven recordings' box in step 4, Checks.",
+        "n_points": "Set it in the 'Points across the prior' box in step 4, Checks.",
+        "drive_t_obs": "Set it in the 'Recording length' box in step 4, Checks.",
+        "drive_repeats": "Set it in the 'Simulations per strength' box in step 4, Checks.",
+        "drive_detune": "Set it in the 'Drive frequency, × the cell's own' box in step 4, Checks.",
+        "drive_strengths": "Set it in the 'Strengths' box in step 4, Checks.",
         "num_iterations": "Set it in the 'Sweep rounds' box in step 2, Prior.",
         "sweep_batch": "Set it in the 'Candidates per round' box in step 2, Prior.",
         "max_sets": "Set it in the 'Stable sets to collect' box in step 2, Prior.",
@@ -1375,9 +1385,6 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
         "device", "n_samples", "observation_name",
-        # the checks' settings no form offers yet
-        "repeats", "n_points", "m", "m_noise", "rel", "chi_k_fixed",
-        "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths",
         # the checks' settings no form offers: what decides a check's verdict
         "min_valid", "probe_multipliers", "probe_drives", "probe_cycle_caps", "cv_max", "phase_max", "snr_min",
         "sup_min", "band_peak_window", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
@@ -2886,10 +2893,12 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
     from core.refusals import FIELDS
     built, trained = _refusal_keys("build_prior"), _refusal_keys("build_posterior")
     checked = _refusal_keys("validate_calibration", "probe_band", "probe_mask", "channel_ablation",
-                            "identifiability_rotation")
+                            "identifiability_rotation", "identifiability_jacobian", "sbc_repeats", "probe_drive",
+                            "identifiability_laplace")
     assert {"n_cal", "cal_n_scales", "num_posterior_samples", "prior", "name", "probe_seed", "band_repeats",
-            "mask_num_runs", "mask_run_size", "rows", "n_sweep", "n_worst", "top_n", "posterior"} <= checked, (
-        sorted(checked))
+            "mask_num_runs", "mask_run_size", "rows", "n_sweep", "n_worst", "top_n", "posterior", "m", "m_noise",
+            "rel", "repeats", "chi_k_fixed", "n_points", "t_obs", "drive_t_obs", "drive_repeats", "drive_detune"
+            } <= checked, sorted(checked)
     assert {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units", "min_cluster_size",
             "min_samples", "name"} <= built, sorted(built)
     assert {"num_runs", "run_size_cap", "checkpoint_every", "hidden_features", "num_transforms", "learning_rate",
@@ -2901,7 +2910,7 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
         "a page whose stage is not read here")
     # The checks' settings no form offers, each at the stage's own usual value, which the stage never refuses.
     unoffered = {"cv_max", "snr_min", "sup_min", "phase_max", "band_peak_window", "probe_multipliers", "probe_drives",
-                 "probe_cycle_caps", "chi_k_fixed"}
+                 "probe_cycle_caps", "min_valid", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
     for step, keys_ in (("prior", built), ("training", trained), ("checks", checked)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
         silent = sorted(key for key in keys_ - unanswered - (unoffered if step == "checks" else set())
@@ -3036,6 +3045,11 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "n_worst": "Weakest directions totalled", "top_n": "Largest contributions shown", "probe_seed": "Seed",
         "probe_lengths": "Recording lengths", "band_repeats": "Simulations per point",
         "mask_num_runs": "Batches to audit", "mask_run_size": "Simulations per batch", "seed": "Seed",
+        "m": "Simulations per comparison", "m_noise": "Simulations for the noise level",
+        "rel": "Step, as a share of each range", "repeats": "Repeats", "chi_k_fixed": "Fixed number of driven recordings",
+        "n_points": "Points across the prior", "drive_t_obs": "Recording length",
+        "drive_repeats": "Simulations per strength", "drive_detune": "Drive frequency, × the cell's own",
+        "drive_strengths": "Strengths",
     }
     said = {key: text for key, (place, text) in tuples.items()}
     differ = {key: (said.get(key), labels_today.get(key)) for key in sorted(said.keys() | labels_today.keys())

@@ -1358,32 +1358,24 @@ _GREYED = {
         "audit", dict(chi=False), [("lock", "Applies only with the frequency response.")],
         "Cannot start: it applies only with the frequency response."),
     "what the observations pin down, of another model": (
-        "pin_down", dict(nadrowski=False), [("lock", "This check cannot be run from the window yet."),
-                                            ("lock", "Applies only to the Nadrowski model.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "pin_down", dict(nadrowski=False), [("lock", "Applies only to the Nadrowski model.")],
+        "Cannot start: it applies only to the Nadrowski model."),
     "what the observations pin down, with no forcing and no frequency response": (
-        "pin_down", dict(chi=False, forcing=False),
-        [("lock", "This check cannot be run from the window yet."),
-         ("lock", "Needs a bounds file with a forcing section.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "pin_down", dict(chi=False, forcing=False), [("lock", "Needs a bounds file with a forcing section.")],
+        "Cannot start: the bounds file has no forcing section."),
     "the drive study with no forcing section": (
-        "drive_study", dict(forcing=False), [("lock", "This check cannot be run from the window yet."),
-                                             ("lock", "Needs a bounds file with a forcing section.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "drive_study", dict(forcing=False), [("lock", "Needs a bounds file with a forcing section.")],
+        "Cannot start: the bounds file has no forcing section."),
     "identifiability across the prior with the frequency response": (
-        "across_prior", dict(), [("lock", "This check cannot be run from the window yet."),
-                                 ("lock", "Does not apply with the frequency response.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "across_prior", dict(), [("lock", "Does not apply with the frequency response.")],
+        "Cannot start: it does not apply with the frequency response."),
     "identifiability across the prior with no forcing section": (
-        "across_prior", dict(chi=False, forcing=False),
-        [("lock", "This check cannot be run from the window yet."),
-         ("lock", "Needs a bounds file with a forcing section.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "across_prior", dict(chi=False, forcing=False), [("lock", "Needs a bounds file with a forcing section.")],
+        "Cannot start: the bounds file has no forcing section."),
     "the calibration repeated, with the prior of another": (
         "fixed_number", dict(pair_refused="refused", posterior_prior_words="older_prior"),
-        [("lock", "This check cannot be run from the window yet."),
-         ("lock", "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        [("lock", "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")],
+        "Cannot start yet: the prior in use is not the posterior's own."),
     "the timing, which the window cannot run yet": (
         "timing", dict(), [("lock", "This check cannot be run from the window yet.")],
         "Cannot start: this check cannot be run from the window yet."),
@@ -2913,7 +2905,12 @@ _COUNTS = {"band": "Simulates 24 recordings at each recording length and frequen
            "audit": "Simulates 100 batches of 32, as training would: 3,200 simulations.",
            "calibration": "Simulates 200 batches, holding 2,000 test datasets, then draws 1,000 samples for each.",
            "input_use": "Reads records and simulates nothing; takes seconds.",
-           "identifiability": "Reads records and simulates nothing; takes seconds."}
+           "identifiability": "Reads records and simulates nothing; takes seconds.",
+           "pin_down": "Simulates 32 recordings for each comparison and 128 for the noise level.",
+           "fixed_number": "Runs 10 calibrations of 2,000 test datasets each, about 10 times the calibration's time.",
+           "drive_study": "Simulates 16 recordings at each of 17 strengths.",
+           "across_prior": "Simulates at 6 points across the prior, at each as the check of what the observations can "
+                           "pin down does at one."}
 
 
 @pytest.mark.parametrize("key", list(_COUNTS))
@@ -2925,7 +2922,7 @@ def test_before_you_start_says_the_counts_the_time_the_memory_and_what_is_writte
     sizes = {one.setting: one.usual for one in check_forms.FORMS[key] if one.kind not in check_forms.NOT_SIZES}
     memory = ("Memory limit: none.", "The last run on this computer ran with no limit.")
     said = check_forms.before_you_start(key, sizes=sizes, last=None, memory=memory)
-    card = key in ("band", "audit", "calibration")
+    card = key not in ("input_use", "identifiability")
     assert [(fact.kind, fact.sentence) for fact in said] == [
         ("info", _COUNTS[key]), ("info", "Not timed on this computer yet."),
         *([("info", " ".join(memory))] if card else []),
@@ -3140,25 +3137,41 @@ def test_every_check_form_row_is_a_keyword_of_the_function_its_check_starts(tmp_
     """STANDING. Each row of a check's form hands the stage its check's start dispatches a keyword that stage takes, by
     the stage's own name for it: read off that function's signature, a row's argument, or its setting where the stage
     names it so, is a parameter passed by its keyword; a cell file is no argument, loaded on the check's own
-    configuration. Each check's press is followed to the function it dispatches."""
+    configuration. Each check's press is followed to the function it dispatches. And each row opens at the default of
+    that parameter, but the few whose usual value is the window's own, each with its reason: the audit's batches, at
+    the least that counts; the two calibrations' sizes the stage takes from the settings when it is handed none, as the
+    window opens them."""
     import inspect
+    from core import config
     from core.gui.panels.inference import check_forms
+    own = {("audit", "mask_num_runs"): check_readings.AUDIT_LEAST_BATCHES,
+           ("calibration", "n_cal"): config.SBC_N_CAL, ("calibration", "cal_n_scales"): config.CAL_N_SCALES,
+           ("fixed_number", "cal_n_scales"): config.CAL_N_SCALES}
     seen = _tripwire(monkeypatch)
-    with _checks_page(tmp_path, simulation=SET) as (_window, _screen, page, _store):
-        for key, rows in check_forms.FORMS.items():
-            seen.pop("fn", None)
-            _ready(page, key)
-            page._main_clicked()
-            assert "fn" in seen, (key, page.foot.reason.text())
-            taken = inspect.signature(seen["fn"]).parameters
-            for one in rows:
-                if one.kind == "cell":
-                    assert one.argument == "" and one.setting not in seen["kwargs"], key
+    pressed = set()
+    for chi in (True, False):
+        with _checks_page(tmp_path / str(chi), chi=chi, simulation=SET) as (_window, _screen, page, _store):
+            for key, rows in check_forms.FORMS.items():
+                if key in pressed or (key == "across_prior") == chi or (key in ("band", "audit") and not chi):
                     continue
-                name = one.argument or one.setting
-                assert name in taken and taken[name].kind in (inspect.Parameter.KEYWORD_ONLY,
-                                                              inspect.Parameter.POSITIONAL_OR_KEYWORD), (key, name)
-                assert name in seen["kwargs"], (key, name)
+                seen.pop("fn", None)
+                _ready(page, key)
+                _typed_into(page.form, {"t_obs": "2.5"} if "t_obs" in page.form.rows else {})
+                page._main_clicked()
+                assert "fn" in seen, (key, page.foot.reason.text())
+                pressed.add(key)
+                taken = inspect.signature(seen["fn"]).parameters
+                for one in rows:
+                    if one.kind == "cell":
+                        assert one.argument == "" and one.setting not in seen["kwargs"], key
+                        continue
+                    name = one.argument or one.setting
+                    assert name in taken and taken[name].kind in (inspect.Parameter.KEYWORD_ONLY,
+                                                                  inspect.Parameter.POSITIONAL_OR_KEYWORD), (key, name)
+                    assert name in seen["kwargs"], (key, name)
+                    usual = own.get((key, one.setting), taken[name].default)
+                    assert one.usual == usual, (key, one.setting, one.usual, taken[name].default)
+    assert pressed == set(check_forms.FORMS), sorted(set(check_forms.FORMS) - pressed)
 
 
 def test_a_drawing_of_the_list_never_scrolls_the_page(tmp_path):
@@ -3199,3 +3212,264 @@ def test_a_drafts_configuration_is_made_for_the_device_handed_and_else_as_before
     draft.make_config(bounds_dicts=({}, {}, {}))
     draft.make_config("bounds.txt", hw="the card")
     assert handed == [None, None, "the card"], handed
+
+
+# ── the forms and runs of the informing checks and the tools ──
+#: Each informing check and tool with a form: whether its window has the frequency response, its stage, what a press
+#: hands at its form's usual values with only what must be typed typed (a cell, a recording length) and at changed
+#: ones, by the stage's own names, and how many of the call's first arguments are the stage's.
+_HANDED_TOOLS = {
+    "pin_down": (True, ("core.diagnostics.identifiability", "identifiability_jacobian"), {"t_obs": "2.5"},
+                 {"t_obs_s": 2.5, "m": 32, "m_noise": 128, "rel": 0.02, "seed": 0},
+                 {"t_obs": "4", "m": "20", "m_noise": "50", "rel": "0.05", "seed": "9"},
+                 {"t_obs_s": 4.0, "m": 20, "m_noise": 50, "rel": 0.05, "seed": 9}),
+    "fixed_number": (True, ("core.diagnostics.sbc", "sbc_repeats"), {},
+                     {"chi_k_fixed": None, "repeats": 10, "n_cal": 2000, "cal_n_scales": 200,
+                      "num_posterior_samples": 1000, "seed": 0},
+                     {"chi_k_fixed": "3", "repeats": "4", "n_cal": "500", "cal_n_scales": "50",
+                      "num_posterior_samples": "200", "seed": "8"},
+                     {"chi_k_fixed": 3, "repeats": 4, "n_cal": 500, "cal_n_scales": 50, "num_posterior_samples": 200,
+                      "seed": 8}),
+    "drive_study": (True, ("core.diagnostics.probes", "probe_drive"), {},
+                    {"t_obs_s": 5.0, "repeats": 16, "detune": 1.4, "strengths": None, "seed": 0},
+                    {"drive_t_obs": "3", "drive_repeats": "8", "drive_detune": "1.6", "drive_strengths": "0.1 0.5 2",
+                     "probe_seed": "4"},
+                    {"t_obs_s": 3.0, "repeats": 8, "detune": 1.6, "strengths": [0.1, 0.5, 2.0], "seed": 4}),
+    "across_prior": (False, ("core.diagnostics.identifiability", "identifiability_laplace"), {"t_obs": "2.5"},
+                     {"t_obs_s": 2.5, "n_points": 6, "m": 32, "m_noise": 128, "rel": 0.02, "seed": 0},
+                     {"t_obs": "3", "n_points": "4", "m": "16", "m_noise": "40", "rel": "0.01", "seed": "2"},
+                     {"t_obs_s": 3.0, "n_points": 4, "m": 16, "m_noise": 40, "rel": 0.01, "seed": 2}),
+}
+
+
+def _typed_into(form, values) -> None:
+    """Type ``values`` into ``form``, by field key: a fixed number of driven recordings unticked first."""
+    for setting, text in values.items():
+        widget = form.rows[setting].widget
+        if hasattr(widget, "ticked_box"):
+            widget.ticked_box.setChecked(False)
+            widget = widget.field
+        widget.setText(text)
+
+
+@pytest.mark.parametrize("key", list(_HANDED_TOOLS))
+def test_each_informing_check_and_tool_hands_its_stage_the_forms_arguments(key, tmp_path, monkeypatch):
+    """A press of an informing check or a tool hands its own stage, by the stage's own names, what its form holds: at
+    the usual values, but what must be typed, and at changed ones, with the record's name and note and the figures'
+    sink asked for; what the observations can pin down and the drive study on a configuration of their own (the drive
+    study's without the frequency response, as its stage drives the cell itself), the calibration repeated on the
+    session's with the posterior and the prior, identifiability across the prior on its own with the posterior; no
+    setting of the engine is written."""
+    from core import config
+    seen = _tripwire(monkeypatch)
+    chi, where, needed, usual, typed, changed = _HANDED_TOOLS[key]
+    settings = {name: repr(value) for name, value in vars(config).items() if name.isupper()}
+    with _checks_page(tmp_path, chi=chi, simulation=SET) as (_window, screen, page, _store):
+        session = screen.session
+        _ready(page, key)
+        form = page.check_pages[key].form
+        _typed_into(form, needed)
+        for values, wanted in ((None, usual), (typed, changed)):
+            if values is not None:
+                _typed_into(form, values)
+                form.names.name.setText("a_tool")
+            page._main_clicked()
+            assert seen.get("fn") is _engine(where), (key, page.foot.reason.text())
+            handed = {name: value for name, value in seen["kwargs"].items() if name not in _CONTROLLERS}
+            assert handed == {**wanted, "name": "a_tool" if values is not None else "", "note": ""}, (key, handed)
+            assert seen["kwargs"]["provide_fig_sink"] is True
+            made, *rest = seen["args"]
+            if key == "fixed_number":
+                assert made is session.cfg and rest == [session.posterior, session.inf_prior]
+            else:
+                assert made is not session.cfg and made.sources.get("cell") is not None, key
+                assert made.chi_mode is (False if key == "drive_study" else chi), key
+                assert rest == ([session.posterior] if key == "across_prior" else []), key
+            seen.pop("fn")
+    assert {name: repr(value) for name, value in vars(config).items() if name.isupper()} == settings
+
+
+@pytest.mark.parametrize("key", ["pin_down", "across_prior"])
+def test_the_recording_length_of_the_two_identifiability_checks_opens_blank_and_blocks(key, tmp_path, monkeypatch):
+    """The recording length of what the observations can pin down and of identifiability across the prior opens blank,
+    says "Type a recording length." under its field and blocks, so that the stage's own fallback is never used; a length
+    typed lets the press through."""
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path, chi=key == "pin_down") as (_window, _screen, page, _store):
+        _ready(page, key)
+        row = page.form.rows["t_obs"]
+        assert row.widget.text() == "" and row.unit.text() == "s"
+        assert (row.line.kind, row.line.words) == ("err", "Type a recording length.")
+        assert not page.foot.main_button.isEnabled()
+        assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
+        page._main_clicked()
+        assert seen["calls"] == 0
+        row.widget.setText("2.5")
+        page._main_clicked()
+        assert seen["calls"] == 1 and seen["kwargs"]["t_obs_s"] == 2.5
+
+
+def test_mixed_as_in_training_sends_no_fixed_number_and_a_number_is_held_to_the_slots(tmp_path, monkeypatch):
+    """The fixed number of driven recordings opens ticked "Mixed, as in training", which sends none; unticked, a whole
+    number from 1 to the slots of the configuration in use, said under its field otherwise, and blocked; a number with
+    no frequency response in use is greyed, which waiting will not lift."""
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        _ready(page, "fixed_number")
+        row = page.form.rows["chi_k_fixed"]
+        assert row.widget.is_ticked() and row.widget.ticked_box.text() == "Mixed, as in training"
+        page._main_clicked()
+        assert seen["kwargs"]["chi_k_fixed"] is None
+        slots = screen.session.cfg.chi_k_pad
+        for text, line in (("0", f"Fixed number of driven recordings must be a whole number from 1 to {slots}."),
+                           (str(slots + 1), f"Fixed number of driven recordings must be a whole number from 1 to "
+                                            f"{slots}."), (str(slots), "")):
+            _typed_into(page.form, {"chi_k_fixed": text})
+            page.redraw()
+            assert row.line.words == line, (text, row.line.words)
+            assert page.foot.main_button.isEnabled() == (not line), text
+        page._main_clicked()
+        assert seen["kwargs"]["chi_k_fixed"] == slots
+    with _checks_page(tmp_path / "without", chi=False) as (_window, _screen, page, _store):
+        _ready(page, "fixed_number")
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        _typed_into(page.form, {"chi_k_fixed": "2"})
+        page.redraw()
+        assert page.foot.reason.text() == "Cannot start: it applies only with the frequency response."
+
+
+@pytest.mark.parametrize("key, chi", [("pin_down", True), ("fixed_number", True), ("across_prior", False)])
+def test_every_seed_a_stage_does_not_refuse_is_held_to_the_one_rule_of_a_seed(key, chi, tmp_path, monkeypatch):
+    """A seed no stage refuses itself is held by the window to the engine's one rule of a seed, called, not copied:
+    the largest it takes passes, and the random generator runs at it; one beyond, one below 0 and a number with a
+    fraction are said under the field, in the window's words from its label, and block; nothing is dispatched."""
+    import torch
+    from core.rng import SEED_MAX, seeded
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path, chi=chi, simulation=SET) as (_window, _screen, page, _store):
+        _ready(page, key)
+        _typed_into(page.form, {"t_obs": "2.5"} if key != "fixed_number" else {})
+        row = page.form.rows["seed"]
+        for text, line in ((str(SEED_MAX + 1), f"Seed must be a whole number from 0 to {SEED_MAX}."),
+                           ("-1", f"Seed must be a whole number from 0 to {SEED_MAX}."),
+                           ("2.5", "Seed must be a whole number; got '2.5'.")):
+            row.widget.setText(text)
+            page.redraw()
+            assert (row.line.kind, row.line.words) == ("err", line), (text, row.line.words)
+            page._main_clicked()
+            assert seen["calls"] == 0, text
+        row.widget.setText(str(SEED_MAX))
+        page._main_clicked()
+        assert seen["calls"] == 1 and seen["kwargs"]["seed"] == SEED_MAX
+    with seeded(SEED_MAX, torch.device("cpu")):
+        torch.rand(1)
+
+
+def test_the_repeated_calibrations_stage_line_says_no_progress_is_reported():
+    """The calibration repeated at fixed numbers has one stage, "Measuring", said in other words while it ranks a
+    repeat: from the line that ends a repeat's simulation to the line that ends the repeat, which repeat of how many,
+    that no progress is reported then and that a stop waits for its end; between two, its own name again."""
+    from core.gui.panels.inference import check_forms
+    from core.gui.run.model import RunModel
+    from tests._runs import CALIBRATION_LINES
+    spec = check_forms.check_spec("fixed_number", sizes={"repeats": 10, "n_cal": 2000})
+    model = RunModel(spec, clock=lambda: _at(8))
+    simulated = CALIBRATION_LINES[1]
+    ranking = ("Ranking repeat {} of 10: no progress is reported during this part, and Stop takes effect when it "
+               "ends")
+    said = []
+    for repeat in (1, 2, 3):
+        model.feed([("[sbc] probe-count stratum: POOLED over the training mixture", "info")] if repeat == 1 else [])
+        said.append(model.doing())
+        model.feed([(simulated, "info")])
+        said.append(model.doing())
+        model.feed([(f"[sbc] repeat {repeat}/10: n_valid=1995  worst KS p=0.0123", "info")])
+    said.append(model.doing())
+    assert said == ["Measuring", ranking.format(1), "Measuring", ranking.format(2), "Measuring", ranking.format(3),
+                    "Measuring"], said
+    assert [stage.name for stage in spec.stages] == ["Measuring"]
+
+
+def test_the_drive_studys_forcing_lines_can_be_copied(tmp_path):
+    """The drive study's result shows the Forcing sections its record suggests, as lines a cell file and a bounds file
+    take, in the fixed face and selectable, with "Copy" beside them, which puts them on the clipboard exactly; the
+    clipboard is put back as it was."""
+    from PySide6.QtGui import QFontInfo
+    from tests._fixtures import check_results, write_diagnostic
+    app = qt_app()
+    suggested = {"free_running": {"amp": 0.25, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
+                 "captured": {"amp": 1.5, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
+                 "box": {"amp": [0.0, 4.5], "freq": [0.003, 0.3], "phase": [0.0, 6.28319], "offset": [-50.0, 50.0]}}
+
+    def records(store, cfg, prior, posterior):
+        body = check_results("drive_study")
+        body["results"]["suggested_forcing"] = suggested
+        write_diagnostic(store, cfg, diagnostic="probes", variant="drive", cell=str(_cell_file()), **body)
+
+    clipboard = app.clipboard()
+    before = clipboard.text()
+    try:
+        with _checks_page(tmp_path, records=records) as (_window, _screen, page, _store):
+            page.open_check("drive_study")
+            region = page.check_pages["drive_study"].result
+            lines = ("# Forcing Parameters: the strongest drive that keeps the cell's own oscillation\namp = 0.25\n"
+                     "freq = 0.0316\nphase = 0\noffset = 0\n\n"
+                     "# Forcing Parameters: the weakest drive that captures the cell\namp = 1.5\nfreq = 0.0316\n"
+                     "phase = 0\noffset = 0\n\n"
+                     "# Forcing Parameters of a bounds file\namp in (0, 4.5)\nfreq in (0.003, 0.3)\n"
+                     "phase in (0, 6.28319)\noffset in (-50, 50)")
+            assert region.lines.text() == lines and region.lines.isVisibleTo(page)
+            assert QFontInfo(region.lines.font()).fixedPitch() or region.lines.font().fixedPitch()
+            assert region.lines.textInteractionFlags() & Qt.TextSelectableByMouse
+            assert region.copy_button.text() == "Copy" and region.copy_button in region.stops()
+            region.copy_button.click()
+            assert clipboard.text() == lines
+    finally:
+        clipboard.setText(before)
+
+
+def test_an_informing_check_or_a_tool_reads_done_once_run(tmp_path):
+    """Each of the four reads "Done" once a record of it counts, never "Passed", and its button "Run again"."""
+    from tests._fixtures import check_results, write_diagnostic
+    keys = ("pin_down", "fixed_number", "drive_study", "across_prior")
+
+    def records(store, cfg, prior, posterior):
+        for key in keys:
+            one = check_catalogue.entry(key)
+            parents = {"posterior": posterior, "prior": prior} if key in ("fixed_number", "across_prior") else None
+            write_diagnostic(store, cfg, diagnostic=one.diagnostic, variant=one.variant or "pooled",
+                             cell=str(_cell_file()), **({"parents": parents} if parents else {}),
+                             **check_results(key))
+
+    for chi, held in ((True, keys[:3]), (False, keys[3:])):
+        with _checks_page(tmp_path / str(chi), chi=chi, records=records) as (_window, screen, page, _store):
+            for key in held:
+                assert _row(screen.check_rows(), key).state == "Done", (key, _row(screen.check_rows(), key))
+                page.open_check(key)
+                assert page.foot.main_button.text().replace("&", "") == "Run again", key
+
+
+def test_a_tools_greyed_reasons_follow_the_model_the_mode_and_the_bounds_file(tmp_path):
+    """On the page, an informing check's or a tool's button is greyed for what it cannot apply to, each beside it as
+    "Cannot start:", which waiting will not lift: what the observations can pin down of a model not Nadrowski's, or with
+    neither the frequency response nor a forcing section; the drive study and identifiability across the prior with no
+    forcing section; identifiability across the prior with the frequency response; a fixed number of driven recordings
+    without it."""
+    cases = (("pin_down", dict(nadrowski=False), "Cannot start: it applies only to the Nadrowski model."),
+             ("pin_down", dict(chi=False, forcing=False), "Cannot start: the bounds file has no forcing section."),
+             ("drive_study", dict(forcing=False), "Cannot start: the bounds file has no forcing section."),
+             ("across_prior", dict(chi=True), "Cannot start: it does not apply with the frequency response."),
+             ("across_prior", dict(chi=False, forcing=False), "Cannot start: the bounds file has no forcing section."))
+    with _checks_page(tmp_path, chi=False) as (_window, screen, page, _store):
+        real = screen._checks_in_use
+        for key, over, beside in cases:
+            screen._checks_in_use = lambda *args, over=over, **kwargs: replace(real(*args, **kwargs), **over)
+            _ready(page, key)
+            _typed_into(page.form, {"t_obs": "2.5"} if "t_obs" in page.form.rows else {})
+            page.redraw()
+            assert page.foot.reason.text() == beside, (key, over, page.foot.reason.text())
+        screen._checks_in_use = real
+        _ready(page, "fixed_number")
+        _typed_into(page.form, {"chi_k_fixed": "2"})
+        page.redraw()
+        assert page.foot.reason.text() == "Cannot start: it applies only with the frequency response."

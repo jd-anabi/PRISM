@@ -108,10 +108,17 @@ def _edge_of(widget, window) -> QRect:
 def _in_view(page, widget) -> bool:
     """Whether the whole of ``widget``, in the page's body, lies in the viewport, with the room over and under it for its
     focus ring; for a widget higher than the viewport, which cannot, a list of sixteen rows at the least size, whether
-    its top does, as the page brings a part too high for it into view."""
+    its top does, as the page brings a part too high for it into view; and for the Checks list so high, whether the row
+    the keyboard is on does, as that page brings it into view."""
     port = page.scroller.viewport()
     room = design.SIZE["focus_ring"] + design.SIZE["focus_gap"]
     edge = _edge_of(widget, port).adjusted(0, -room, 0, room)
+    listing = getattr(page, "listing", None)
+    if edge.height() > port.height() and listing is not None and widget is listing.view() and (
+            widget.currentIndex().isValid()):
+        row = widget.visualRect(widget.currentIndex())
+        top = widget.viewport().mapTo(port, row.topLeft()).y() - room
+        return 0 <= top and top + row.height() + 2 * room <= port.height()
     if edge.height() > port.height():
         return 0 <= edge.top() < port.height() and port.rect().left() <= edge.left() and edge.right() <= port.rect().right()
     return port.rect().contains(edge)
@@ -1129,20 +1136,21 @@ def _a_detail_open(page) -> None:
     page.open_detail()
 
 
-def _the_calibration_in_error(page) -> None:
-    """The Checks list with the calibration's page open, beside the list or in its place as the width says, and its
-    first setting blank, said under it."""
-    page.open_check("calibration")
-    page.form.rows["n_cal"].widget.setText("")
+def _the_most_rows_in_error(page) -> None:
+    """The Checks list with the page of its check of the most rows open, identifiability across the prior, beside the
+    list or in its place as the width says, and its recording length, which opens blank, said under it."""
+    page.open_check("across_prior")
+    page.redraw()
+    assert page.form.rows["t_obs"].in_error()
 
 
 #: The pages the foot is held over at the smallest window, by a name: the stand-in, a table of rows on a page of the later
-#: steps, a list with a detail open, and the Checks list with the calibration open; each with the class's maker (or the
-#: class), the step it stands on, and what is done to it.
+#: steps, a list with a detail open, and the Checks list with its check of the most rows open; each with the class's
+#: maker (or the class), the step it stands on, and what is done to it.
 FOOT_PAGES = {"the stand-in": (None, "training", None),
               "a table of rows": ("stand_in_table_page", "infer", _twelve_rows_one_in_error),
               "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open),
-              "the Checks list, the calibration open": (ValidatePanel, "checks", _the_calibration_in_error)}
+              "the Checks list, the check of the most rows open": (ValidatePanel, "checks", _the_most_rows_in_error)}
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
@@ -1157,7 +1165,8 @@ def test_the_foot_stays_over_nothing_at_the_smallest_window(held, factor, count,
     Read in the window's own coordinates, and asked of the toolkit at each edge, for a part drawn over another or cut by a
     parent reads right by its edges alone. The facts open in the same region, and their growing moves nothing out of the
     window. On the stand-in page, on a page with a table of twelve rows, one with a reading in error, on a list with
-    a detail open, and on the Checks list with the calibration's page open, its form holding no fold yet."""
+    a detail open, and on the Checks list with the page of its check of the most rows open, its fold open and a row
+    in error."""
     from tests import _fixtures
     maker, step, shaped = FOOT_PAGES[held]
     with text_size(factor), _the_look(False):
@@ -3430,6 +3439,12 @@ WALKED_CHECKS = {
                                            page.form.rows["seed"].widget],
                              lambda page: [page.names.name, page.names.note],
                              lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
+    "the check of the most rows open": (
+        _a_check_open("across_prior"), _the_check_list_or_back,
+        lambda page: [page.form.rows["cell"].widget, page.form.rows["t_obs"].widget, page.form.rows["n_points"].widget],
+        lambda page: [page.form.rows[key].widget for key in ("m", "m_noise", "rel", "seed")],
+        lambda page: [page.names.name, page.names.note],
+        lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
     "a check with no setting open": (_a_check_open("comparison"), _the_check_list_or_back, lambda page: [],
                                      lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
 }

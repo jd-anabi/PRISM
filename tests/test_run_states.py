@@ -126,6 +126,7 @@ _LINES = {
                         "full text is still on the page.",
     "sbc_uniformity": "SBC uniformity checks:",
     "tarp_atc": "TARP: ATC=0.0123  KS p=0.512",
+    "sbc_repeat": "[sbc] repeat 3/10: n_valid=1995  worst KS p=0.0123",
 }
 # One line of each of the rows ``_other_rows`` adds: a run of another kind than a training, whose stages begin and
 # are counted by lines of its own, and one of whose lines leaves out the stage in progress.
@@ -1432,7 +1433,13 @@ _DISPATCHES = {("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchest
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_mask"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "ablation.channel_ablation"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel",
-                "identifiability.identifiability_rotation")}
+                "identifiability.identifiability_rotation"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel",
+                "identifiability.identifiability_jacobian"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "sbc.sbc_repeats"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_drive"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel",
+                "identifiability.identifiability_laplace")}
 
 
 def _entries(path) -> list:
@@ -1794,14 +1801,15 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     run's places are the window's own."""
     import ast
     from core import config, orchestrator
-    from core.diagnostics import ablation, identifiability, probes
+    from core.diagnostics import ablation, identifiability, probes, sbc
     from core.gui.panels.inference import check_forms
     from core.gui.run.model import Stage
     from tests import _runs
     from tests._fixtures import build_window, qt_app
     qt_app()
     entry_of = {"calibration": "calibration", "frequency band": "band", "audit": "audit", "input use": "input_use",
-                "identifiability": "identifiability"}
+                "identifiability": "identifiability", "pin down": "pin_down", "fixed number": "fixed_number",
+                "drive study": "drive_study", "across the prior": "across_prior"}
     found, forwards = set(), []
     for path in sorted((REPO / "core" / "gui").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1851,6 +1859,17 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "identifiability": (inference.validate_panel, identifiability.identifiability_rotation, (cfg, None), {},
                             ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no,
                              yes)),
+        "pin down": (inference.validate_panel, identifiability.identifiability_jacobian, (cfg,), {},
+                     ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no, yes)),
+        "fixed number": (inference.validate_panel, sbc.sbc_repeats, (cfg, None, None), {"repeats": 10},
+                         ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no,
+                          yes)),
+        "drive study": (inference.validate_panel, probes.probe_drive, (cfg,), {},
+                        ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no,
+                         yes)),
+        "across the prior": (inference.validate_panel, identifiability.identifiability_laplace, (cfg, None), {},
+                             ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes,
+                              no, yes)),
         "inference, simulated": (inference.infer_panel, orchestrator.simulated_inference, (cfg, None, 1.5), {},
                                  ("Inference", ("inference", "infer"), "Stop the inference…",
                                   ("observation", "inference"), no, yes, no, yes)),
@@ -1870,7 +1889,8 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         trains = kind in ("training", "narrowing round")
         assert (spec.simulation_set, spec.stages == _TRAINING) == (trains, trains), kind
         if spec.word == "Check":
-            stages = check_forms.CALIBRATION_STAGES if kind == "calibration" else (Stage(check_forms.MEASURING),)
+            stages = (check_forms.CALIBRATION_STAGES if kind == "calibration" else check_forms.REPEATED_STAGES
+                      if kind == "fixed number" else (Stage(check_forms.MEASURING),))
             assert (spec.stages, spec.facts, spec.check["key"]) == (stages, {}, entry_of[kind]), kind
         elif not trains:
             assert (spec.stages, spec.facts) == ((), {}), kind
@@ -5699,6 +5719,15 @@ def test_the_form_comes_back_with_the_figures_and_a_divider_left_by_hand_stands_
         assert form.width() == 500, (how, "a divider left by hand did not stand where it stood", form.width())
 
 
+def _the_most_rows_in_error(page) -> None:
+    """The Checks list with the check of the most rows open, identifiability across the prior, its fold open and its
+    recording length, which opens blank, in error under its field."""
+    page.open_check("across_prior")
+    page.form.fold.set_open(True)
+    page.redraw()
+    assert page.form.rows["t_obs"].in_error(), page.form.rows["t_obs"].line.words
+
+
 @pytest.mark.parametrize("step", ["the stand-in", "Prior", "Training", "a list beside its detail",
                                   "a list with its detail in its place", "the Checks list beside a check",
                                   "the Checks list with a check in its place"])
@@ -5711,7 +5740,8 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     longest main button a page has and a block for the run beside the form: on a stand-in page, and on the Prior page
     and the Training page, each with its fold open and a name typed; and on a list with a detail open, beside it at the
     opening width or in its place at the least, which the run's page hides as it stood; and on the Checks list with the
-    calibration's page open, beside it or in its place the same way. The window is made as narrow as it can be and as
+    page of its check of the most rows open, its fold open and a row in error, beside it or in its place the same way.
+    The window is made as narrow as it can be and as
     wide as the screen, then narrow again. Back at the list after the run, its detail stands as the width says, the page
     no wider than what shows it."""
     from core.gui import design
@@ -5763,7 +5793,7 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
 
         if checks:
             _settle()
-            host.open_check("calibration")
+            _the_most_rows_in_error(host)
             _settle()
             as_the_width_says("opened")
         elif listed:
@@ -6150,7 +6180,9 @@ for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", re
         window.go_to("inference", "checks")
         settle()
         if name == "checks":
-            host.open_check("calibration")
+            host.open_check("across_prior")
+            host.form.fold.set_open(True)
+            host.redraw()
         else:
             host.open_detail()
         settle()
