@@ -1284,7 +1284,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # (c) verbatim: every sentence a user can read under a refusal, in the table's order
     sentences = {
         # one step; two steps, the second beginning with its own number
-        "t_obs": "Set it in the 'T_obs (s)' box in step 5, Inference.",
+        "t_obs": "Set it in the 'Recording length' box in step 5, Inference.",
         "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 6, Narrowing round.",
         "run_size_cap": ("Set it in the 'Simulations per batch' box in step 3, Training, or step 6, "
                          "Narrowing round."),
@@ -1296,8 +1296,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "n_directions": "Set it in the 'Directions truncated' box in step 6, Narrowing round.",
         "hpd_level": "Set it in the 'HPD level' box in step 6, Narrowing round.",
         "observation": "Set it in the 'Observation' box in step 6, Narrowing round.",
-        "n_cal": "Set it in the 'Calibration datasets' box in step 4, Checks.",
-        "cal_n_scales": "Set it in the '(t_scale, T_obs) operating points' box in step 4, Checks.",
+        "n_cal": "Set it in the 'Test datasets' box in step 4, Checks.",
+        "cal_n_scales": "Set it in the 'Operating points' box in step 4, Checks.",
         "num_iterations": "Set it in the 'Sweep rounds' box in step 2, Prior.",
         "sweep_batch": "Set it in the 'Candidates per round' box in step 2, Prior.",
         "max_sets": "Set it in the 'Stable sets to collect' box in step 2, Prior.",
@@ -1320,7 +1320,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "artifact": "Select an artifact in the list in Records.",
         "note": "Edit it in the Note box in Records.",
         "bounds": "Set it in the 'Bounds file' box in step 2, Prior.",
-        "cell": "Set it in the 'Cell' box in step 5, Inference.",
+        "cell": "Set it in the 'Cell file' box in step 5, Inference.",
         "units": "Set it in the 'Units' box in step 1, Model and options.",
         "model": "Set it in the 'Model' box in step 1, Model and options.",
         "prior": "Set it in the 'Saved prior' box in step 2, Prior.",
@@ -2103,13 +2103,11 @@ def test_a_blank_or_bad_calibration_size_is_said_under_its_field_and_blocks():
         refused.clear()
 
     for cal_n, cal_scales, field, line, rule in (
-            ("", "200", "n_cal", "Calibration datasets is blank.", "is blank"),
-            ("0", "200", "n_cal", "Calibration datasets must be at least 1.", "must be at least 1; got 0"),
-            ("2000", "", "cal_n_scales", "(t_scale, T_obs) operating points is blank.", "is blank"),
-            ("2000", "0", "cal_n_scales", "(t_scale, T_obs) operating points must be at least 1.",
-             "must be at least 1; got 0"),
-            ("2000", "-3", "cal_n_scales", "(t_scale, T_obs) operating points must be at least 1.",
-             "must be at least 1; got -3")):
+            ("", "200", "n_cal", "Test datasets is blank.", "is blank"),
+            ("0", "200", "n_cal", "Test datasets must be at least 1.", "must be at least 1; got 0"),
+            ("2000", "", "cal_n_scales", "Operating points is blank.", "is blank"),
+            ("2000", "0", "cal_n_scales", "Operating points must be at least 1.", "must be at least 1; got 0"),
+            ("2000", "-3", "cal_n_scales", "Operating points must be at least 1.", "must be at least 1; got -3")):
         typed(cal_n, cal_scales)
         page.redraw()
         assert (rows[field].line.kind, rows[field].line.words) == ("err", line), (cal_n, cal_scales)
@@ -2234,13 +2232,15 @@ def test_the_narrowing_rounds_rows_are_named_from_the_control_table():
                 f"{gui_fields.label(key)!r}")
 
 
-def test_the_window_says_t_obs_where_it_means_the_recording_length():
-    """On the tier-1 box T is also temperature, so the window's text names the recording length
-    T_obs wherever it pairs it with t_scale: the calibration's operating-point row and both
-    tooltips that describe those operating points."""
+def test_the_window_says_recording_length_and_operating_points():
+    """A row names a setting in words, its unit beside its field and never in its label: the recording length is
+    "Recording length" wherever it stands, and the calibration's operating points "Operating points". On the tier-1 box
+    T is also temperature, so the help that says what an operating point is names the recording length T_obs wherever
+    it pairs it with t_scale: the operating points' help and the training batches'."""
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.help_text import HELP
-    assert gui_fields.label("cal_n_scales") == "(t_scale, T_obs) operating points"
+    assert gui_fields.label("t_obs") == "Recording length"
+    assert gui_fields.label("cal_n_scales") == "Operating points"
     assert HELP["cal_scales"].startswith("(t_scale, T_obs) operating points")
     assert "(t_scale, T_obs)" in HELP["num_runs"]
     assert "(t_scale, T)" not in HELP["cal_scales"] + HELP["num_runs"]
@@ -2894,7 +2894,7 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
 
 def test_the_gui_control_table_matches_the_tabs_labels():
     """The control table's pin. fields.CONTROL is where a refusal learns which box to name ("Set it
-    in the 'T_obs (s)' box in step 5, Inference."), and the panels build their
+    in the 'Recording length' box in step 5, Inference."), and the panels build their
     rows FROM it (label(key)), so the two cannot drift -- this reads back the form rows shown at every
     place the table names and checks that each (place, label) entry is a label shown there. The rows
     are read the way Qt holds them: the QLabel inside each help_label holder (help_badge.py), or the
@@ -2990,9 +2990,9 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     assert not missing, f"CONTROL names labels no place shows: {missing}\nshown: {seen}"
     # the labels, as the window shows them today
     labels_today = {
-        "t_obs": "T_obs (s)", "num_runs": "Batches", "run_size_cap": "Simulations per batch",
+        "t_obs": "Recording length", "num_runs": "Batches", "run_size_cap": "Simulations per batch",
         "n_directions": "Directions truncated", "hpd_level": "HPD level", "observation": "Observation",
-        "n_cal": "Calibration datasets", "cal_n_scales": "(t_scale, T_obs) operating points",
+        "n_cal": "Test datasets", "cal_n_scales": "Operating points",
         "num_iterations": "Sweep rounds", "sweep_batch": "Candidates per round",
         "max_sets": "Stable sets to collect", "walk_step": "Random-walk step",
         "stability_units": "Stability test length", "min_cluster_size": "Smallest cluster",
@@ -3002,7 +3002,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "checkpoint_every": "Save the simulations every … batches", "resume": "Continue or start new",
         "fisher_m": "Rotation: simulations per perturbation", "fisher_dz": "Rotation: step",
         "fisher_points": "Rotation: parameter sets averaged",
-        "bounds": "Bounds file", "cell": "Cell", "units": "Units", "model": "Model",
+        "bounds": "Bounds file", "cell": "Cell file", "units": "Units", "model": "Model",
         "prior": "Saved prior", "posterior": "Saved posterior", "recording_forced": "Forced",
         "drive_amplitude": "A (N)", "drive_frequency": "f (Hz)",
         "drive_phase": "φ (rad)", "chi_f0_si": "Drive F₀ (N)", "chi_mode": "Kind of observation",

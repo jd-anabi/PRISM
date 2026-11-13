@@ -30,6 +30,19 @@ from .help_text import HELP
 # rename there renames the row and the refusal's "Set it in the '…' box" sentence together; a forcing
 # name outside the registry (offset, amp_y) keeps its derived pretty label and answers to no key.
 _DRIVE_FIELD = {"amp": "drive_amplitude", "freq": "drive_frequency", "phase": "drive_phase"}
+#: The unit of the recording length, which stands beside its box and never in its label.
+SECONDS = "s"
+
+
+def _with_unit(field: QWidget, unit: str) -> QWidget:
+    """A box with its unit beside it, as one field of a form's row."""
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(field)
+    row.addWidget(QLabel(unit))
+    row.addStretch(1)
+    return holder
 
 
 def _drive_label(name: str) -> str:
@@ -100,7 +113,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                                         file_label="Use file", direct_label="Edit values")
         self.cell_source.changed.connect(self._on_cell_source_changed)
         add_help_row(sim_f, label("cell"), self.cell_source, HELP["cell_source"])
-        add_help_row(sim_f, label("t_obs"), self.sim_tobs, HELP["tobs"])
+        add_help_row(sim_f, label("t_obs"), _with_unit(self.sim_tobs, SECONDS), HELP["tobs"])
         self.infer_stack.addWidget(sim_w)
         # experimental inputs
         exp_w = QWidget(); self.exp_form = make_form(exp_w)
@@ -111,7 +124,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         # so its CONTROL entry is a sentence naming both, and the two literals stay here.
         add_help_row(self.exp_form, "Spontaneous", self.exp_spont, HELP["spont"])
         add_help_row(self.exp_form, label("recording_forced"), self.exp_forced, HELP["forced"])
-        add_help_row(self.exp_form, label("t_obs"), self.exp_tobs, HELP["tobs"])
+        add_help_row(self.exp_form, label("t_obs"), _with_unit(self.exp_tobs, SECONDS), HELP["tobs"])
         self._forcing_anchor = QLabel("(build config to list drive params)")
         self.exp_form.addRow(self._forcing_anchor)
         self.infer_stack.addWidget(exp_w)
@@ -122,7 +135,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.chi_f0_si = FloatField(1.0)
         self._chi_forced_fields = []
         add_help_row(self.chi_form, "Passive", self.chi_spont, HELP["chi_passive"])
-        add_help_row(self.chi_form, label("t_obs"), self.chi_tobs, HELP["tobs"])
+        add_help_row(self.chi_form, label("t_obs"), _with_unit(self.chi_tobs, SECONDS), HELP["tobs"])
         add_help_row(self.chi_form, label("chi_f0_si"), self.chi_f0_si, HELP["chi_f0_si"])
         # The probe table. Rows live in their OWN container rather than as form rows, so
         # adding and removing one is a local layout edit that cannot disturb the fields above it.

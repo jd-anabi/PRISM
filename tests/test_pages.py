@@ -252,10 +252,11 @@ def test_a_row_named_nowhere_in_the_table_fails_as_it_is_built():
 
 
 def test_a_label_runs_through_the_tables_rich_form():
-    """A label the table writes with a subscript shows it, and reads back as the table wrote it."""
+    """A label the table of rich forms writes with a subscript shows it, and reads back as it was handed."""
+    from core.Helpers import labels
     form = _the_form()
-    row = form.add("t_obs", FloatField(4.5))
-    assert row.label_text() == "T_obs (s)" and row.label.text() != "T_obs (s)"
+    row = form.add("hpd_level", FloatField(0.9), label="T_obs (s)")
+    assert row.label_text() == "T_obs (s)" and row.label.text() == labels.pretty_gui("T_obs (s)") != "T_obs (s)"
 
 
 def test_a_number_field_stands_right_aligned_and_120_wide():

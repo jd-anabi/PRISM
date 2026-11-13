@@ -4,10 +4,10 @@ A ``Refusal`` names the setting at fault by a key from ``core.refusals.FIELDS`` 
 tab, button or flag. ``BasePanel._refusal`` puts ``fix_sentence(exc.field)`` under the message in
 the yellow "Check your inputs" box, and the inference tabs build their static rows from
 ``label(key)`` -- ``add_help_row(form, label("t_obs"), ...)`` -- so a control is named in ONE place
-and a renamed one cannot leave a stale sentence behind. ``add_help_row`` applies
-``labels.pretty_gui`` to whatever it is given (``core/gui/widgets/help_badge.py``), so the strings
-here are the plain forms ("T_obs (s)"), and the read-back pin compares ``pretty_gui(label(key))``
-against the QLabels shown at the place a tuple names.
+and a renamed one cannot leave a stale sentence behind. ``add_help_row`` and a form's row apply
+``labels.pretty_gui`` to whatever they are given (``core/gui/widgets/help_badge.py``), so the strings
+here are the plain forms, a unit standing beside its field and never in its label, and the read-back
+pin compares ``pretty_gui(label(key))`` against the QLabels shown at the place a tuple names.
 
 Three shapes of entry:
 
@@ -69,7 +69,7 @@ def _in(place) -> str:
 
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
-    "t_obs": ("infer", "T_obs (s)"),
+    "t_obs": ("infer", "Recording length"),
     "num_runs": (("training", "narrowing"), "Batches"),
     "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
     "checkpoint_every": ("training", "Save the simulations every … batches"),
@@ -84,8 +84,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "hpd_level": ("narrowing", "HPD level"),
     "observation": ("narrowing", "Observation"),
     # calibration and inference sizes
-    "n_cal": ("checks", "Calibration datasets"),
-    "cal_n_scales": ("checks", "(t_scale, T_obs) operating points"),
+    "n_cal": ("checks", "Test datasets"),
+    "cal_n_scales": ("checks", "Operating points"),
     "num_posterior_samples": None,
     "n_samples": None,
     # the prior sweep
@@ -121,7 +121,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # inputs. ``units`` is NOT widened -- one units control exists in the whole application (the choice of step 1);
     # everywhere else the units file is resolved from the model and there is no control to name.
     "bounds": ("prior", "Bounds file"),
-    "cell": ("infer", "Cell"),
+    "cell": ("infer", "Cell file"),
     "units": ("model", "Units"),
     "model": ("model", "Model"),
     "device": None,
@@ -364,7 +364,7 @@ def label(key: str) -> str:
 
 
 def fix_sentence(key: str | None, here: str | None = None) -> str:
-    """What the yellow box says under the message: ``"Set it in the 'T_obs (s)' box in step 5, Inference."``
+    """What the yellow box says under the message: ``"Set it in the 'Bounds file' box in step 2, Prior."``
     for a box entry, the sentence itself for a sentence entry, ``""`` for
     ``field=None``, a None entry or an unknown key. It runs while a refusal is being shown, so it never
     raises for a key of the table: every place the table names is a place of the window, and the pin

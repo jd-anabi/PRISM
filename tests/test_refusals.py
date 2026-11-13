@@ -47,6 +47,8 @@ BASE_KEYS = (
     # a run plan: the file to correct, and the three settings a plan holds that no stage's rule names
     "plan", "chi_mode", "reparam_rotate", "expected_epochs",
 )
+# The keys the diagnostics refuse their own settings under, which the registry gained after its initial set: each
+# is named by a flag of the command line's diagnostics, and the window names those it offers on a check's form.
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed",
                   # the probe checks: the seed, the band check's four grids, its repeat count and its
