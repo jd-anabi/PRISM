@@ -1,7 +1,7 @@
 """How a check's record is read, as values: the state a record of each deciding check reads, by the rules a deciding
 check is judged by, and the comparison of the share of unusable driven recordings a training's simulation set holds
-with the audit of its prior; and what each check's record says, in the window's words: the sentence its result begins
-with and its table.
+with the audit of its prior; what each check's record says, in the window's words: the sentence its result begins
+with and its table; and what "Before you start" says of a check's run before it is started.
 
 The engine decides the frequency band and the calibration itself, and their records hold the verdict. The audit, the
 comparison, the use of each part of the input and the identifiability of the posterior are judged by rules that live
@@ -20,8 +20,8 @@ from pathlib import PureWindowsPath
 
 from .check_catalogue import entry
 from .run import readings
-from .step_facts import TableWords
-from .texts import date_text, number_text
+from .step_facts import Fact, TableWords
+from .texts import date_text, duration_text, number_text
 
 #: Every state a check's row can read, as the list and a check's page show it.
 STATES = ("Not run yet", "Running", "Passed", "Look closer", "Failed", "Waiting for a prior", "Waiting for a posterior",
@@ -932,3 +932,75 @@ def _across_table(body, **_given) -> TableWords:
 _TABLES = {"band": _band_table, "audit": _audit_table, "calibration": _calibration_table,
            "input_use": _input_use_table, "identifiability": _identifiability_table, "pin_down": _pin_down_table,
            "fixed_number": _fixed_table, "drive_study": _drive_table, "across_prior": _across_table}
+
+
+# ── "Before you start": what a check's run does, said before it is started ──
+#: The calibration's counts: one batch for each operating point, holding the test datasets, then the samples drawn for
+#: each dataset.
+CALIBRATION_COUNTS_TEXT = "Simulates {} batches, holding {} test datasets, then draws {} samples for each."
+#: The frequency band's counts, at the recording lengths the engine chooses for the cell when none is typed (five, its
+#: own number), or at those typed.
+BAND_COUNTS_TEXT = "Simulates {} recordings at each recording length and frequency of the band: {}."
+BAND_CHOSEN_WORDS = "five lengths chosen for this cell"
+BAND_TYPED_WORDS = ("{} recording length", "{} recording lengths")
+#: The audit's counts: batches simulated as training simulates them.
+AUDIT_COUNTS_TEXT = "Simulates {} batches of {}, as training would: {} simulations."
+#: What a check that reads records and simulates nothing says of its cost.
+READS_ONLY_TEXT = "Reads records and simulates nothing; takes seconds."
+READS_ONLY = ("input_use", "identifiability")
+#: How long a check took on this computer the last time it finished at the sizes the form holds, from the run history;
+#: and what is said when it never has.
+TOOK_TEXT = "Took {} here last time at these sizes."
+NOT_TIMED_TEXT = "Not timed on this computer yet."
+#: The one-run rule, and what a check's run writes.
+ONE_AT_A_TIME_TEXT = "Nothing else can run until it ends."
+ONE_RECORD_TEXT = "One record, under Records."
+#: The checks that simulate on the graphics card: beside them the memory limit in force and the last run are said.
+ON_THE_CARD = ("band", "audit", "calibration")
+
+
+def _is_whole(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _counts_of(key: str, sizes: Mapping) -> str:
+    """The counts of the run of the check ``key`` at the ``sizes`` its form holds, by field key: "" while a size its
+    sentence says is not a whole number, or for a check that says none."""
+    if key in READS_ONLY:
+        return READS_ONLY_TEXT
+    if key == "calibration":
+        held = [sizes.get(name) for name in ("cal_n_scales", "n_cal", "num_posterior_samples")]
+        return CALIBRATION_COUNTS_TEXT.format(*map(number_text, held)) if all(map(_is_whole, held)) else ""
+    if key == "band":
+        repeats, lengths = sizes.get("band_repeats"), sizes.get("probe_lengths")
+        if not _is_whole(repeats) or not (lengths is None or isinstance(lengths, (list, tuple))):
+            return ""
+        typed = BAND_TYPED_WORDS[len(lengths) != 1].format(number_text(len(lengths))) if lengths else ""
+        return BAND_COUNTS_TEXT.format(number_text(repeats), typed or BAND_CHOSEN_WORDS)
+    if key == "audit":
+        batches, each = sizes.get("mask_num_runs"), sizes.get("mask_run_size")
+        if not (_is_whole(batches) and _is_whole(each)):
+            return ""
+        return AUDIT_COUNTS_TEXT.format(number_text(batches), number_text(each), number_text(batches * each))
+    return ""
+
+
+def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: tuple[str, ...]) -> tuple[Fact, ...]:
+    """What "Before you start" says of a run of the check ``key`` at the ``sizes`` its form holds, by field key, in its
+    order: what the run simulates or reads, in counts; how long it took the ``last`` time it finished at these sizes on
+    this computer, a run's history (None for none: a run whose time its history does not hold is no information); the
+    ``memory`` lines, the limit in force and the last run on this computer, for a check that simulates on the card;
+    that nothing else can run meanwhile; and what it writes."""
+    said = []
+    counts = _counts_of(key, sizes)
+    if counts:
+        said.append(Fact("info", counts))
+    held = last.get("check") if isinstance(last, Mapping) else None
+    seconds = held.get("seconds") if isinstance(held, Mapping) else None
+    timed = isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0
+    said.append(Fact("info", TOOK_TEXT.format(duration_text(seconds)) if timed else NOT_TIMED_TEXT))
+    lines = " ".join(line for line in memory if line)
+    if key in ON_THE_CARD and lines:
+        said.append(Fact("info", lines))
+    said += [Fact("info", ONE_AT_A_TIME_TEXT), Fact("info", ONE_RECORD_TEXT)]
+    return tuple(said)

@@ -8,20 +8,32 @@ its figures among it, is made at a reading, from the record that counts.
 
 A row opens its check's page by a click, Space or Enter. The foot's main button runs the check open; with none open it
 opens the first deciding check a run can still pass, or goes to Inference when none is left.
+
+A check that simulates from the cell or in a fixed kind of observation runs on a configuration of its own, made at the
+press from the step 1 settings applied and the bounds in use, as the session's was made, its cell loaded on it alone:
+the session's configuration is never written. A check's form is read at every edit with what the page's last reading
+holds, this computer's finished checks among it, and reads nothing.
 """
+import dataclasses
+import functools
 import random
+from collections import OrderedDict
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from core import orchestrator
+from core import cli, orchestrator
+from core.config import CELL_PATH
+from core.diagnostics import ablation, identifiability, probes
 from core.Helpers import labels
 from core.refusals import Refusal
 
 from ... import check_lineage, check_readings, design, fonts, record_words, style
 from ...check_catalogue import AGAIN_WORDS, CHECKS, DECIDING, GROUPS, entry
+from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...reported import reported
+from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
 from ...run.questions import TRAINING_WORDS
@@ -62,8 +74,18 @@ COUNTED_LATER_TEXT = "Counted when simulation ends."
 UNREADABLE_RECORD_TEXT = "The record {} cannot be read, so it counts for no check."
 #: The words beside the main button for a setting of a check's form that breaks its rule.
 SETTING_BLOCKS = "a setting cannot be used"
-#: Where the window shows this step's runs: Parameter inference, its step Checks.
-_PLACE = ("inference", "checks")
+#: What a check's own configuration says when its bounds or its cell file cannot be read.
+BOUNDS_UNREAD_TEXT = "The bounds file cannot be read: {}"
+CELL_UNREAD_TEXT = "The cell file cannot be read: {}"
+#: A calibration's seed left blank is drawn at the press, below this, and its record names it.
+DRAWN_SEED_BELOW = 2 ** 31
+#: Each check's stage by the module that holds it and its name there, read at each look, so that what a test puts in
+#: its place is the function looked for; and the method of this page that starts it.
+_ENGINE = {"band": (probes, "probe_band"), "audit": (probes, "probe_mask"),
+           "calibration": (orchestrator, "validate_calibration"), "input_use": (ablation, "channel_ablation"),
+           "identifiability": (identifiability, "identifiability_rotation")}
+_STARTS = {"band": "_start_band", "audit": "_start_audit", "calibration": "_start_calibration",
+           "input_use": "_start_input_use", "identifiability": "_start_identifiability"}
 #: The keys that open the check of the row the keyboard is on.
 _OPENING_KEYS = (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space)
 
@@ -77,6 +99,7 @@ class _Listing(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.narrowed = False
+        self.drawing = False                 # the rows are being drawn again: the keyboard's row moves no page
         self.headings: list = []
         self.row_of: dict = {}               # each check's row, by its key
         self.key_at: dict = {}               # the key of each row of a check, by the row
@@ -93,8 +116,16 @@ class _Listing(QWidget):
 
     def set_rows(self, found) -> None:
         """Show each check's row of ``found`` (the checks' rows in the list's order; None before the first reading,
-        the names alone). The row the keyboard is on in each table stays the current one, by its check. A group's
-        heading is no row a click selects or the keyboard stops on."""
+        the names alone). The row the keyboard is on in each table stays the current one, by its check, and no drawing
+        moves the keyboard: ``drawing`` says so while it lasts. A group's heading is no row a click selects or the keyboard
+        stops on."""
+        self.drawing = True
+        try:
+            self._set_rows(found)
+        finally:
+            self.drawing = False
+
+    def _set_rows(self, found) -> None:
         kept = {table: self.key_at.get(table.view.currentIndex().row()) for table in (self.whole, self.narrow)
                 if table.view.currentIndex().isValid()}
         by_key = {row.key: row for row in found or ()}
@@ -216,6 +247,13 @@ class ValidatePanel(StepPage):
         self.check_pages = {one.key: CheckPage(one, check_forms.build_form(one.key), self) for one in CHECKS}
         for page in self.check_pages.values():
             page.hide()
+            if page.form.names is not None:
+                page.form.names.changed.connect(self.redraw)
+        # What the last reading found of this computer's runs: its finished checks, its last run and the last that
+        # measured its batches; a check's "Before you start" says them at every edit, reading nothing.
+        self._ran_here: list = []
+        self._last = self._measured = None
+        self._history_read = False
         self.list_detail = ListAndDetail(self.listing, beside_width=design.scaled(CHECK_BESIDE_WIDTH))
         self.list_detail.back_pressed.connect(self._all_checks)
         self.list_detail.switched.connect(self._switched)
@@ -422,11 +460,11 @@ class ValidatePanel(StepPage):
     def main_pressed(self) -> None:
         """Run the open check; with none open, open the next deciding check, or go to Inference."""
         key = self.open_key
-        if key == "calibration":
-            self._start_calibration()
+        if key in _STARTS:
+            getattr(self, _STARTS[key])()
             return
         if key is not None and entry(key).button:
-            return                           # its facts grey it: nothing else runs from the window yet
+            return                           # its facts grey it: the window cannot run it yet
         following = self._next_check()
         if following is None:
             self._screen.navigate.emit("inference", "infer")
@@ -435,8 +473,10 @@ class ValidatePanel(StepPage):
 
     def facts_from_form(self) -> tuple:
         """With no check open: that nothing can be checked with no prior, the changes of the earlier steps not applied,
-        and each record that cannot be read. With a check open: what stops its button, the rules its form breaks, and
-        the earlier steps' changes."""
+        and each record that cannot be read. With a check open: what its run simulates or reads, how long it took here
+        last at these sizes, the memory limit and the last run for a check on the graphics card, that nothing else can
+        run meanwhile and what it writes; the earlier steps' changes; and what stops its button: its row's reason, a cell
+        file not chosen, the rules its form breaks, its name and its note."""
         others = tuple(Fact("warn", said) for said in self._others_pending() if said)
         key = self.open_key
         if key is None or not entry(key).button:
@@ -449,12 +489,34 @@ class ValidatePanel(StepPage):
             blocks = check_lineage.button_facts(row, not_built=not_built)
         else:
             blocks = (Fact("lock", not_built, NOT_BUILT_BLOCKS),) if not_built else ()
+        if not_built:
+            return (*blocks, *others)
         form = self.check_pages[key].form
-        found = check_forms.problems(key, form)
+        found = check_forms.problems(key, form, slots=self._slots())
         for setting, row_ in form.rows.items():
+            if row_.widget is None or setting in ("name", "note", "cell"):
+                continue
             row_.set_line("err" if setting in found else "", found[setting][0] if setting in found else "")
         fields = tuple(Fact("err", line, SETTING_BLOCKS) for line, _said in found.values())
-        return (*blocks, *fields, *others)
+        picker = check_forms.cell_picker(form)
+        cell = (Fact("err", check_forms.NO_CELL_TEXT, check_forms.NO_CELL_BLOCKS),) if (
+            picker is not None and not picker.key()) else ()
+        names = tuple(fact for fact in (form.names.name_fact(), form.names.note_fact()) if fact) if form.names else ()
+        sizes = check_forms.sizes_of(key, form)
+        said = check_forms.before_you_start(key, sizes=sizes, last=history.check_at(self._ran_here, check=key,
+                                                                                      sizes=sizes),
+                                            memory=self._memory())
+        return (*said, *others, *blocks, *cell, *fields, *names)
+
+    def _memory(self) -> tuple:
+        """The memory limit in force and, once the history has been read, the last run on this computer."""
+        limit = limit_words(memory_limit_in_force())
+        return (limit, ends.last_run_sentence(self._last, self._measured)) if self._history_read else (limit,)
+
+    def _slots(self) -> "int | None":
+        """The driven recordings an observation holds at most, by the configuration in use; None without one."""
+        slots = getattr(getattr(self.session, "cfg", None), "chi_k_pad", None) if self._screen is not None else None
+        return slots if isinstance(slots, int) and not isinstance(slots, bool) else None
 
     def region_stops(self) -> list:
         return self.list_detail.stops()
@@ -477,6 +539,7 @@ class ValidatePanel(StepPage):
         check's, before anything moves."""
         page = None if key is None else self.check_pages[key]
         self.open_key = key
+        self.names = None if page is None else page.form.names
         self.list_detail.show_detail(page)
         self.use_form(self._own_form if page is None else page.form)
         self.listing.select(key)
@@ -496,7 +559,7 @@ class ValidatePanel(StepPage):
 
     def _all_checks(self) -> None:
         """"All checks": the whole list again, its own form handed back."""
-        self.open_key = None
+        self.open_key = self.names = None
         self.use_form(self._own_form)
         self.listing.select(None)
         self.redraw()
@@ -509,11 +572,46 @@ class ValidatePanel(StepPage):
 
     # ── the readings ──
     def read_disk(self) -> None:
-        """What the checks need, read by the screen, then every check's row and its result drawn from it."""
+        """What the checks need, read by the screen; this computer's runs from the run history: its finished checks, its
+        last run and the last that measured its batches; each check's list of cell files listed again in the folder of
+        the model in use, one that holds none taking the cell step 5 holds; then every check's row and its result drawn
+        from it."""
         read = getattr(self._screen, "read_checks", None)
         if callable(read):
             read()
+        folder, here = controller().folder(), computer()
+        self._ran_here = history.checks_on(folder, computer=here)
+        self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
+        self._history_read = True
+        self._point_the_cells()
         self._draw(read=True)
+
+    def _point_the_cells(self) -> None:
+        """Each check's list of cell files, listed in the folder of the model in use, its choice kept while the file is
+        there; one that holds none takes the cell the Inference step's list holds, or stays on none."""
+        session = getattr(self._screen, "session", None)
+        model = (getattr(getattr(session, "cfg", None), "model", None)
+                 or getattr(getattr(session, "draft", None), "model", None))
+        if not isinstance(model, str) or not model:
+            return
+        infer = getattr(getattr(self._screen, "infer_panel", None), "cell_picker", None)
+        theirs = infer.key() if infer is not None else ""
+        folder = CELL_PATH / model.lower()
+        for page in self.check_pages.values():
+            picker = check_forms.cell_picker(page.form)
+            if picker is None:
+                continue
+            if Path(picker.base_path) != folder:
+                picker.repoint(folder)
+            else:
+                picker.refresh()
+            if not picker.key() and theirs:
+                picker.restore_key(theirs)
+
+    def _edited(self) -> None:
+        """A check's form was edited: drawn again from what the last reading holds. Nothing is read, for nothing the page
+        reads hangs on its forms; the name's own check is read after its own typing."""
+        self.redraw()
 
     def refresh_local_gates(self) -> None:
         """The heading, what is in use, the table and the pages, from the last reading and what is in use now; no
@@ -529,9 +627,11 @@ class ValidatePanel(StepPage):
 
     # ── the keyboard ──
     def _row_moved(self, current, _previous) -> None:
-        """The keyboard moved to another row: that row whole in view."""
+        """The keyboard moved to another row: that row whole in view. A drawing that keeps the row the keyboard is on
+        moves no keyboard, and the page stays where it was scrolled."""
         view = self.listing.view()
-        if current.isValid() and view.hasFocus() and current.model() is view.model():
+        if (current.isValid() and view.hasFocus() and current.model() is view.model()
+                and not self.listing.drawing):
             self._row_into_view(view, current)
 
     def _row_into_view(self, view, index) -> None:
@@ -554,28 +654,134 @@ class ValidatePanel(StepPage):
         if held is view and self.isVisible() and view.currentIndex().isValid():
             self._row_into_view(view, view.currentIndex())
 
-    # ── the calibration's run ──
+    # ── the checks' runs ──
+    def _start_band(self) -> None:
+        """The frequency band, on a configuration of its own with the frequency response, the cell chosen loaded on it."""
+        made = self._prepared("band", own=True, chi_mode=True, cell=True)
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(probes.probe_band, cfg, provide_fig_sink=True, on_result=self._made_by("band"),
+                          **arguments)
+
+    def _start_audit(self) -> None:
+        """The audit of the prior in use, on a configuration of its own with the frequency response; it reads no cell."""
+        prior = self.session.inf_prior
+        made = self._prepared("audit", own=True, chi_mode=True) if prior is not None else None
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(probes.probe_mask, cfg, prior, provide_fig_sink=True, on_result=self._made_by("audit"),
+                          **arguments)
+
     def _start_calibration(self) -> None:
-        """The calibration of the posterior in use with the prior in use, at the form's sizes, a seed drawn afresh: the
-        record keeps it, so the calibration can be repeated, and nothing here remembers it."""
+        """The calibration of the posterior in use with the prior in use, at the form's sizes, its seed the form's or,
+        left blank, one drawn afresh: the record keeps it, so the calibration can be repeated, and nothing here
+        remembers it."""
         session = self.session
         if session.posterior is None or session.inf_prior is None:
             return                           # the facts say why, and the button is greyed with them
+        made = self._prepared("calibration")
+        if made is None:
+            return
+        cfg, arguments = made
+        if arguments.get("seed") is None:
+            arguments["seed"] = random.randrange(DRAWN_SEED_BELOW)
+        # The region a narrowed posterior was narrowed to comes off its own network inside the stage.
+        self.dispatch(orchestrator.validate_calibration, cfg, session.posterior, session.inf_prior,
+                      provide_fig_sink=True, on_result=self._made_by("calibration"), **arguments)
+
+    def _start_input_use(self) -> None:
+        """The use of each part of the input by the posterior in use, from its own simulation set."""
+        posterior = self.session.posterior
+        made = self._prepared("input_use") if posterior is not None else None
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(ablation.channel_ablation, cfg, posterior, provide_fig_sink=True,
+                          on_result=self._made_by("input_use"), **arguments)
+
+    def _start_identifiability(self) -> None:
+        """How strongly the posterior in use pins each direction down, read from its record."""
+        posterior = self.session.posterior
+        made = self._prepared("identifiability") if posterior is not None else None
+        if made is not None:
+            cfg, arguments = made
+            self.dispatch(identifiability.identifiability_rotation, cfg, posterior, provide_fig_sink=True,
+                          on_result=self._made_by("identifiability"), **arguments)
+
+    def _prepared(self, key: str, *, own: bool = False, chi_mode=None, cell: bool = False) -> "tuple | None":
+        """What the press of the check ``key`` hands its stage: the configuration (the session's, or with ``own`` one of
+        the check's own in the kind of observation ``chi_mode`` holds, None for the session's, with the cell chosen
+        loaded on it when ``cell``) and the form's arguments with the record's name and note. A rule broken, a bounds
+        file or a cell that cannot be read, is shown as every refusal is, and nothing is handed (None)."""
+        form = self.check_pages[key].form
         try:
-            sizes = check_forms.call_arguments("calibration", self.check_pages["calibration"].form)
+            arguments = check_forms.call_arguments(key, form, slots=self._slots())
         except Refusal as refused:
             self._refusal(refused)
-            return
-        # The region a narrowed posterior was narrowed to comes off its own network inside the stage.
-        self.dispatch(orchestrator.validate_calibration, session.cfg, session.posterior, session.inf_prior,
-                      provide_fig_sink=True, seed=random.randrange(2 ** 31), **sizes)
+            return None
+        if form.names is not None:
+            arguments.update(name=form.names.name_value(), note=form.names.note_value())
+        if not own:
+            return self.session.cfg, arguments
+        picker = check_forms.cell_picker(form)
+        cfg = self._own_config(chi_mode=chi_mode, cell=(picker.selected_path() or "") if cell else None)
+        return None if cfg is None else (cfg, arguments)
+
+    def _own_config(self, *, chi_mode, cell: "str | None"):
+        """A configuration of the check's own, made as the session's was, from the step 1 settings applied and the bounds
+        file in use or the limits typed by hand, on the session configuration's device: with the frequency response
+        ``chi_mode`` (None: as the session's holds it), and the cell file ``cell`` loaded on it (None for none). A
+        refusal is shown as every refusal is, a file that cannot be read as a refusal of its field; None then."""
+        session = self.session
+        held = session.cfg
+        mode = bool(getattr(held, "chi_mode", False)) if chi_mode is None else bool(chi_mode)
+        bounds = (getattr(held, "sources", None) or {}).get("bounds")
+        try:
+            draft = dataclasses.replace(session.draft, chi_mode=mode)
+            made = (draft.make_config(str(bounds), hw=held.hw) if bounds
+                    else draft.make_config(bounds_dicts=_limits_of(held), hw=held.hw))
+        except Refusal as refused:
+            self._refusal(refused)
+            return None
+        except Exception as error:           # noqa: BLE001 -- a file the builder cannot read is said, as a refusal
+            self._refusal(Refusal(BOUNDS_UNREAD_TEXT.format(f"{type(error).__name__}: {error}"), field="bounds"))
+            return None
+        if cell is not None:
+            try:
+                cli.load_and_validate_gt(made, cell)
+            except Refusal as refused:
+                self._refusal(refused)
+                return None
+            except Exception as error:       # noqa: BLE001 -- a cell file that does not parse is said, as a refusal
+                self._refusal(Refusal(CELL_UNREAD_TEXT.format(f"{type(error).__name__}: {error}"), field="cell"))
+                return None
+        return made
+
+    def _made_by(self, key: str):
+        """What a check's run that returned its record does: the name and the note of its form emptied, the name being
+        taken now."""
+        return functools.partial(self._record_made, key)
+
+    def _record_made(self, key: str, _record) -> None:
+        names = self.check_pages[key].form.names
+        if names is not None:
+            names.clear()
+
+    def _check_of(self, fn) -> "str | None":
+        """The check whose stage ``fn`` is, looked up where each stage lives now; None for none."""
+        return next((key for key, (module, name) in _ENGINE.items() if fn is getattr(module, name, None)), None)
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
-        """A check: the posterior's calibration, which writes a calibration record; its run keeps the plan in use and
-        the sizes it was made at, and no settings, which its record holds."""
-        if fn is not orchestrator.validate_calibration:
+        """A check's run: named for its check, writing its one record, in its stages; it keeps the plan in use and the
+        sizes it was made at, and no settings, which its record holds."""
+        key = self._check_of(fn)
+        if key is None:
             return super().run_spec(fn, *args, **kwargs)
-        sizes = {key: kwargs.get(key) for key in ("n_cal", "cal_n_scales")}
-        return RunSpec("Check", _PLACE, name=entry("calibration").name, stop_button=entry("calibration").stop_words,
-                       kinds=("calibration",), plan=self._screen.plan_entry() if self._screen is not None else None,
-                       check={"key": "calibration", "sizes": sizes})
+        return check_forms.check_spec(key, sizes=check_forms.sizes_from_call(key, kwargs),
+                                      plan=self._screen.plan_entry() if self._screen is not None else None)
+
+
+def _limits_of(cfg) -> tuple:
+    """The limits a configuration was made on, as limits typed by hand are handed to make one: each section's names in
+    their order, each with its two ends and no value."""
+    return tuple(OrderedDict((name, (None, tuple(ends))) for name, (_value, ends) in section.items())
+                 for section in (cfg.params_dict, cfg.rescale_params, cfg.force_params_dict))

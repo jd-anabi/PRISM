@@ -15,6 +15,7 @@ from PySide6.QtGui import QFont, QFontInfo
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QScrollArea, QWidget
 
 from core.gui import design, fields, fonts, style
+from core.gui.panels.inference import check_forms
 from core.gui.panels.inference.config_tab import ConfigPanel
 from core.gui.panels.inference.posterior_tab import PosteriorPanel
 from core.gui.panels.inference.prior_tab import PriorPanel
@@ -2934,7 +2935,7 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
     from core.gui import step_facts
     from tests._fixtures import stand_in_list_page, stand_in_table_page
     lifted = ("needs a prior", "needs a model", "the name cannot be used", "a name is needed",
-              "a setting cannot be used", "the last start was refused")
+              "a setting cannot be used", "the last start was refused", "no cell file is chosen")
     for cls, step in ((None, "training"), (stand_in_list_page(), "checks"), (stand_in_table_page(), "infer")):
         window, page = _a_stand_in(tmp_path, cls, step)
         if page.names is not None:
@@ -2961,9 +2962,9 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
 
 def _the_checks_lists_blocks(tmp_path) -> None:
     """The Checks list's own blocks, each in the state that makes it, read beside its main button: no prior, a posterior
-    needed, the prior in use not the posterior's own, a setting blank, each a load or an edit lifts; a check the window
-    cannot run yet, and one a posterior trained without what it reads cannot run, which waiting will not lift; a run
-    live, said alone."""
+    needed, no cell file chosen, the prior in use not the posterior's own, a setting blank, each a load or an edit
+    lifts; a check the window cannot run yet, and one a posterior trained without what it reads cannot run, which
+    waiting will not lift; a run live, said alone."""
     from types import SimpleNamespace
     from core.gui.session import SbiSession
     from tests._fixtures import _nad_cfg, prior_stub
@@ -2984,10 +2985,14 @@ def _the_checks_lists_blocks(tmp_path) -> None:
     cfg = _nad_cfg(chi_mode=True)
     assert beside(SbiSession(), None) == "Cannot start yet: needs a prior."
     assert beside(SbiSession(cfg=cfg, inf_prior=held), "calibration") == "Cannot start yet: needs a posterior."
-    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "band") == (
+    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "timing") == (
         "Cannot start: this check cannot be run from the window yet.")
+    beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "band")
+    check_forms.cell_picker(page.form).restore_key("")
+    page.redraw()
+    assert page.foot.reason.text() == "Cannot start yet: no cell file is chosen."
     assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "identifiability") == (
-        "Cannot start: this check cannot be run from the window yet, and 1 more above.")
+        "Cannot start: the posterior was trained without the rotation.")
     beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "calibration")
     page.form.rows["n_cal"].widget.setText("")
     assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
@@ -3421,8 +3426,11 @@ WALKED_CHECKS = {
                        lambda page, small: [page.foot.check_again]),
     "the calibration open": (_a_check_open("calibration"), _the_check_list_or_back,
                              lambda page: [page.form.rows["n_cal"].widget, page.form.rows["cal_n_scales"].widget],
-                             lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
-    "a check with no setting open": (_a_check_open("band"), _the_check_list_or_back, lambda page: [],
+                             lambda page: [page.form.rows["num_posterior_samples"].widget,
+                                           page.form.rows["seed"].widget],
+                             lambda page: [page.names.name, page.names.note],
+                             lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
+    "a check with no setting open": (_a_check_open("comparison"), _the_check_list_or_back, lambda page: [],
                                      lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),
 }
 

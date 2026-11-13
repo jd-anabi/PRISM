@@ -503,7 +503,11 @@ From Task 3 (the checks' rules, the chain's words and Training's pre-run line), 
    A rename in the engine leaves the window comparing nothing: no frequency-band record or audit counts, and the pair
    is never refused; `tests/test_checks.py` and `tests/test_applied_and_pending.py` call through both. The second
    reads the two priors' mixtures, a copy off the graphics card when they live there, which is why the window asks it
-   only at its reading, never while a run is live. Cure if wanted: make both public in the engine.
+   only at its reading, never while a run is live. Its answer greys the button of two checks, the calibration (4)
+   and the calibration repeated at fixed numbers of driven recordings (9), by the prior's fingerprint as the engine
+   judges the pair (departure 408); from Task 6-7 each greys its own page's button, beside the check's form
+   (`ValidatePanel.facts_from_form`, through `check_lineage.button_facts`). Cure if wanted: make both public in the
+   engine.
 10. **The input-use check's least size is judged on the simulations asked for, beside item 8.** `check_readings`
     judges `body.settings.rows`, the rows the check was asked to read, not `body.results.n_rows`, the rows it read
     (the engine stops at the end of the set). A posterior whose simulation set holds fewer than 200,000 rows, checked

@@ -21,9 +21,9 @@ Three shapes of entry:
   fields, whose rows are labelled by parameter name, or a plan, whose file is what is corrected; the
   sentence quotes the control's own text ("Run on a different observation") and names its places as
   a box's sentence does.
-* ``None`` for a key the window has no control for: the tool-only diagnostics knobs, the three
-  settings the window never exposes (the device and the two sample counts), the name of the observation
-  an inference makes, which no page asks for, and the random seed, which the window draws itself.
+* ``None`` for a key the window has no control for: the device and the samples an inference draws,
+  which the window never exposes; the name of the observation an inference makes, which no page asks
+  for; and the settings of the checks that no check's form offers.
 
 Four settings stand only on the Training page, for its own run: the checkpoint cadence, the resume
 policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
@@ -86,7 +86,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # calibration and inference sizes
     "n_cal": ("checks", "Test datasets"),
     "cal_n_scales": ("checks", "Operating points"),
-    "num_posterior_samples": None,
+    "num_posterior_samples": ("checks", "Samples per dataset"),
     "n_samples": None,
     # the prior sweep
     "num_iterations": ("prior", "Sweep rounds"),
@@ -121,7 +121,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # inputs. ``units`` is NOT widened -- one units control exists in the whole application (the choice of step 1);
     # everywhere else the units file is resolved from the model and there is no control to name.
     "bounds": ("prior", "Bounds file"),
-    "cell": ("infer", "Cell file"),
+    "cell": (("checks", "infer"), "Cell file"),
     "units": ("model", "Units"),
     "model": ("model", "Model"),
     "device": None,
@@ -147,8 +147,9 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # a run plan: the thing to correct is the file, so the sentence names no box
     "plan": "Correct the file, then choose the plan again.",
     "expected_epochs": ("training", "Expected epochs (for the time estimate only)"),
-    # the random seed: the window draws one itself, and no page asks for it
-    "seed": None,
+    # the random seed of a check's run; the probe checks refuse theirs under a key of their own, under the same label,
+    # and no check's form holds both
+    "seed": ("checks", "Seed"),
     # the model builder, in Your own models. The parameter rows repeat per parameter, so the label is
     # the row's own ("value" / "min" / "max") and the message names which parameter.
     "param_value": ("models", "value"),
@@ -161,13 +162,20 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # tau, ...), built per kind, so there is no one label(key) to build a row from.
     "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
                       f"choice, {_in('models')}."),
-    # tool-only: the diagnostics' knobs; no window sentence
-    "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
-    "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,
-    # tool-only: the probe checks run from the command line alone
-    "probe_seed": None, "probe_lengths": None, "probe_multipliers": None, "probe_drives": None,
-    "band_repeats": None, "probe_cycle_caps": None, "cv_max": None, "phase_max": None, "snr_min": None,
-    "sup_min": None, "band_peak_window": None, "mask_num_runs": None, "mask_run_size": None,
+    # the checks' own settings, on each check's form
+    "rows": ("checks", "Simulations read"),
+    "n_sweep": ("checks", "Points per sweep"),
+    "n_worst": ("checks", "Weakest directions totalled"),
+    "top_n": ("checks", "Largest contributions shown"),
+    "probe_seed": ("checks", "Seed"),
+    "probe_lengths": ("checks", "Recording lengths"),
+    "band_repeats": ("checks", "Simulations per point"),
+    "mask_num_runs": ("checks", "Batches to audit"),
+    "mask_run_size": ("checks", "Simulations per batch"),
+    # the checks' settings no form offers yet, and those no form offers: what decides a check's verdict
+    "repeats": None, "n_points": None, "m": None, "m_noise": None, "rel": None, "min_valid": None, "chi_k_fixed": None,
+    "probe_multipliers": None, "probe_drives": None, "probe_cycle_caps": None, "cv_max": None, "phase_max": None,
+    "snr_min": None, "sup_min": None, "band_peak_window": None,
     "drive_t_obs": None, "drive_repeats": None, "drive_detune": None, "drive_strengths": None,
     "free_min": None, "captured_max": None, "drive_peak_window": None, "clarity_min": None,
 }

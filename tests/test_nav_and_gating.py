@@ -1188,10 +1188,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         reworded label, a renamed place or a place moved in a list is seen as a change of what a person
         reads;
     (d) the keys with no window control are exactly the settings the window does not expose (the device, the
-        two sample counts, the name of the observation an inference makes and the random seed), the eleven
-        tool-only diagnostics knobs and the probe checks' knobs, and the settings of the effective temperature
-        and the live simulation, whose pages the window no longer has, so a key with no control renders no window
-        sentence;
+        samples an inference draws and the name of the observation it makes) and the checks' settings no check's
+        form offers, so a key with no control renders no window sentence;
     (e) the three drive labels are built exactly as the Infer tab builds its rows
         (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
         cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built step 5 can find them.
@@ -1298,6 +1296,18 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "observation": "Set it in the 'Observation' box in step 6, Narrowing round.",
         "n_cal": "Set it in the 'Test datasets' box in step 4, Checks.",
         "cal_n_scales": "Set it in the 'Operating points' box in step 4, Checks.",
+        "num_posterior_samples": "Set it in the 'Samples per dataset' box in step 4, Checks.",
+        # the checks' own settings, each on its check's form
+        "rows": "Set it in the 'Simulations read' box in step 4, Checks.",
+        "n_sweep": "Set it in the 'Points per sweep' box in step 4, Checks.",
+        "n_worst": "Set it in the 'Weakest directions totalled' box in step 4, Checks.",
+        "top_n": "Set it in the 'Largest contributions shown' box in step 4, Checks.",
+        "probe_seed": "Set it in the 'Seed' box in step 4, Checks.",
+        "probe_lengths": "Set it in the 'Recording lengths' box in step 4, Checks.",
+        "band_repeats": "Set it in the 'Simulations per point' box in step 4, Checks.",
+        "mask_num_runs": "Set it in the 'Batches to audit' box in step 4, Checks.",
+        "mask_run_size": "Set it in the 'Simulations per batch' box in step 4, Checks.",
+        "seed": "Set it in the 'Seed' box in step 4, Checks.",
         "num_iterations": "Set it in the 'Sweep rounds' box in step 2, Prior.",
         "sweep_batch": "Set it in the 'Candidates per round' box in step 2, Prior.",
         "max_sets": "Set it in the 'Stable sets to collect' box in step 2, Prior.",
@@ -1320,7 +1330,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "artifact": "Select an artifact in the list in Records.",
         "note": "Edit it in the Note box in Records.",
         "bounds": "Set it in the 'Bounds file' box in step 2, Prior.",
-        "cell": "Set it in the 'Cell file' box in step 5, Inference.",
+        "cell": "Set it in the 'Cell file' box in step 4, Checks, or step 5, Inference.",
         "units": "Set it in the 'Units' box in step 1, Model and options.",
         "model": "Set it in the 'Model' box in step 1, Model and options.",
         "prior": "Set it in the 'Saved prior' box in step 2, Prior.",
@@ -1364,14 +1374,13 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # (d) no window control: the settings the window does not expose, and the tool-only set
     assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
-        "device", "n_samples", "num_posterior_samples", "observation_name", "seed",
-        "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
-        "n_sweep", "chi_k_fixed",
-        # the probe checks: command line only
-        "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
-        "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window",
-        "mask_num_runs", "mask_run_size", "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths",
-        "free_min", "captured_max", "drive_peak_window", "clarity_min"}
+        "device", "n_samples", "observation_name",
+        # the checks' settings no form offers yet
+        "repeats", "n_points", "m", "m_noise", "rel", "chi_k_fixed",
+        "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths",
+        # the checks' settings no form offers: what decides a check's verdict
+        "min_valid", "probe_multipliers", "probe_drives", "probe_cycle_caps", "cv_max", "phase_max", "snr_min",
+        "sup_min", "band_peak_window", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
     assert gui_fields.CONTROL["resume_fit"] == "Look at the kept trainings in step 3, Training."
 
     # (e) the drive labels, as the Infer tab builds them
@@ -2833,16 +2842,17 @@ NARROWED_HELD = "From a narrowing round around an observation no longer in Recor
 
 
 def _refusal_keys(*names) -> set:
-    """Every refusal key the stage functions ``names`` of the orchestrator can give before they spend, read off the
-    engine's own text: a key handed as ``field=`` to anything, or as the first argument of a ``require_`` rule, in each
-    function and in every function of the orchestrator or method of the store it calls, and in theirs, as far as the
-    calls go."""
+    """Every refusal key the stage functions ``names`` of the orchestrator or of the diagnostics can give before they
+    spend, read off the engine's own text: a key handed as ``field=`` to anything (a field of None is no key), or as the
+    first argument of a ``require_`` rule, in each function and in every function of those modules or method of the
+    store it calls, and in theirs, as far as the calls go."""
     import ast
     import inspect
     from core import orchestrator
     from core.artifacts import store as store_module
+    from core.diagnostics import ablation, identifiability, probes, sbc
     trees = {}
-    for module in (orchestrator, store_module):
+    for module in (orchestrator, store_module, ablation, identifiability, probes, sbc):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 trees.setdefault(node.name, node)
@@ -2858,7 +2868,8 @@ def _refusal_keys(*names) -> set:
             called = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
             todo.append(called)
             for keyword in node.keywords:
-                if keyword.arg in ("field", "key") and isinstance(keyword.value, ast.Constant):
+                if (keyword.arg in ("field", "key") and isinstance(keyword.value, ast.Constant)
+                        and keyword.value.value is not None):
                     keys.add(keyword.value.value)
             if called.startswith("require_") and node.args and isinstance(node.args[0], ast.Constant):
                 keys.add(node.args[0].value)
@@ -2868,14 +2879,17 @@ def _refusal_keys(*names) -> set:
 def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
     """STANDING. Every refusal key a stage started from the four rebuilt pages can give, read off the engine's own
     text, has a row or a sentence on the page that started it: what a refusal says under its message there is never
-    empty, but for the device, which the window never exposes, and the calibration's samples per dataset, which the
-    window does not hand the stage, whose own usual value it never refuses. The key set read is held to the keys each
-    stage is known to give, so that a walk that reads too little fails here too."""
+    empty, but for the device, which the window never exposes, and the checks' settings no form offers, which a check
+    hands its stage at the stage's own usual value, never refused. The key set read is held to the keys each stage is
+    known to give, so that a walk that reads too little fails here too."""
     from core.gui import fields as gui_fields
     from core.refusals import FIELDS
     built, trained = _refusal_keys("build_prior"), _refusal_keys("build_posterior")
-    calibrated = _refusal_keys("validate_calibration")
-    assert {"n_cal", "cal_n_scales", "num_posterior_samples", "prior", "name"} <= calibrated, sorted(calibrated)
+    checked = _refusal_keys("validate_calibration", "probe_band", "probe_mask", "channel_ablation",
+                            "identifiability_rotation")
+    assert {"n_cal", "cal_n_scales", "num_posterior_samples", "prior", "name", "probe_seed", "band_repeats",
+            "mask_num_runs", "mask_run_size", "rows", "n_sweep", "n_worst", "top_n", "posterior"} <= checked, (
+        sorted(checked))
     assert {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units", "min_cluster_size",
             "min_samples", "name"} <= built, sorted(built)
     assert {"num_runs", "run_size_cap", "checkpoint_every", "hidden_features", "num_transforms", "learning_rate",
@@ -2885,9 +2899,12 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
     from tests._fixtures import step_pages
     assert {step for _file, step in step_pages().values()} == {"model", "prior", "training", "checks"}, (
         "a page whose stage is not read here")
-    for step, keys_ in (("prior", built), ("training", trained), ("checks", calibrated)):
+    # The checks' settings no form offers, each at the stage's own usual value, which the stage never refuses.
+    unoffered = {"cv_max", "snr_min", "sup_min", "phase_max", "band_peak_window", "probe_multipliers", "probe_drives",
+                 "probe_cycle_caps", "chi_k_fixed"}
+    for step, keys_ in (("prior", built), ("training", trained), ("checks", checked)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
-        silent = sorted(key for key in keys_ - unanswered - ({"num_posterior_samples"} if step == "checks" else set())
+        silent = sorted(key for key in keys_ - unanswered - (unoffered if step == "checks" else set())
                         if not gui_fields.fix_sentence(key, here=step))
         assert silent == [], (step, silent)
 
@@ -2961,16 +2978,21 @@ def test_the_gui_control_table_matches_the_tabs_labels():
             return top
         in_sight = [panel for panel in top.panels() if panel.isVisibleTo(top)] if hasattr(top, "panels") else [top]
         assert len(in_sight) == 1, (name, in_sight)
-        if name == "checks":
-            in_sight[0].open_check("calibration")        # its rows stand on its own page
         return in_sight[0]
 
     def read(name) -> list:
-        """The labels shown at the place ``name`` once the window has moved there."""
+        """The labels shown at the place ``name`` once the window has moved there; at Checks, those of each check's
+        form, read on its own page as it opens."""
         panel = at(name)
         if name == "models":
             return shown(panel) + [lab.text() for row in panel.findChildren(LabeledFieldRow)
                                    for lab in row.findChildren(QLabel)]
+        if name == "checks":
+            found = []
+            for key in panel.check_pages:
+                panel.open_check(key)
+                found += shown(panel)
+            return found
         return shown(panel)
 
     tuples = {k: e for k, e in gui_fields.CONTROL.items() if isinstance(e, tuple)}
@@ -3010,6 +3032,10 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         "chi_max_cycles": "Lock-in limit", "reparam_rotate": "Rotation",
         "param_value": "value", "param_min": "min", "param_max": "max", "init": "init", "x_scale": "x_scale (nm)",
         "t_scale": "t_scale (s)",
+        "num_posterior_samples": "Samples per dataset", "rows": "Simulations read", "n_sweep": "Points per sweep",
+        "n_worst": "Weakest directions totalled", "top_n": "Largest contributions shown", "probe_seed": "Seed",
+        "probe_lengths": "Recording lengths", "band_repeats": "Simulations per point",
+        "mask_num_runs": "Batches to audit", "mask_run_size": "Simulations per batch", "seed": "Seed",
     }
     said = {key: text for key, (place, text) in tuples.items()}
     differ = {key: (said.get(key), labels_today.get(key)) for key in sorted(said.keys() | labels_today.keys())

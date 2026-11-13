@@ -1321,7 +1321,7 @@ def test_a_checks_page_reads_name_sentence_state_result_earlier_runs_and_form_in
         assert one.earlier_head.text() == "Earlier runs"
         assert one.earlier.text().split("\n") == [f"Failed, {_said(_at(11, 9, 30))}",
                                                   f"Run at a reduced size, {_said(_at(10, 15, 0))}; does not count"]
-        assert list(one.form.rows) == ["n_cal", "cal_n_scales"]
+        assert list(one.form.rows) == ["n_cal", "cal_n_scales", "num_posterior_samples", "seed", "name", "note"]
         assert [row[:2] for row in one.result.table_words().rows[:3]] == [("k", ""), ("x_scale", "nm"),
                                                                          ("t_scale", "ms")], "the units were not read"
 
@@ -1345,22 +1345,18 @@ _GREYED = {
         "Cannot start yet: needs a prior."),
     "the input use, trained without its simulations": (
         "input_use", dict(simulation=None),
-        [("lock", "This check cannot be run from the window yet."),
-         ("lock", "This posterior was trained without keeping its simulations, and this check reads them.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        [("lock", "This posterior was trained without keeping its simulations, and this check reads them.")],
+        "Cannot start: the posterior was trained without keeping its simulations."),
     "the identifiability, trained without the rotation": (
         "identifiability", dict(rotated=False),
-        [("lock", "This check cannot be run from the window yet."),
-         ("lock", "This posterior was trained without the rotation, so there are no directions to read.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        [("lock", "This posterior was trained without the rotation, so there are no directions to read.")],
+        "Cannot start: the posterior was trained without the rotation."),
     "the frequency band without the frequency response": (
-        "band", dict(chi=False), [("lock", "This check cannot be run from the window yet."),
-                                  ("lock", "Applies only with the frequency response.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "band", dict(chi=False), [("lock", "Applies only with the frequency response.")],
+        "Cannot start: it applies only with the frequency response."),
     "the audit without the frequency response": (
-        "audit", dict(chi=False), [("lock", "This check cannot be run from the window yet."),
-                                   ("lock", "Applies only with the frequency response.")],
-        "Cannot start: this check cannot be run from the window yet, and 1 more above."),
+        "audit", dict(chi=False), [("lock", "Applies only with the frequency response.")],
+        "Cannot start: it applies only with the frequency response."),
     "what the observations pin down, of another model": (
         "pin_down", dict(nadrowski=False), [("lock", "This check cannot be run from the window yet."),
                                             ("lock", "Applies only to the Nadrowski model.")],
@@ -2414,7 +2410,8 @@ def test_a_checks_run_hands_its_plan_and_no_settings(tmp_path, monkeypatch):
             "Check", ("inference", "checks"), "Calibration", "Stop the calibration…", ("calibration",))
         assert spec.plan == {"kind": "prior", "id": PRIOR, "name": "retrain_prior"} == screen.plan_entry()
         assert spec.settings is None
-        assert spec.check == {"key": "calibration", "sizes": {"n_cal": 2500, "cal_n_scales": 200}}
+        assert spec.check == {"key": "calibration", "sizes": {"n_cal": 2500, "cal_n_scales": 200,
+                                                              "num_posterior_samples": 1000}}
         page._main_clicked()
         assert seen["kwargs"]["seed"] == 77, "the seed of the press before was handed again"
 
@@ -2715,3 +2712,490 @@ def test_the_checks_lists_walk_run_alone_ends_its_process_cleanly(tmp_path):
     assert code == 0, (f"the process ended with 0x{code:08X}" + (", a corrupted heap" if code == 0xC0000374 else ""),
                        child.stdout[-2000:], child.stderr[-2000:])
     assert "1 passed" in child.stdout, child.stdout[-2000:]
+
+
+# ── the forms and runs of the checks ──
+#: The cell file a check that reads one is given, in the model's own folder: one that loads on the master bounds file.
+CELL_KEY = "master_spont.txt"
+#: What a dispatch is handed that is the controller's and no argument of the stage.
+_CONTROLLERS = ("spec", "host", "on_result", "provide_fig_sink", "provide_stream", "on_chunk", "watch_dir")
+#: Each check whose form is built: its stage by the module that holds it and its name there, and what the stage is
+#: handed at the form's usual values (the calibration's seed, left blank, drawn) and at changed ones, each by the
+#: stage's own name, the cell typed and the name and note as a press hands them.
+_HANDED = {
+    "band": (("core.diagnostics.probes", "probe_band"), {"lengths": None, "repeats": 24, "seed": 0},
+             {"probe_lengths": "1, 2.5", "band_repeats": "30", "probe_seed": "7"},
+             {"lengths": [1.0, 2.5], "repeats": 30, "seed": 7}),
+    "audit": (("core.diagnostics.probes", "probe_mask"), {"num_runs": 100, "run_size": 32, "seed": 0},
+              {"mask_num_runs": "120", "mask_run_size": "16", "probe_seed": "3"},
+              {"num_runs": 120, "run_size": 16, "seed": 3}),
+    "calibration": (("core.orchestrator", "validate_calibration"),
+                    {"n_cal": 2000, "cal_n_scales": 200, "num_posterior_samples": 1000, "seed": 1840273},
+                    {"n_cal": "2500", "cal_n_scales": "150", "num_posterior_samples": "500", "seed": "11"},
+                    {"n_cal": 2500, "cal_n_scales": 150, "num_posterior_samples": 500, "seed": 11}),
+    "input_use": (("core.diagnostics.ablation", "channel_ablation"), {"rows": 200_000, "n_sweep": 33},
+                  {"rows": "1000", "n_sweep": "5"}, {"rows": 1000, "n_sweep": 5}),
+    "identifiability": (("core.diagnostics.identifiability", "identifiability_rotation"), {"n_worst": 3, "top_n": 4},
+                        {"n_worst": "2", "top_n": "6"}, {"n_worst": 2, "top_n": 6}),
+}
+
+
+def _engine(where):
+    import importlib
+    module, name = where
+    return getattr(importlib.import_module(module), name)
+
+
+def _ready(page, key) -> None:
+    """The check ``key`` open, its form at its usual values but a cell chosen where it reads one."""
+    from core.gui.panels.inference import check_forms
+    page.open_check(key)
+    picker = check_forms.cell_picker(page.check_pages[key].form)
+    if picker is not None:
+        picker.restore_key(CELL_KEY)
+    page.redraw()
+
+
+def _tripwire(monkeypatch) -> dict:
+    """The run controller's start, recording what it is handed and starting nothing."""
+    from core.gui.run.controller import RunController
+    seen = {"calls": 0}
+
+    def started(held, fn, *args, **kwargs):
+        seen.update(fn=fn, args=args, kwargs=kwargs, calls=seen["calls"] + 1)
+        return True
+    monkeypatch.setattr(RunController, "dispatch", started)
+    return seen
+
+
+@pytest.mark.parametrize("key", list(_HANDED))
+def test_each_deciding_check_hands_its_stage_the_forms_arguments(key, tmp_path, monkeypatch):
+    """A press of a deciding check hands its own stage, by the stage's own names, what its form holds: at the usual
+    values and at changed ones, with the record's name and note, the figures' sink asked for, and the configuration,
+    the posterior and the prior as the stage takes them; no setting of the engine is written."""
+    import random
+    from core import config
+    seen = _tripwire(monkeypatch)
+    monkeypatch.setattr(random, "randrange", lambda top: 1840273 if top == 2 ** 31 else 0)
+    where, usual, typed, changed = _HANDED[key]
+    settings = {name: repr(value) for name, value in vars(config).items() if name.isupper()}
+    with _checks_page(tmp_path, simulation=SET) as (_window, screen, page, _store):
+        session = screen.session
+        _ready(page, key)
+        for values, wanted in ((None, usual), (typed, changed)):
+            form = page.check_pages[key].form
+            if values is not None:
+                for setting, text in values.items():
+                    form.rows[setting].widget.setText(text)
+                form.names.name.setText("a_check")
+                form.names.note.setText("why it was run")
+            page._main_clicked()
+            assert seen["fn"] is _engine(where), (key, seen.get("fn"))
+            handed = {name: value for name, value in seen["kwargs"].items() if name not in _CONTROLLERS}
+            named = ("a_check", "why it was run") if values is not None else ("", "")
+            assert handed == {**wanted, "name": named[0], "note": named[1]}, (key, handed)
+            assert seen["kwargs"]["provide_fig_sink"] is True
+            given = {"band": 1, "audit": 2, "calibration": 3, "input_use": 2, "identifiability": 2}[key]
+            assert len(seen["args"]) == given, seen["args"]
+            if key in ("band", "audit"):
+                assert seen["args"][0] is not session.cfg and seen["args"][0].chi_mode is True
+            else:
+                assert seen["args"][0] is session.cfg
+            assert seen["args"][1:] == {"band": (), "audit": (session.inf_prior,),
+                                        "calibration": (session.posterior, session.inf_prior),
+                                        "input_use": (session.posterior,),
+                                        "identifiability": (session.posterior,)}[key]
+    assert {name: repr(value) for name, value in vars(config).items() if name.isupper()} == settings
+
+
+@pytest.mark.parametrize("limits", ["a bounds file", "limits typed by hand"])
+def test_a_check_builds_its_own_configuration_and_never_writes_the_sessions(limits, tmp_path, monkeypatch):
+    """The frequency band and the audit run on a configuration of their own, made as the session's was, from the step 1
+    settings applied and the bounds file in use or the limits typed by hand, with the frequency response, on the
+    session configuration's device: the band's cell is loaded on it alone, the audit's holds none, and the session's
+    configuration is as it was."""
+    from collections import OrderedDict
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        held = screen.session.cfg
+        if limits == "limits typed by hand":
+            held = screen.session.draft.make_config(bounds_dicts=tuple(
+                OrderedDict((name, (None, ends)) for name, (_value, ends) in section.items())
+                for section in (held.params_dict, held.rescale_params, held.force_params_dict)), hw=held.hw)
+            screen.session.cfg = held
+            assert "bounds" not in held.sources
+        before = {name: repr(getattr(held, name)) for name in (
+            "sources", "params_dict", "rescale_params", "force_params_dict", "chi_mode", "T_obs")}
+        for key in ("band", "audit"):
+            _ready(page, key)
+            page._main_clicked()
+            made = seen["args"][0]
+            assert made is not held and made.chi_mode is True and made.hw.device == held.hw.device, key
+            assert [(name, ends) for name, (_v, ends) in made.params_dict.items()] == [
+                (name, ends) for name, (_v, ends) in held.params_dict.items()], key
+            assert made.sources.get("bounds") == held.sources.get("bounds"), key
+            assert (made.sources.get("cell") is not None) == (key == "band"), (key, made.sources)
+        assert {name: repr(getattr(held, name)) for name in before} == before
+
+
+def test_the_calibrations_seed_left_blank_is_drawn_and_named_in_its_result(tmp_path, monkeypatch):
+    """The calibration's seed opens blank: a press draws one afresh and hands it, so that its record names it, and the
+    next press draws another; a seed typed is handed as typed."""
+    import random
+    seen = _tripwire(monkeypatch)
+    drawn = iter((1840273, 77))
+    monkeypatch.setattr(random, "randrange", lambda top: next(drawn) if top == 2 ** 31 else 0)
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        _ready(page, "calibration")
+        assert page.form.rows["seed"].widget.text() == "" and page.form.rows["seed"].at_usual()
+        page._main_clicked()
+        assert seen["kwargs"]["seed"] == 1840273
+        page._main_clicked()
+        assert seen["kwargs"]["seed"] == 77
+        page.form.rows["seed"].widget.setText("5")
+        page._main_clicked()
+        assert seen["kwargs"]["seed"] == 5
+    region = check_results_block(tmp_path, seed=1840273)
+    assert ", seed 1840273" in region, region
+
+
+def check_results_block(tmp_path, *, seed) -> str:
+    """The verdict of a calibration's result whose record holds ``seed``."""
+    from core.gui.check_readings import verdict_sentence
+    return verdict_sentence("calibration", {"body": {"results": _calibration_of(["k"], ks=[0.5], seed=seed)}})
+
+
+#: Every number of the deciding checks' forms that a rule holds, with what it is typed as, the line under its field and
+#: what a press would be refused with: blank, below its least and, for a seed, beyond the one rule of a seed.
+_BROKEN = [(key, one.setting, text) for key in _HANDED for one in __import__(
+    "core.gui.panels.inference.check_forms", fromlist=["FORMS"]).FORMS.get(key, ())
+    if one.kind in ("whole", "seed", "blank_seed") for text in (("", "-1", str(2 ** 64)) if "seed" in one.kind
+                                                                 else ("", "0" if one.least <= 1 else "1"))
+    if not (one.kind == "blank_seed" and text == "")]
+
+
+@pytest.mark.parametrize("key, setting, text", _BROKEN, ids=[f"{key}-{setting}-{text or 'blank'}"
+                                                             for key, setting, text in _BROKEN])
+def test_a_blank_or_bad_number_is_said_under_its_field_and_blocks(key, setting, text, tmp_path, monkeypatch):
+    """A number of a check's form that is blank or breaks its stage's rule is said under its field in the window's
+    words, from its row's label, the rule decided by the stage's own (``require_at_least``, ``require_seed``); the
+    button is greyed "Cannot start yet: a setting cannot be used."; a press dispatches nothing, and a start reached all
+    the same is refused in the stage's own sentence under the field's key."""
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference import check_forms
+    from core.rng import SEED_MAX
+    seen = _tripwire(monkeypatch)
+    refused = []
+    with _checks_page(tmp_path, simulation=SET) as (_window, _screen, page, _store):
+        _ready(page, key)
+        one = next(row for row in check_forms.FORMS[key] if row.setting == setting)
+        row = page.form.rows[setting]
+        row.widget.setText(text)
+        page.redraw()
+        label = gui_fields.label(setting)
+        line = (f"{label} is blank." if not text else f"{label} must be a whole number from 0 to {SEED_MAX}."
+                if "seed" in one.kind else f"{label} must be at least {one.least}.")
+        assert (row.line.kind, row.line.words) == ("err", line), (row.line.kind, row.line.words)
+        assert not page.foot.main_button.isEnabled()
+        assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
+        page._main_clicked()
+        assert seen["calls"] == 0
+        page._refusal = refused.append
+        getattr(page, f"_start_{key}")()
+        assert seen["calls"] == 0 and len(refused) == 1 and refused[0].field == setting, refused
+        assert refused[0].message != line and refused[0].message.startswith("The "), refused[0].message
+
+
+#: What "Before you start" says of each deciding check at its usual sizes, after its time and with the memory lines
+#: where the check simulates on the graphics card.
+_COUNTS = {"band": "Simulates 24 recordings at each recording length and frequency of the band: five lengths chosen "
+                   "for this cell.",
+           "audit": "Simulates 100 batches of 32, as training would: 3,200 simulations.",
+           "calibration": "Simulates 200 batches, holding 2,000 test datasets, then draws 1,000 samples for each.",
+           "input_use": "Reads records and simulates nothing; takes seconds.",
+           "identifiability": "Reads records and simulates nothing; takes seconds."}
+
+
+@pytest.mark.parametrize("key", list(_COUNTS))
+def test_before_you_start_says_the_counts_the_time_the_memory_and_what_is_written(key):
+    """In its order: what the run simulates or reads, in counts; how long it took here last at these sizes, or that it
+    was not timed here; the memory limit and the last run, for a check that simulates on the card and for no other;
+    that nothing else can run meanwhile; and the one record it writes."""
+    from core.gui.panels.inference import check_forms
+    sizes = {one.setting: one.usual for one in check_forms.FORMS[key] if one.kind not in check_forms.NOT_SIZES}
+    memory = ("Memory limit: none.", "The last run on this computer ran with no limit.")
+    said = check_forms.before_you_start(key, sizes=sizes, last=None, memory=memory)
+    card = key in ("band", "audit", "calibration")
+    assert [(fact.kind, fact.sentence) for fact in said] == [
+        ("info", _COUNTS[key]), ("info", "Not timed on this computer yet."),
+        *([("info", " ".join(memory))] if card else []),
+        ("info", "Nothing else can run until it ends."), ("info", "One record, under Records.")]
+    last = {"check": {"key": key, "sizes": sizes, "seconds": 43 * 60 + 20}}
+    assert check_forms.before_you_start(key, sizes=sizes, last=last, memory=())[1].sentence == (
+        "Took 43 minutes here last time at these sizes.")
+    if key == "band":
+        typed = check_forms.before_you_start(key, sizes={**sizes, "probe_lengths": [1.0, 2.0, 3.0]}, last=None,
+                                             memory=())
+        assert typed[0].sentence == ("Simulates 24 recordings at each recording length and frequency of the band: 3 "
+                                     "recording lengths.")
+
+
+def test_a_checks_time_is_this_computers_own_from_the_history(tmp_path, monkeypatch):
+    """How long a check took is read from this computer's finished runs of it, held from the page's reading: two runs at
+    two sizes on this computer, and the form edited from one to the other, says each its own time, reading nothing at
+    the edit; at a third size, and for a run on another computer only, it was not timed here."""
+    from core.gui.memory_limit import computer
+    from core.gui.run import history
+    from tests._fixtures import readings_of_a_run
+    here = computer()
+
+    def ran(at, n_cal, seconds, on):
+        history.write(tmp_path / "runs", {
+            "id": f"2026100812000{at}-check", "word": "Check", "name": "Calibration", "place": ["inference", "checks"],
+            "records_root": str(tmp_path / "Artifacts"), "started": _at(8, 12, at), "ended": _at(8, 13, at),
+            "outcome": "finished", "memory_limit": {"gib": None, "source": "none", "computer": on},
+            "check": {"key": "calibration", "sizes": {"n_cal": n_cal, "cal_n_scales": 200,
+                                                      "num_posterior_samples": 1000}, "seconds": seconds}})
+
+    ran(1, 2000, 43 * 60, here)
+    ran(2, 1000, 20 * 60, here)
+    ran(3, 3000, 90 * 60, "another computer")
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        page.open_check("calibration")
+        page.read_facts()
+
+        def time_said():
+            return next(fact.sentence for fact in page.facts_from_form()
+                        if "here last time" in fact.sentence or fact.sentence.startswith("Not timed"))
+
+        assert time_said() == "Took 43 minutes here last time at these sizes."
+        calls = readings_of_a_run(monkeypatch)
+        page.form.rows["n_cal"].widget.setText("1000")
+        assert time_said() == "Took 20 minutes here last time at these sizes."
+        page.form.rows["n_cal"].widget.setText("3000")
+        assert time_said() == "Not timed on this computer yet."
+        page.form.rows["n_cal"].widget.setText("1500")
+        assert time_said() == "Not timed on this computer yet."
+        _settle()
+        assert calls == [], calls
+
+
+def test_the_input_use_refusals_are_shown_as_refusals_naming_the_saved_posterior(tmp_path, monkeypatch):
+    """A refusal the input-use check gives under the posterior's key is shown as every refusal is: "Check your inputs",
+    the engine's sentence, and where to fix it, "Saved posterior" in step 3; the run's page says no failure, and the
+    check's state is as it was."""
+    from core.diagnostics import ablation
+    from core.refusals import Refusal
+    from tests._dialogs import asked
+    from tests._runs import StandIn, turn_until
+    sentence = "Posterior 'retrain' names no simulation cache, so checkpointing was off for its training run."
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(ablation, "channel_ablation", stand_in)
+    app = qt_app()
+    with _checks_page(tmp_path, simulation=SET) as (_window, screen, page, _store):
+        before = _row(screen.check_rows(), "input_use").state
+        _ready(page, "input_use")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.fail(Refusal(sentence, field="posterior"))
+        turn_until(app, lambda: not controller().is_live())
+        _settle()
+        box = asked()
+        assert (box.kind, box.title, box.sentence, box.beneath) == (
+            "refusal", "Check your inputs", sentence, "Set it in 'Saved posterior' in step 3, Training.")
+        assert controller().status.outcome is None, "the refusal was told as a failed run"
+        page.read_facts()
+        assert _row(screen.check_rows(), "input_use").state == before
+
+
+@pytest.mark.parametrize("ending", ["refused", "failed", "stopped", "pressed twice"])
+def test_a_check_that_ends_any_way_but_well_leaves_the_state_as_it_was(ending, tmp_path, monkeypatch):
+    """A check refused, failed or stopped, or pressed twice as it starts, keeps nothing and starts no second run: one
+    dispatch, no record written, its row's state and the headline as they were."""
+    from core import orchestrator
+    from core.refusals import Refusal
+    from tests._dialogs import answer_in_turn
+    from tests._runs import StandIn, turn_until
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
+    app = qt_app()
+    with _checks_page(tmp_path) as (_window, screen, page, store):
+        before = (_row(screen.check_rows(), "calibration").state, screen.checks_summary().headline)
+        _ready(page, "calibration")
+        page._main_clicked()
+        if ending == "pressed twice":
+            page._main_clicked()
+        assert stand_in.started.wait(5)
+        if ending == "refused":
+            stand_in.fail(Refusal("The number of calibration datasets must be at least 1; got 0.", field="n_cal"))
+        elif ending == "failed":
+            stand_in.fail(RuntimeError("the simulation broke"))
+        elif ending == "stopped":
+            answer_in_turn(monkeypatch, ("Stop and discard it", None))
+            page.run_view.stop_button.click()
+        else:
+            stand_in.release()
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        _settle()
+        page.read_facts()
+        assert len(stand_in.calls) == 1, stand_in.calls
+        assert [summary.id for summary in store.list("calibration")] == []
+        assert (_row(screen.check_rows(), "calibration").state, screen.checks_summary().headline) == before
+
+
+@pytest.mark.parametrize("key, words", [("calibration", "Stop the calibration"), ("audit", "Stop the audit"),
+                                        ("band", "Stop this check")])
+def test_a_checks_stop_asks_with_keep_it_running_preselected(key, words):
+    """A check's stop asks its own question: its title the stop button's words asked, that a check writes its record
+    only when it finishes, "Keep it running" the safe answer, and "Stop and discard it" drawn as losing work."""
+    from core.gui.panels.inference import check_forms
+    from core.gui.run import questions
+    from core.gui.run.model import RunModel
+    spec = check_forms.check_spec(key, sizes={})
+    assert spec.stop_button == f"{words}…"
+    asked = questions.stop_question(None, RunModel(spec, clock=lambda: _at(8)))
+    assert (asked.title, asked.sentence, asked.safe, asked.other, asked.loses_work) == (
+        f"{words}?", "A check writes its record only when it finishes, so nothing of this one is kept.",
+        "Keep it running", "Stop and discard it", True)
+
+
+def test_the_calibrations_stages_begin_at_their_lines():
+    """The calibration's four stages begin at their lines, in order: its test datasets simulated from the start and
+    counted by the bar of the simulation, the rank test at the line that ends it, the joint coverage test and the
+    saving at the readings that begin them; every other check has one stage, "Measuring"."""
+    from core.gui import vt
+    from core.gui.panels.inference import check_forms
+    from core.gui.run.model import RunModel
+    from tests._runs import CALIBRATION_LINES
+    model = RunModel(check_forms.check_spec("calibration", sizes={}), clock=lambda: _at(8))
+    frame, *lines = CALIBRATION_LINES
+    model.rows([vt.parse_bar(("err", 0), 0, frame)])
+    began = [model.stage]
+    assert model.doing() == "Simulating, batch 3 of 10", model.doing()
+    for line in lines:
+        model.feed([(line, "info")])
+        began.append(model.stage)
+    assert began == ["Simulating the test datasets", "Rank test", "Joint coverage test", "Saving"], began
+    assert [stage.name for stage in check_forms.check_spec("band", sizes={}).stages] == ["Measuring"]
+
+
+def test_every_check_form_row_is_named_from_the_control_table(tmp_path):
+    """STANDING. Every row of every check's form whose setting the table of controls names is labelled with that key's
+    one label, but a row that hands a label of its own, which no key of the table holds (a check's own "Epochs"); read
+    on each check's page as it opens."""
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference import check_forms
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        for key, rows in check_forms.FORMS.items():
+            page.open_check(key)
+            for one in rows:
+                said = page.form.rows[one.setting].label_text()
+                if one.label is None:
+                    assert said == gui_fields.label(one.setting), (key, one.setting, said)
+                else:
+                    assert not isinstance(gui_fields.CONTROL.get(one.setting), tuple), (key, one.setting)
+                    assert said == one.label, (key, one.setting, said)
+
+
+def test_the_check_forms_remember_nothing(tmp_path, monkeypatch):
+    """STANDING. A check's form keeps nothing between launches: every form edited and a check run, the window closed
+    and built again, each row of each check opens at its usual value, and nothing of a check is written."""
+    from PySide6.QtCore import QSettings
+    from core import orchestrator
+    from core.gui.panels.inference import check_forms
+    from tests._runs import StandIn, turn_until
+    written = []
+    real = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda held, key, value: (written.append(key), real(held, key, value)))
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
+    app = qt_app()
+    with _checks_page(tmp_path / "untouched") as (window, _screen, page, _store):
+        window._save_state()
+    untouched, written[:] = set(written), []
+    with _checks_page(tmp_path) as (window, _screen, page, _store):
+        for key, rows in check_forms.FORMS.items():
+            page.open_check(key)
+            for one in rows:
+                widget = page.form.rows[one.setting].widget
+                if hasattr(widget, "setText"):
+                    widget.setText("7")
+            page.form.names.name.setText("kept_nowhere")
+        page.open_check("calibration")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        stand_in.release()
+        turn_until(app, lambda: not controller().is_live())
+        window._save_state()
+    with _checks_page(tmp_path / "again") as (_window, _screen, page, _store):
+        for key, rows in check_forms.FORMS.items():
+            form = page.check_pages[key].form
+            assert [(one.setting, form.rows[one.setting].at_usual()) for one in rows if one.kind != "cell"] == [
+                (one.setting, True) for one in rows if one.kind != "cell"], key
+            assert form.names.name_value() == "" and form.names.note_value() == "", key
+    assert set(written) <= untouched, sorted(set(written) - untouched)
+
+
+def test_every_check_form_row_is_a_keyword_of_the_function_its_check_starts(tmp_path, monkeypatch):
+    """STANDING. Each row of a check's form hands the stage its check's start dispatches a keyword that stage takes, by
+    the stage's own name for it: read off that function's signature, a row's argument, or its setting where the stage
+    names it so, is a parameter passed by its keyword; a cell file is no argument, loaded on the check's own
+    configuration. Each check's press is followed to the function it dispatches."""
+    import inspect
+    from core.gui.panels.inference import check_forms
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path, simulation=SET) as (_window, _screen, page, _store):
+        for key, rows in check_forms.FORMS.items():
+            seen.pop("fn", None)
+            _ready(page, key)
+            page._main_clicked()
+            assert "fn" in seen, (key, page.foot.reason.text())
+            taken = inspect.signature(seen["fn"]).parameters
+            for one in rows:
+                if one.kind == "cell":
+                    assert one.argument == "" and one.setting not in seen["kwargs"], key
+                    continue
+                name = one.argument or one.setting
+                assert name in taken and taken[name].kind in (inspect.Parameter.KEYWORD_ONLY,
+                                                              inspect.Parameter.POSITIONAL_OR_KEYWORD), (key, name)
+                assert name in seen["kwargs"], (key, name)
+
+
+def test_a_drawing_of_the_list_never_scrolls_the_page(tmp_path):
+    """The list keeps the row the keyboard is on through a drawing, and a drawing never scrolls the page: the page left
+    where the person scrolled it with the wheel, the row the keyboard is on out of sight, stays there through every
+    drawing and reading; a move of the keyboard brings its row into view."""
+    from PySide6.QtTest import QTest
+    from tests._window_helpers import in_front
+    with _checks_page(tmp_path, size=(900, 600)) as (window, _screen, page, _store):
+        view, bar = page.listing.view(), page.scroller.verticalScrollBar()
+        assert bar.maximum() > 0, "the page does not scroll at this size"
+        with in_front(window):
+            view.setFocus(Qt.TabFocusReason)
+            view.setCurrentIndex(view.model().index(page.listing.row_of["drive_study"], 0))
+            _settle()
+            bar.setValue(0)
+            _settle()
+            for redraw in (page.refresh_local_gates, page.read_facts, page.redraw):
+                redraw()
+                _settle()
+                assert bar.value() == 0, (redraw.__name__, bar.value())
+                assert view.currentIndex().row() == page.listing.row_of["drive_study"], redraw.__name__
+            QTest.keyClick(view, Qt.Key_Up)
+            _settle()
+            assert bar.value() > 0, "a move of the keyboard left its row out of view"
+
+
+def test_a_drafts_configuration_is_made_for_the_device_handed_and_else_as_before(monkeypatch):
+    """The settings of step 1 make a configuration for the device a caller hands, as a check's own is made on the
+    session configuration's; a caller that hands none, as every other does, leaves the device to the builder's own
+    choice, as before."""
+    from core import cli
+    from core.gui.session import ConfigDraft
+    handed = []
+    monkeypatch.setattr(cli, "make_sim_config", lambda *args, **kwargs: handed.append(kwargs.get("hw", "none")))
+    draft = ConfigDraft(model="NADROWSKI", labels=["x"], state_dep_drift=False)
+    draft.make_config("bounds.txt")
+    draft.make_config(bounds_dicts=({}, {}, {}))
+    draft.make_config("bounds.txt", hw="the card")
+    assert handed == [None, None, "the card"], handed

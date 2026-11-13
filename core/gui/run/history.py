@@ -326,16 +326,34 @@ def last_check(folder: Path, *, check: str, sizes: dict, computer: str) -> dict 
     """The newest run in ``folder`` of the check whose key is ``check`` that finished, at ``sizes`` (as its page hands
     them; compared made plain) and on the computer ``computer``, or None. A file that names no computer, or no check,
     is passed over, and every file is when ``computer`` is ""."""
+    return check_at(checks_on(folder, computer=computer), check=check, sizes=sizes)
+
+
+def checks_on(folder: Path, *, computer: str) -> list[dict]:
+    """Every run in ``folder`` of a check that finished on the computer ``computer``, oldest first: what a check's page
+    holds to say how long a check took at any sizes with no reading at each edit. A file that names no computer, or no
+    check, is passed over, and every file is when ``computer`` is ""."""
     if not computer:
-        return None
+        return []
+    return [record for record in _records(folder) if _a_check_finished_on(record, computer)]
+
+
+def check_at(runs, *, check: str, sizes: dict) -> dict | None:
+    """The newest of ``runs``, as ``checks_on`` gives them, of the check whose key is ``check`` at ``sizes`` (as its
+    page hands them; compared made plain), or None. Reads nothing."""
     wanted = plain(sizes)
-    for record in reversed(_records(folder)):
-        held, limit = record.get("check"), record.get("memory_limit")
-        if (isinstance(held, dict) and held.get("key") == check and held.get("sizes") == wanted
-                and record.get("outcome") == "finished" and isinstance(limit, dict)
-                and limit.get("computer") == computer):
+    for record in reversed(list(runs)):
+        held = record.get("check") if isinstance(record, dict) else None
+        if isinstance(held, dict) and held.get("key") == check and held.get("sizes") == wanted:
             return record
     return None
+
+
+def _a_check_finished_on(record: dict, computer: str) -> bool:
+    """Whether ``record`` is a check's run that finished on the computer ``computer``."""
+    held, limit = record.get("check"), record.get("memory_limit")
+    return (isinstance(held, dict) and record.get("outcome") == "finished" and isinstance(limit, dict)
+            and limit.get("computer") == computer)
 
 
 def runs_for(folder: Path, simulation_set: str) -> list[dict]:

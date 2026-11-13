@@ -124,6 +124,8 @@ _LINES = {
                           "epochs of this training are not all said.",
     "text_file_broken": "The run's text file could not be written (OSError: [Errno 28] No space left on device); the "
                         "full text is still on the page.",
+    "sbc_uniformity": "SBC uniformity checks:",
+    "tarp_atc": "TARP: ATC=0.0123  KS p=0.512",
 }
 # One line of each of the rows ``_other_rows`` adds: a run of another kind than a training, whose stages begin and
 # are counted by lines of its own, and one of whose lines leaves out the stage in progress.
@@ -1425,7 +1427,12 @@ _DISPATCHES = {("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchest
                ("core/gui/panels/inference/posterior_tab.py", "PosteriorPanel", "orchestrator.build_posterior"),
                ("core/gui/panels/inference/prior_tab.py", "PriorPanel", "orchestrator.build_prior"),
                ("core/gui/panels/inference/tsnpe_tab.py", "TSNPEPanel", "orchestrator.tsnpe_round"),
-               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "orchestrator.validate_calibration")}
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "orchestrator.validate_calibration"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_band"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_mask"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "ablation.channel_ablation"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel",
+                "identifiability.identifiability_rotation")}
 
 
 def _entries(path) -> list:
@@ -1787,9 +1794,14 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     run's places are the window's own."""
     import ast
     from core import config, orchestrator
+    from core.diagnostics import ablation, identifiability, probes
+    from core.gui.panels.inference import check_forms
+    from core.gui.run.model import Stage
     from tests import _runs
     from tests._fixtures import build_window, qt_app
     qt_app()
+    entry_of = {"calibration": "calibration", "frequency band": "band", "audit": "audit", "input use": "input_use",
+                "identifiability": "identifiability"}
     found, forwards = set(), []
     for path in sorted((REPO / "core" / "gui").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1829,6 +1841,16 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "calibration": (inference.validate_panel, orchestrator.validate_calibration, (cfg, None, None), {},
                         ("Check", ("inference", "checks"), "Stop the calibration…", ("calibration",), no, yes, no,
                          yes)),
+        "frequency band": (inference.validate_panel, probes.probe_band, (cfg,), {},
+                           ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no,
+                            yes)),
+        "audit": (inference.validate_panel, probes.probe_mask, (cfg, None), {},
+                  ("Check", ("inference", "checks"), "Stop the audit…", ("diagnostic",), no, yes, no, yes)),
+        "input use": (inference.validate_panel, ablation.channel_ablation, (cfg, None), {},
+                      ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no, yes)),
+        "identifiability": (inference.validate_panel, identifiability.identifiability_rotation, (cfg, None), {},
+                            ("Check", ("inference", "checks"), "Stop this check…", ("diagnostic",), no, yes, no,
+                             yes)),
         "inference, simulated": (inference.infer_panel, orchestrator.simulated_inference, (cfg, None, 1.5), {},
                                  ("Inference", ("inference", "infer"), "Stop the inference…",
                                   ("observation", "inference"), no, yes, no, yes)),
@@ -1847,7 +1869,10 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         assert spec.expected_epochs is None and spec.fn is None, kind
         trains = kind in ("training", "narrowing round")
         assert (spec.simulation_set, spec.stages == _TRAINING) == (trains, trains), kind
-        if not trains:
+        if spec.word == "Check":
+            stages = check_forms.CALIBRATION_STAGES if kind == "calibration" else (Stage(check_forms.MEASURING),)
+            assert (spec.stages, spec.facts, spec.check["key"]) == (stages, {}, entry_of[kind]), kind
+        elif not trains:
             assert (spec.stages, spec.facts) == ((), {}), kind
         assert not spec.own_view and spec.records == (), kind
     assert specs["calibration"].name == "Calibration"

@@ -63,7 +63,7 @@ _OTHERS = {
     "Prior build": ("Stop the prior build?",
                     "Nothing of the prior is kept; it is built again from the start next time.",
                     "Keep building", "Stop the build"),
-    "Check": ("Stop the calibration?", "A check writes its record only when it finishes, so nothing of this one is "
+    "Check": ("Stop this check?", "A check writes its record only when it finishes, so nothing of this one is "
               "kept.", "Keep it running", "Stop and discard it"),
     "Inference": ("Stop the inference?", "The inference is not kept. An observation it has already written stays in "
                   "Records.", "Keep it running", "Stop the inference"),
@@ -92,8 +92,19 @@ def stop_question(status, model) -> "Question | None":
         return None
     if spec.word in TRAINING_WORDS:
         return _training_question(spec, model)
+    if spec.word == "Check":
+        return check_stop_question(spec)
     title, kept, safe, other = _OTHERS.get(spec.word, _ANY)
     return Question(title, _kept(spec, kept), "", safe, other, True)
+
+
+def check_stop_question(spec) -> Question:
+    """The question a check's stop button asks: its title the button's own words asked ("Stop the audit?"), that a
+    check writes its record only when it finishes, "Keep it running" the safe answer and the other drawn as losing
+    work."""
+    _title, kept, safe, other = _OTHERS["Check"]
+    words = spec.stop_button.rstrip().removesuffix("\u2026").rstrip()
+    return Question(f"{words}?" if words else _title, _kept(spec, kept), "", safe, other, True)
 
 
 def close_question(status, model) -> Question:

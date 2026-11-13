@@ -36,7 +36,7 @@ _PLACES: dict[str, str] = {
         "kept", "dropped", "probes")},
     **{name: _REAL for name in (
         "spread", "need", "free", "share", "low", "high", "median", "peak", "reserved", "available", "card",
-        "training_loss", "validation_loss", "seconds", "wait", "magnitude", "cycles", "value")},
+        "training_loss", "validation_loss", "seconds", "wait", "magnitude", "cycles", "value", "atc", "p")},
     **{name: _SHARE for name in ("lower", "upper")},
     **{name: _TEXT for name in (
         "dir", "id", "error", "reason", "scope", "where", "basis", "rotation", "note", "path", "what", "how",
@@ -203,6 +203,9 @@ ROWS: tuple[Row, ...] = (
          "training are not all said.", _TRAIN,
          sentence="An epoch's record could not be read from the training library (<error>), so not every epoch "
                   "is shown.", message="warning"),
+    # a check's own stages: the calibration's two tests
+    _row("sbc_uniformity", "SBC uniformity checks:", _ORCH),
+    _row("tarp_atc", "TARP: ATC=<atc>  KS p=<p>", _ORCH),
     # the window's own file
     _row("text_file_broken", "The run's text file could not be written (<error>); the full text is still on the "
          "page.", "core.gui.run.textfile",
