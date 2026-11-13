@@ -557,3 +557,10 @@ From Task 6-7's fix round (the forms and runs of every check):
     `probe_mask` default, while the window's audit form opens at 100, the least size that counts. Both are said only
     past a greyed button (the field's own line blocks first). Cure if wanted: a default clause per stage, or none in
     the window's sentence.
+
+16. **The card test's reading of its training's share lives in the window, beside item 8 (Task 8-9's fix round,
+    H7).** `core/gui/check_readings.py`'s `CARD_SAYS_NOTHING_POINTS` (12) and the audit's expected share (37 %,
+    `AUDIT_EXPECTED_SHARE`) make the card test's "At this size a share within about 12 points of 37 % says nothing
+    either way.", the command line's own reading of the card test (`docs/guide/command-line.md`); nothing compares
+    against it, so it decides no state, but it is a science number living outside the engine. Cure if wanted: the
+    engine's card test says the band its size can read.

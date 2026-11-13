@@ -4011,21 +4011,23 @@ def test_the_timing_is_two_runs_one_per_network_and_one_when_they_are_equal(endi
 def test_the_timings_time_last_time_is_found_at_the_same_sizes(tmp_path):
     """"Before you start" of the timing says how long its last press took on this computer at the sizes its form and
     step 3's hold, the runs of that press together, though their results name the press that the sizes never hold; at
-    other sizes it was not timed here. It trains two short fits, or one when step 3's network is the built-in one, and
-    keeps nothing but the result."""
+    other sizes it was not timed here; a newer press one of whose fits did not finish is passed over. It trains two short
+    fits, or one when step 3's network is the built-in one, and keeps nothing but the result."""
     from core.gui.memory_limit import computer
     from tests._fixtures import write_history
     sizes = {"num_runs": 20, "epochs": 10, "run_size_cap": 0, "network": [[256, 10], [128, 8]]}
 
-    def ran(at, seconds, press, network):
+    def ran(at, seconds, press, network, outcome="finished"):
         write_history(tmp_path / "runs", id=f"2026100812{at:02d}00-check", word="Check", started=_at(8, 12, at),
-                      outcome="finished", memory_limit={"gib": None, "source": "none", "computer": computer()},
+                      outcome=outcome, memory_limit={"gib": None, "source": "none", "computer": computer()},
                       check={"key": "timing", "sizes": sizes, "seconds": seconds, "stages": {},
                              "result": {"network": network, "press": press}})
 
     ran(1, 30.0, "first", [256, 10])
     ran(2, 100.0, "second", [256, 10])
     ran(3, 80.0, "second", [128, 8])
+    ran(4, 20.0, "third", [256, 10])
+    ran(5, 5.0, "third", [128, 8], outcome="failed")
     with _checks_page(tmp_path) as (_window, screen, page, _store):
         _step_three(screen, 256, 10)
         page.open_check("timing")
@@ -4268,6 +4270,35 @@ def _card_run(at, outcome, *, seconds=None, stage=None, stages=None, unusable=No
     return {"id": f"2026100812{at:02d}00-check", "word": "Check", "outcome": outcome, "stage": stage,
             "started": _at(8, 12, at).isoformat(), "check": {"key": "card_test", "seconds": 340.0,
                                                              "stages": stages or {}, "result": result}}
+
+
+def test_the_card_tests_own_reading_of_its_training(tmp_path, monkeypatch):
+    """The card test reads its training's share of unusable driven recordings from the first total its run says, a
+    later one (its calibration's) changing nothing, and counts each batch run in smaller pieces once, however often and
+    by either way it was halved; its sentence of the share is said from the two named numbers it is read against."""
+    from core import diagnostics
+    from core.gui import check_scratch
+    from tests._runs import masked_line
+    tag = "training batch {}/4 [t_scale=0.8, T=1.0, n_fine=4096, N_points=2048, rows=32]"
+    split = (f"{tag.format(3)}: OOM at simulation batch 32; retrying in chunks of 16, 3.71 GiB reported free "
+             f"(optimistic on Windows). Original: CUDA out of memory",
+             f"{tag.format(3)}: OOM with 32 rows OUTSIDE the simulator retry; re-running this batch in halves of 16. "
+             f"Original: CUDA out of memory",
+             f"{tag.format(4)}: OOM at simulation batch 32; retrying in chunks of 16. Original: CUDA out of memory")
+
+    def card_test(*_args, **_kwargs):
+        for line in (masked_line(412, 1000, 4, WHOLE), *split, masked_line(5, 1000, 1, WHOLE)):
+            _said_at(line, 0.0)
+        return _a_card_result()
+    monkeypatch.setattr(diagnostics, "card_test", card_test)
+    made = check_scratch.card_check(object(), cell="c.txt", t_obs_s=1.0, seed=0, num_runs=4, run_size_cap=32, n_cal=40,
+                                    epochs=6, hidden_features=128, num_transforms=8, on_stage=print,
+                                    store_factory=lambda: _a_store_of_its_own(tmp_path, []))
+    assert (made.check_result["unusable"], made.check_result["split"]) == (0.412, 2), made.check_result
+    run = _card_run(1, "finished", seconds={"prior": 1.0}, unusable=0.412)
+    monkeypatch.setattr(check_readings, "CARD_SAYS_NOTHING_POINTS", 10)
+    assert check_readings.card_words(run)[3][0] == ("Unusable driven recordings in its training: 41.2 %. At this size a "
+                                                   "share within about 10 points of 37 % says nothing either way.")
 
 
 def test_the_card_tests_result_says_done_or_where_it_failed(tmp_path):

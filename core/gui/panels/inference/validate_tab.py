@@ -458,11 +458,21 @@ class ValidatePanel(StepPage):
 
     def _took(self, key: str, sizes: dict):
         """This computer's newest finished run of the check ``key`` at ``sizes``, as the last reading held them; for the
-        timing, the runs of that run's press together. None for none."""
-        last = history.check_at(self._ran_here, check=key, sizes=sizes)
-        if key == "timing" and last is not None:
-            return check_readings.took_together(check_readings.press_runs(self._ran_here, last))
-        return last
+        timing, the runs of the newest press at those sizes every run of which finished, together (one that left a fit
+        unfinished is passed over). None for none."""
+        if key != "timing":
+            return history.check_at(self._ran_here, check=key, sizes=sizes)
+        networks = sizes.get("network")
+        fits = len(networks) if isinstance(networks, list) and networks else 1
+        runs = list(self._ran_here)
+        while True:
+            last = history.check_at(runs, check=key, sizes=sizes)
+            if last is None:
+                return None
+            together = check_readings.press_runs(self._ran_here, last)
+            if len(together) == fits:
+                return check_readings.took_together(together)
+            runs = [one for one in runs if not any(one is other for other in together)]
 
     def _others_open(self, key, found) -> int:
         """How many deciding checks other than ``key`` apply, have not passed and a run can still pass."""

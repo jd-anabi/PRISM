@@ -1306,8 +1306,13 @@ CARD_DONE_TEXT = "Card test: done. Every stage ran on the graphics card in {}."
 CARD_FAILED_TEXT = "Card test: failed in {}."
 CARD_COLUMNS = ("Stage", "Seconds", "Last time")
 CARD_RIGHT = frozenset({1, 2})
-CARD_UNUSABLE_TEXT = ("Unusable driven recordings in its training: {} %. At this size a share within about 12 points of "
-                      "37 % says nothing either way.")
+CARD_UNUSABLE_TEXT = ("Unusable driven recordings in its training: {} %. At this size a share within about {} points of "
+                      "{} % says nothing either way.")
+#: How far from the expected share of unusable driven recordings (the audit's, ``AUDIT_EXPECTED_SHARE``) a card test's
+#: share can lie, in points, and still say nothing either way: its training simulates a few batches of a few
+#: simulations, which draw too few driven recordings to read the share closer. The command line's reading of the card
+#: test.
+CARD_SAYS_NOTHING_POINTS = 12
 CARD_SPLIT_TEXT = "Batches split for lack of memory: {}."
 CARD_POWER_TEXT = ("This shows that the chain runs. It says nothing about calibration: at these sizes the test has no "
                    "power.")
@@ -1338,7 +1343,8 @@ def card_words(run: Mapping, earlier: "Mapping | None" = None) -> tuple:
     lines = []
     share = _number(result.get("unusable"))
     if share is not None:
-        lines.append(CARD_UNUSABLE_TEXT.format(_share(share)))
+        lines.append(CARD_UNUSABLE_TEXT.format(_share(share), f"{CARD_SAYS_NOTHING_POINTS:g}",
+                                               f"{AUDIT_EXPECTED_SHARE * 100:g}"))
     split = result.get("split")
     if _is_whole(split):
         lines.append(CARD_SPLIT_TEXT.format(number_text(split)))
