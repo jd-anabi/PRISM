@@ -985,7 +985,8 @@ def _counts_of(key: str, sizes: Mapping) -> str:
         return CALIBRATION_COUNTS_TEXT.format(*map(number_text, held)) if all(map(_is_whole, held)) else ""
     if key == "band":
         repeats, lengths = sizes.get("band_repeats"), sizes.get("probe_lengths")
-        if not _is_whole(repeats) or not (lengths is None or isinstance(lengths, (list, tuple))):
+        if "probe_lengths" not in sizes or not _is_whole(repeats) or not (
+                lengths is None or isinstance(lengths, (list, tuple))):
             return ""
         typed = BAND_TYPED_WORDS[len(lengths) != 1].format(number_text(len(lengths))) if lengths else ""
         return BAND_COUNTS_TEXT.format(number_text(repeats), typed or BAND_CHOSEN_WORDS)
@@ -1004,7 +1005,8 @@ def _counts_of(key: str, sizes: Mapping) -> str:
             _is_whole(repeats) and _is_whole(datasets)) else ""
     if key == "drive_study":
         each, strengths = sizes.get("drive_repeats"), sizes.get("drive_strengths")
-        if not _is_whole(each) or not (strengths is None or isinstance(strengths, (list, tuple))):
+        if "drive_strengths" not in sizes or not _is_whole(each) or not (
+                strengths is None or isinstance(strengths, (list, tuple))):
             return ""
         return DRIVE_COUNTS_TEXT.format(number_text(each), number_text(
             len(strengths) if strengths else DRIVE_USUAL_STRENGTHS + 1))
@@ -1052,12 +1054,14 @@ def forcing_lines(manifest: Mapping) -> str:
     return "\n\n".join(parts)
 
 
-def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: tuple[str, ...]) -> tuple[Fact, ...]:
+def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: tuple[str, ...],
+                     read: bool = True) -> tuple[Fact, ...]:
     """What "Before you start" says of a run of the check ``key`` at the ``sizes`` its form holds, by field key, in its
-    order: what the run simulates or reads, in counts; how long it took the ``last`` time it finished at these sizes on
-    this computer, a run's history (None for none: a run whose time its history does not hold is no information); the
-    ``memory`` lines, the limit in force and the last run on this computer, for a check that simulates on the card;
-    that nothing else can run meanwhile; and what it writes."""
+    order: what the run simulates or reads, in counts (left out while a size it says is missing, a row in error leaving
+    its key out); how long it took the ``last`` time it finished at these sizes on this computer, a run's history (None
+    for none: a run whose time its history does not hold is no information), nothing while the history is not ``read``
+    yet; the ``memory`` lines, the limit in force and the last run on this computer, for a check that simulates on the
+    card; that nothing else can run meanwhile; and what it writes."""
     said = []
     counts = _counts_of(key, sizes)
     if counts:
@@ -1065,7 +1069,8 @@ def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: 
     held = last.get("check") if isinstance(last, Mapping) else None
     seconds = held.get("seconds") if isinstance(held, Mapping) else None
     timed = isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0
-    said.append(Fact("info", TOOK_TEXT.format(duration_text(seconds)) if timed else NOT_TIMED_TEXT))
+    if read:
+        said.append(Fact("info", TOOK_TEXT.format(duration_text(seconds)) if timed else NOT_TIMED_TEXT))
     lines = " ".join(line for line in memory if line)
     if key in ON_THE_CARD and lines:
         said.append(Fact("info", lines))

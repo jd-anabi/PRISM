@@ -2859,34 +2859,57 @@ def check_results_block(tmp_path, *, seed) -> str:
 
 #: Every number of the deciding checks' forms that a rule holds, with what it is typed as, the line under its field and
 #: what a press would be refused with: blank, below its least and, for a seed, beyond the one rule of a seed.
-_BROKEN = [(key, one.setting, text) for key in _HANDED for one in __import__(
-    "core.gui.panels.inference.check_forms", fromlist=["FORMS"]).FORMS.get(key, ())
-    if one.kind in ("whole", "seed", "blank_seed") for text in (("", "-1", str(2 ** 64)) if "seed" in one.kind
-                                                                 else ("", "0" if one.least <= 1 else "1"))
-    if not (one.kind == "blank_seed" and text == "")]
+#: What each kind of field is typed with that a rule refuses: a whole number blank and one below its least; a real
+#: number blank, at 0 and below; a list of numbers holding a word, a 0, a number below 0 and a separator alone; a seed
+#: blank (but the calibration's, which a press draws), below 0 and beyond the largest the rule takes.
+_TYPED = {"whole": lambda one: ("", str(one.least - 1)), "number": lambda one: ("", "0", "-1"),
+          "lengths": lambda one: ("x", "0", "-1", ","), "seed": lambda one: ("", "-1", str(2 ** 64)),
+          "blank_seed": lambda one: ("-1", str(2 ** 64))}
+_BROKEN = [(key, one.setting, text)
+           for key, rows in __import__("core.gui.panels.inference.check_forms", fromlist=["FORMS"]).FORMS.items()
+           for one in rows if one.kind in _TYPED for text in _TYPED[one.kind](one)]
+
+
+def _broken_line(one, text, *, added=0) -> str:
+    """The line under the field of the row ``one`` typed with ``text``, in the window's words from its label."""
+    from core.gui import fields as gui_fields
+    from core.rng import SEED_MAX
+    label = gui_fields.label(one.setting)
+    if one.kind == "lengths":
+        return (f"{label} must be numbers separated by commas or spaces." if text in ("x", ",")
+                else f"{label} must each be greater than 0.")
+    if not text:
+        return "Type a recording length." if one.setting == "t_obs" else f"{label} is blank."
+    if "seed" in one.kind:
+        return f"{label} must be a whole number from 0 to {SEED_MAX - added}."
+    if one.kind == "number":
+        return f"{label} must be greater than 0."
+    return f"{label} must be at least {one.least}."
 
 
 @pytest.mark.parametrize("key, setting, text", _BROKEN, ids=[f"{key}-{setting}-{text or 'blank'}"
                                                              for key, setting, text in _BROKEN])
 def test_a_blank_or_bad_number_is_said_under_its_field_and_blocks(key, setting, text, tmp_path, monkeypatch):
-    """A number of a check's form that is blank or breaks its stage's rule is said under its field in the window's
-    words, from its row's label, the rule decided by the stage's own (``require_at_least``, ``require_seed``); the
-    button is greyed "Cannot start yet: a setting cannot be used."; a press dispatches nothing, and a start reached all
-    the same is refused in the stage's own sentence under the field's key."""
-    from core.gui import fields as gui_fields
+    """Every number, list of numbers and seed of every check's form, blank or breaking its stage's rule (the least read
+    from its row), is said under its field in the window's words, from its row's label, the rule decided by the stage's
+    own (``require_at_least``, ``require_positive``, ``require_seed``); the button is greyed "Cannot start yet: a setting
+    cannot be used."; a press dispatches nothing, and a start reached all the same is refused under the field's key in
+    the stage's own sentence, or, for a list that holds no numbers, which no rule of the stage can be handed, in the
+    line's."""
     from core.gui.panels.inference import check_forms
-    from core.rng import SEED_MAX
     seen = _tripwire(monkeypatch)
     refused = []
-    with _checks_page(tmp_path, simulation=SET) as (_window, _screen, page, _store):
+    # with the frequency response, but for identifiability across the prior, which does not apply with it
+    with _checks_page(tmp_path, chi=key != "across_prior", simulation=SET) as (_window, _screen, page, _store):
         _ready(page, key)
+        if setting != "t_obs" and "t_obs" in page.form.rows:
+            _typed_into(page.form, {"t_obs": "2.5"})
         one = next(row for row in check_forms.FORMS[key] if row.setting == setting)
         row = page.form.rows[setting]
         row.widget.setText(text)
         page.redraw()
-        label = gui_fields.label(setting)
-        line = (f"{label} is blank." if not text else f"{label} must be a whole number from 0 to {SEED_MAX}."
-                if "seed" in one.kind else f"{label} must be at least {one.least}.")
+        repeats = page.form.rows["repeats"].value() - 1 if one.adds else 0
+        line = _broken_line(one, text, added=repeats)
         assert (row.line.kind, row.line.words) == ("err", line), (row.line.kind, row.line.words)
         assert not page.foot.main_button.isEnabled()
         assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
@@ -2895,7 +2918,34 @@ def test_a_blank_or_bad_number_is_said_under_its_field_and_blocks(key, setting, 
         page._refusal = refused.append
         getattr(page, f"_start_{key}")()
         assert seen["calls"] == 0 and len(refused) == 1 and refused[0].field == setting, refused
-        assert refused[0].message != line and refused[0].message.startswith("The "), refused[0].message
+        if one.kind == "lengths" and text in ("x", ","):
+            assert refused[0].message == line
+        else:
+            assert refused[0].message != line and refused[0].message.startswith("The "), refused[0].message
+
+
+def test_the_repeated_calibrations_largest_seed_leaves_room_for_every_repeat(tmp_path, monkeypatch):
+    """The calibration repeated at fixed numbers seeds its repeat r at its seed and r, so its seed is held to the one
+    rule of a seed for its last repeat too, the engine's own rule called on that one: at 10 repeats the largest seed
+    that passes is nine below the largest the rule takes, and the line under the field says the bound the repeats leave;
+    at one repeat the largest itself passes."""
+    from core.rng import SEED_MAX
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path, simulation=SET) as (_window, _screen, page, _store):
+        _ready(page, "fixed_number")
+        row = page.form.rows["seed"]
+        row.widget.setText(str(SEED_MAX - 8))
+        page.redraw()
+        assert (row.line.kind, row.line.words) == ("err", f"Seed must be a whole number from 0 to {SEED_MAX - 9}.")
+        page._main_clicked()
+        assert seen["calls"] == 0
+        row.widget.setText(str(SEED_MAX - 9))
+        page._main_clicked()
+        assert seen["calls"] == 1 and seen["kwargs"]["seed"] == SEED_MAX - 9
+        page.form.rows["repeats"].widget.setText("1")
+        row.widget.setText(str(SEED_MAX))
+        page._main_clicked()
+        assert seen["calls"] == 2 and seen["kwargs"]["seed"] == SEED_MAX
 
 
 #: What "Before you start" says of each deciding check at its usual sizes, after its time and with the memory lines
@@ -3341,8 +3391,9 @@ def test_mixed_as_in_training_sends_no_fixed_number_and_a_number_is_held_to_the_
 @pytest.mark.parametrize("key, chi", [("pin_down", True), ("fixed_number", True), ("across_prior", False)])
 def test_every_seed_a_stage_does_not_refuse_is_held_to_the_one_rule_of_a_seed(key, chi, tmp_path, monkeypatch):
     """A seed no stage refuses itself is held by the window to the engine's one rule of a seed, called, not copied:
-    the largest it takes passes, and the random generator runs at it; one beyond, one below 0 and a number with a
-    fraction are said under the field, in the window's words from its label, and block; nothing is dispatched."""
+    the largest it takes passes (for the repeated calibration, the largest its last repeat's seed leaves), and the random
+    generator runs at the largest; one beyond, one below 0 and a number with a fraction are said under the field, in the
+    window's words from its label, and block; nothing is dispatched."""
     import torch
     from core.rng import SEED_MAX, seeded
     seen = _tripwire(monkeypatch)
@@ -3350,17 +3401,19 @@ def test_every_seed_a_stage_does_not_refuse_is_held_to_the_one_rule_of_a_seed(ke
         _ready(page, key)
         _typed_into(page.form, {"t_obs": "2.5"} if key != "fixed_number" else {})
         row = page.form.rows["seed"]
-        for text, line in ((str(SEED_MAX + 1), f"Seed must be a whole number from 0 to {SEED_MAX}."),
-                           ("-1", f"Seed must be a whole number from 0 to {SEED_MAX}."),
+        bound = SEED_MAX - (page.form.rows["repeats"].value() - 1 if key == "fixed_number" else 0)
+        for text, line in ((str(bound + 1), f"Seed must be a whole number from 0 to {bound}."),
+                           ("-1", f"Seed must be a whole number from 0 to {bound}."),
                            ("2.5", "Seed must be a whole number; got '2.5'.")):
             row.widget.setText(text)
             page.redraw()
             assert (row.line.kind, row.line.words) == ("err", line), (text, row.line.words)
             page._main_clicked()
             assert seen["calls"] == 0, text
-        row.widget.setText(str(SEED_MAX))
+        largest = SEED_MAX - (page.form.rows["repeats"].value() - 1 if key == "fixed_number" else 0)
+        row.widget.setText(str(largest))
         page._main_clicked()
-        assert seen["calls"] == 1 and seen["kwargs"]["seed"] == SEED_MAX
+        assert seen["calls"] == 1 and seen["kwargs"]["seed"] == largest
     with seeded(SEED_MAX, torch.device("cpu")):
         torch.rand(1)
 
@@ -3473,3 +3526,170 @@ def test_a_tools_greyed_reasons_follow_the_model_the_mode_and_the_bounds_file(tm
         _typed_into(page.form, {"chi_k_fixed": "2"})
         page.redraw()
         assert page.foot.reason.text() == "Cannot start: it applies only with the frequency response."
+
+
+# ── what the fix round holds ──
+#: The Forcing sections a drive study's record suggests, as a record of the engine holds them.
+_SUGGESTED = {"free_running": {"amp": 0.25, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
+              "captured": {"amp": 1.5, "freq": 0.0316, "phase": 0.0, "offset": 0.0},
+              "box": {"amp": [0.0, 4.5], "freq": [0.003, 0.3], "phase": [0.0, 6.28319], "offset": [-50.0, 50.0]}}
+
+
+def _a_drive_study(store, cfg, prior, posterior) -> None:
+    """A drive study's record that suggests ``_SUGGESTED``."""
+    from tests._fixtures import check_results, write_diagnostic
+    body = check_results("drive_study")
+    body["results"]["suggested_forcing"] = _SUGGESTED
+    write_diagnostic(store, cfg, diagnostic="probes", variant="drive", cell=str(_cell_file()), **body)
+
+
+def test_the_audit_is_greyed_while_its_record_could_not_count(tmp_path, monkeypatch):
+    """With a posterior in use trained on another prior than the prior in use, the audit's button is greyed with the
+    very reason the calibration gives in that state, by the same reading of the engine's guard, the posterior's own
+    prior named: its row counts only audits of that prior, and a press would audit the prior in use. With no posterior
+    in use it audits the prior in use."""
+    from core.diagnostics import probes
+    from tests._fixtures import _prior_artifact
+    seen = _tripwire(monkeypatch)
+    kept = {}
+
+    def records(store, cfg, prior, posterior):
+        kept["older"] = store.load_prior(cfg, _prior_artifact(store, cfg, name="older_prior", seed=5).id)
+
+    sentence = "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2."
+    with _checks_page(tmp_path, records=records) as (_window, screen, page, _store):
+        screen.session.posterior = _held_posterior(tmp_path, prior=kept["older"])
+        page.read_facts()
+        for key in ("audit", "calibration"):
+            page.open_check(key)
+            assert page.foot.reason.text() == "Cannot start yet: the prior in use is not the posterior's own.", key
+            assert sentence in [fact.sentence for fact in page.facts_from_form()], key
+        page.open_check("audit")
+        page._main_clicked()
+        assert seen["calls"] == 0
+        screen.session.posterior = None
+        page.read_facts()
+        page.open_check("audit")
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        page._main_clicked()
+        assert seen["fn"] is probes.probe_mask and seen["args"][1] is screen.session.inf_prior
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_drive_studys_result_stands_inside_the_page_at_the_least_size(factor, tmp_path):
+    """At the window's least size, at the ordinary text and at one and a half times it, the drive study's result holds
+    its page's width: the body is no wider than what shows it, and the lines to copy and "Copy" stand wholly inside it,
+    a line too long for the column wrapped on the page and copied whole."""
+    from PySide6.QtCore import QPoint, QRect
+    from core.gui import design
+    with text_size(factor):
+        with _checks_page(tmp_path, records=_a_drive_study, size=(design.scaled(900), design.scaled(600))) as (
+                _window, _screen, page, _store):
+            page.open_check("drive_study")
+            _settle()
+            region = page.check_pages["drive_study"].result
+            port = page.scroller.viewport()
+            assert region is not None and region.lines.isVisibleTo(page)
+            assert page.scroller.widget().width() <= port.width(), (page.scroller.widget().width(), port.width())
+            assert page.scroller.horizontalScrollBar().maximum() == 0
+            for part in (region.lines, region.copy_button):
+                edge = QRect(part.mapTo(port, QPoint(0, 0)), part.size())
+                assert 0 <= edge.left() and edge.right() < port.width(), (type(part).__name__, edge, port.width())
+            assert region.lines.text().split("\n")[0] == ("# Forcing Parameters: the strongest drive that keeps the "
+                                                          "cell's own oscillation")
+
+
+def test_a_list_of_numbers_holds_numbers_and_a_size_in_error_says_no_count(tmp_path, monkeypatch):
+    """Only a truly blank list of numbers means the engine's own choice: one that holds separators and no number is a
+    bad list, said under its field, and blocks; "2,5" is two numbers. While a size a count reads is in error, "Before you
+    start" says no count of it: the line under its field says what is wrong."""
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        _ready(page, "band")
+        lengths = page.form.rows["probe_lengths"]
+        for text in (",", " , ", ", ,"):
+            lengths.widget.setText(text)
+            page.redraw()
+            assert lengths.line.words == "Recording lengths must be numbers separated by commas or spaces.", text
+            assert not [fact for fact in page.facts_from_form() if fact.sentence.startswith("Simulates")], text
+            assert not page.foot.main_button.isEnabled(), text
+        lengths.widget.setText("2,5")
+        page.redraw()
+        assert ("Simulates 24 recordings at each recording length and frequency of the band: 2 recording lengths."
+                in [fact.sentence for fact in page.facts_from_form()])
+        page._main_clicked()
+        assert seen["kwargs"]["lengths"] == [2.0, 5.0]
+        _ready(page, "calibration")
+        page.form.rows["n_cal"].widget.setText("0")
+        page.redraw()
+        assert page.form.rows["n_cal"].line.words == "Test datasets must be at least 1."
+        assert not [fact for fact in page.facts_from_form() if fact.sentence.startswith("Simulates")]
+
+
+@pytest.mark.parametrize("raised, told", [(OSError("no such file"), "bounds"), (ValueError("not a cell"), "cell"),
+                                          (RuntimeError("a fault of the program"), "bug")])
+def test_a_checks_own_configuration_that_fails_is_told_as_what_failed(raised, told, tmp_path, monkeypatch):
+    """A check's own configuration that cannot be made is told as what failed: a bounds file or a cell file that cannot be
+    read, as a refusal of its field, "Check your inputs" with where to fix it; any other failure as the fault of the
+    program it is, as every page tells one; nothing is dispatched either way."""
+    from core import cli
+    from core.gui import fields as gui_fields
+    from core.gui.session import ConfigDraft
+    from tests._dialogs import asked
+
+    def failing(*_args, **_kwargs):
+        raise raised
+
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        _ready(page, "band")
+        monkeypatch.setattr(cli if told == "cell" else ConfigDraft,
+                            "load_and_validate_gt" if told == "cell" else "make_config", failing)
+        page._main_clicked()
+        box = asked()
+        if told == "bug":
+            assert (box.kind, box.title, box.marker) != ("refusal", "Check your inputs", "warn"), box
+            assert "a fault of the program" in box.sentence, box
+        else:
+            what = "bounds file" if told == "bounds" else "cell file"
+            assert (box.kind, box.title) == ("refusal", "Check your inputs"), box
+            assert box.sentence.startswith(f"The {what} cannot be read: {type(raised).__name__}: "), box.sentence
+            assert box.beneath == gui_fields.fix_sentence(told, here="checks"), box.beneath
+        assert seen["calls"] == 0
+
+
+def test_before_you_start_stands_in_its_order_on_a_checks_page(tmp_path):
+    """A check's "Before you start" in its order: what the run does, its time, the memory lines, that nothing else can
+    run meanwhile and what it writes; the earlier steps' changes not applied; the name's and the note's facts; the
+    greyed reasons; then a setting in error."""
+    from core.gui.widgets.form import NAME_SHAPE_TEXT
+    with _checks_page(tmp_path, posterior=False) as (_window, screen, page, _store):
+        page.open_check("calibration")
+        prior_page = screen.prior_panel
+        prior_page.bounds_picker.restore_key("master_tier1.txt")
+        prior_page._edited()
+        page.form.names.name.setText("not a name!")
+        page.form.names.check_now()
+        page.form.rows["n_cal"].widget.setText("0")
+        page.redraw()
+        facts = page.facts_from_form()
+        assert [fact.kind for fact in facts] == ["info"] * 4 + ["warn", "err", "lock", "err"], facts
+        assert (facts[0].sentence, facts[2].sentence, facts[3].sentence) == (
+            "Not timed on this computer yet.", "Nothing else can run until it ends.", "One record, under Records.")
+        assert facts[1].sentence.endswith("No run on this computer has been recorded yet."), facts[1].sentence
+        assert facts[4].sentence.startswith("Step 2, Prior, has changes that are not applied.")
+        assert (facts[5].sentence, facts[6].sentence, facts[7].sentence) == (
+            NAME_SHAPE_TEXT, "Needs a posterior: train one in step 3, or load a saved one.",
+            "Test datasets must be at least 1.")
+
+
+def test_before_the_history_is_read_no_time_is_said(tmp_path):
+    """Until the page has read this computer's run history, "Before you start" says nothing of how long a check took:
+    neither a time nor that it was not timed; once read, it says one."""
+    with _checks_page(tmp_path, shown=False) as (_window, _screen, page, _store):
+        page.open_check("calibration")
+        page.redraw()
+        said = [fact.sentence for fact in page.facts_from_form()]
+        assert not [one for one in said if "here last time" in one or one.startswith("Not timed")], said
+        page.read_facts()
+        assert "Not timed on this computer yet." in [fact.sentence for fact in page.facts_from_form()]

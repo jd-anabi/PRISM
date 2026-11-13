@@ -540,3 +540,13 @@ From Task 4 (the pieces the later pages share), `.superpowers/sdd/2026-10-06-win
     once and never drops one, so the product does not meet it today; the suites keep every replaced page until their test
     ends (`tests/_fixtures.py`'s `build_step_page`) and hide their windows before deleting them (`tests/_built.py`).
     Cure if wanted: as item 12's.
+
+From Task 6-7's fix round (the forms and runs of every check):
+14. **The repeated calibration's seed can pass its rule and fail inside the run.** `core/diagnostics/sbc.py:165` seeds
+    repeat r at `seed + r`, and `core/rng.py` refuses a seed past `SEED_MAX` only as a bare `ValueError` inside
+    `seeded`; the stage applies no `require_seed` of its own to the seed, nor to its last repeat's, and opens its record
+    (`sbc.py:163`) before the first repeat, so a seed within `SEED_MAX - (repeats - 1)` of the top passes the entry and
+    fails after the first repeat, its record already opened. The window holds the seed so that its last repeat's
+    passes `require_seed` (`core/gui/panels/inference/check_forms.py`, `seed_problem` with `added`); the command line's
+    `sbc` does not. Cure if wanted: `require_seed(seed + repeats - 1, key="seed")` at the stage's entry, before
+    `store.create`.

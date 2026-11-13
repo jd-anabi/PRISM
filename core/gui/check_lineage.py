@@ -342,8 +342,12 @@ def _audit(one, held: Held, records, _histories, _made) -> CheckRow:
     if held.chi is False:
         return _row(one.key, "Does not apply", FREQUENCY_ONLY_TEXT, reason=FREQUENCY_ONLY_TEXT)
     prior = held.posterior_prior if held.posterior is not None and held.posterior_prior else held.prior
+    # With a posterior in use the row counts the audits of its own prior, and a press audits the prior in use: while the
+    # engine refuses the two as a pair, a press would write a record that counts for nothing, so the audit is greyed as
+    # the two checks of that pair are.
     return _decided(one, [record for record in _of_check(one, records) if _parent(record, "prior") == prior
-                          and _same_configured(record, held.configured, but_the_count=True)])
+                          and _same_configured(record, held.configured, but_the_count=True)],
+                    reason=_other_prior(held) if held.posterior is not None else "")
 
 
 def _newest_training(held: Held, histories: Sequence[Mapping]) -> Mapping | None:

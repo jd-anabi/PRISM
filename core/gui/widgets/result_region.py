@@ -76,22 +76,23 @@ class ResultRegion(QWidget):
         self._pictures.setSpacing(design.scaled(design.GAP["head_table"]))
         box.addLayout(self._pictures)
         self.pictures: list = []             # (its caption, the picture) for each picture shown
-        # Lines a person copies into a file of their own, in the fixed face, selectable, with the button that copies them.
-        self.lines = QLabel()
-        self.lines.setTextFormat(Qt.PlainText)
-        self.lines.setFont(fonts.fixed())
-        self.lines.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.lines.setVisible(False)
+        # Lines a person copies into a file of their own: "Copy" on its own line, so that no width cuts it, then the lines
+        # in the fixed face, selectable, a line too long for the column wrapped on the page and copied whole.
         self.copy_button = QPushButton(COPY_WORDS)
         self.copy_button.setVisible(False)
         self.copy_button.clicked.connect(self._copy)
         copying = QHBoxLayout()
         copying.setContentsMargins(0, 0, 0, 0)
-        copying.setSpacing(design.scaled(design.GAP["action"]))
-        copying.addWidget(self.lines, 0, Qt.AlignTop)
-        copying.addWidget(self.copy_button, 0, Qt.AlignTop)
+        copying.addWidget(self.copy_button)
         copying.addStretch(1)
         box.addLayout(copying)
+        self.lines = QLabel()
+        self.lines.setTextFormat(Qt.PlainText)
+        self.lines.setFont(fonts.fixed())
+        self.lines.setWordWrap(True)
+        self.lines.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.lines.setVisible(False)
+        box.addWidget(self.lines)
         line = QHBoxLayout()
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(design.scaled(design.GAP["action"]))
@@ -217,8 +218,8 @@ class ResultRegion(QWidget):
             self.next_pressed.emit(self._steps[at])
 
     def set_lines(self, text: str) -> None:
-        """Lines to copy, ``text``, in the fixed face, with "Copy" beside them, which puts them on the clipboard as they
-        stand; an empty text shows neither."""
+        """Lines to copy, ``text``, in the fixed face under "Copy", which puts them on the clipboard as they stand, a line
+        the column cannot hold wrapped on the page only; an empty text shows neither."""
         self.lines.setText(text)
         for part in (self.lines, self.copy_button):
             part.setVisible(bool(text))

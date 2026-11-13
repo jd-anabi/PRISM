@@ -17,6 +17,7 @@ holds, this computer's finished checks among it, and reads nothing.
 import dataclasses
 import functools
 import random
+import traceback
 from collections import OrderedDict
 from pathlib import Path
 
@@ -512,10 +513,12 @@ class ValidatePanel(StepPage):
             # a fixed number of driven recordings means something only with the frequency response
             blocks = (*blocks, Fact("lock", check_lineage.FREQUENCY_ONLY_TEXT, FREQUENCY_ONLY_BLOCKS))
         sizes = check_forms.sizes_of(key, form)
-        said = check_forms.before_you_start(key, sizes=sizes, last=history.check_at(self._ran_here, check=key,
-                                                                                      sizes=sizes),
-                                            memory=self._memory())
-        return (*said, *others, *blocks, *cell, *fields, *names)
+        # A size in error leaves out the count it is said in: the line under its field says what is wrong with it.
+        counted = {setting: value for setting, value in sizes.items() if setting not in found}
+        said = check_forms.before_you_start(key, sizes=counted, last=history.check_at(self._ran_here, check=key,
+                                                                                        sizes=sizes),
+                                            memory=self._memory(), read=self._history_read)
+        return (*said, *others, *names, *blocks, *cell, *fields)
 
     def _memory(self) -> tuple:
         """The memory limit in force and, once the history has been read, the last run on this computer."""
@@ -779,7 +782,8 @@ class ValidatePanel(StepPage):
         """A configuration of the check's own, made as the session's was, from the step 1 settings applied and the bounds
         file in use or the limits typed by hand, on the session configuration's device: with the frequency response
         ``chi_mode`` (None: as the session's holds it), and the cell file ``cell`` loaded on it (None for none). A
-        refusal is shown as every refusal is, a file that cannot be read as a refusal of its field; None then."""
+        refusal is shown as every refusal is, a bounds or a cell file that cannot be read as a refusal of its field, and
+        any other failure as the bug it is; None then."""
         session = self.session
         held = session.cfg
         mode = bool(getattr(held, "chi_mode", False)) if chi_mode is None else bool(chi_mode)
@@ -791,8 +795,11 @@ class ValidatePanel(StepPage):
         except Refusal as refused:
             self._refusal(refused)
             return None
-        except Exception as error:           # noqa: BLE001 -- a file the builder cannot read is said, as a refusal
+        except (OSError, ValueError) as error:   # the bounds file could not be read: said under its field
             self._refusal(Refusal(BOUNDS_UNREAD_TEXT.format(f"{type(error).__name__}: {error}"), field="bounds"))
+            return None
+        except Exception as error:           # noqa: BLE001 -- anything else is a bug, told as every page tells one
+            self._on_error(error, traceback.format_exc())
             return None
         if cell is not None:
             try:
@@ -800,8 +807,11 @@ class ValidatePanel(StepPage):
             except Refusal as refused:
                 self._refusal(refused)
                 return None
-            except Exception as error:       # noqa: BLE001 -- a cell file that does not parse is said, as a refusal
+            except (OSError, ValueError) as error:   # the cell file could not be read: said under its field
                 self._refusal(Refusal(CELL_UNREAD_TEXT.format(f"{type(error).__name__}: {error}"), field="cell"))
+                return None
+            except Exception as error:       # noqa: BLE001 -- anything else is a bug, told as every page tells one
+                self._on_error(error, traceback.format_exc())
                 return None
         return made
 

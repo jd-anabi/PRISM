@@ -94,8 +94,8 @@ class FormRow:
     labelled as the window's table of controls names that key unless ``label`` is handed; its ``kind`` of field (one of
     ``KINDS``), the ``usual`` value it opens at, whether it is ``folded`` among the rarely changed, its ``unit``, the
     ``least`` value its rule takes, its ``help_text``, the stage's ``rule`` it is held to ("at_least", "positive",
-    "seed", "lengths"; "" for a cell file), and the stage's ``argument`` it is handed as, where that name is not the
-    key's."""
+    "seed", "lengths", "slots"; "" for a cell file), the stage's ``argument`` it is handed as, where that name is not the
+    key's, and for a seed the stage adds to for each of its runs, ``adds``, the row whose count those runs are."""
     setting: str
     label: str | None
     kind: str
@@ -106,6 +106,7 @@ class FormRow:
     help_text: str = ""
     rule: str = ""
     argument: str = ""
+    adds: str = ""
 
 
 #: The rarely changed rows of the two identifiability checks that simulate, which they share.
@@ -147,7 +148,7 @@ FORMS: dict[str, tuple[FormRow, ...]] = {
                      FormRow("cal_n_scales", None, "whole", config.CAL_N_SCALES, folded=True, rule="at_least"),
                      FormRow("num_posterior_samples", None, "whole", check_readings.CALIBRATION_LEAST_SAMPLES,
                              folded=True, rule="at_least"),
-                     FormRow("seed", None, "seed", 0, folded=True, least=0, rule="seed")),
+                     FormRow("seed", None, "seed", 0, folded=True, least=0, rule="seed", adds="repeats")),
     "drive_study": (FormRow("cell", None, "cell", None),
                     FormRow("drive_t_obs", None, "number", DRIVE_LENGTH_S, unit="s", rule="positive",
                             argument="t_obs_s"),
@@ -167,16 +168,17 @@ FORMS: dict[str, tuple[FormRow, ...]] = {
 
 class _Numbers(QLineEdit):
     """Numbers typed in one field, commas or spaces between them: read as None when blank, as the numbers when each
-    reads as one, else as the text it holds, which no rule takes."""
+    reads as one, else as the text it holds, which no rule takes: separators with no number among them too."""
 
     def value_or_none(self):
         text = self.text().strip()
         if not text:
             return None
         try:
-            return [float(part) for part in _BETWEEN.split(text) if part]
+            numbers = [float(part) for part in _BETWEEN.split(text) if part]
         except ValueError:
             return text
+        return numbers or text
 
 
 def _field(row: FormRow, form: Form):
@@ -222,10 +224,11 @@ def cell_picker(form: Form) -> "ArtifactPicker | None":
 
 
 # ── the rules ──
-def seed_problem(text: str, setting: str, *, blank: bool) -> str:
+def seed_problem(text: str, setting: str, *, blank: bool, added: int = 0) -> str:
     """The sentence under the field of the seed ``setting`` that holds ``text``: that it is blank (nothing, with
     ``blank``: a seed left blank is drawn at the press), that it holds no whole number, or that it breaks the one rule of
-    a seed, which the engine's own ``require_seed`` decides; "" when it passes."""
+    a seed, which the engine's own ``require_seed`` decides, for the seed and, with ``added``, for the largest the stage
+    makes of it by adding (the bound said is then what that leaves); "" when it passes."""
     label, words = fields.label(setting), text.strip().replace(",", "")
     if not words:
         return "" if blank else SEED_BLANK_TEXT.format(label)
@@ -235,19 +238,24 @@ def seed_problem(text: str, setting: str, *, blank: bool) -> str:
         return SEED_NOT_WHOLE_TEXT.format(label, text.strip())
     try:
         require_seed(value, key=setting)
+        require_seed(value + added, key=setting)
     except Refusal:
-        return SEED_RULE_TEXT.format(label, SEED_MAX)
+        return SEED_RULE_TEXT.format(label, SEED_MAX - added)
     return ""
 
 
-def _rule(one: FormRow, value, *, slots=None):
-    """The stage's own rule for the row ``one`` applied to ``value``: the value it takes, or its refusal."""
+def _rule(one: FormRow, value, *, slots=None, added: int = 0):
+    """The stage's own rule for the row ``one`` applied to ``value``: the value it takes, or its refusal; a seed the
+    stage adds to, ``added`` at most, held so that its largest passes too."""
     if one.rule == "at_least":
         return require_at_least(one.setting, value, one.least)
     if one.rule == "positive":
         return require_positive(one.setting, value)
     if one.rule == "seed":
-        return require_seed(value, key=one.setting)
+        taken = require_seed(value, key=one.setting)
+        if added:
+            require_seed(value + added, key=one.setting)
+        return taken
     if one.rule == "lengths":
         return [require_positive(one.setting, part) for part in value]
     if one.rule == "slots":
@@ -266,11 +274,11 @@ def _rule_line(one: FormRow, label: str, *, slots=None) -> str:
     return ABOVE_TEXT.format(label)
 
 
-def _press_words(one: FormRow, value, line: str, *, slots=None) -> str:
+def _press_words(one: FormRow, value, line: str, *, slots=None, added: int = 0) -> str:
     """What a press refuses the row ``one`` with: the stage's own sentence for ``value``, blank among them; the line
     under the field where the field holds what no rule of the stage can be handed."""
     try:
-        _rule(one, value, slots=slots)
+        _rule(one, value, slots=slots, added=added)
     except Refusal as refused:
         return refused.message
     except (TypeError, ValueError):
@@ -278,12 +286,12 @@ def _press_words(one: FormRow, value, line: str, *, slots=None) -> str:
     return line
 
 
-def _problem(one: FormRow, row, *, slots=None) -> "tuple[str, str] | None":
+def _problem(one: FormRow, row, *, slots=None, added: int = 0) -> "tuple[str, str] | None":
     """The rule the row ``row`` of ``one`` breaks now: the line under its field and what a press says; None for none."""
     label, value = row.label_text(), row.value()
     if one.kind in ("seed", "blank_seed"):
-        line = seed_problem(row.widget.text(), one.setting, blank=one.kind == "blank_seed")
-        return None if not line else (line, _press_words(one, value, line, slots=slots))
+        line = seed_problem(row.widget.text(), one.setting, blank=one.kind == "blank_seed", added=added)
+        return None if not line else (line, _press_words(one, value, line, slots=slots, added=added))
     if one.kind == "lengths":
         if value is None:
             return None
@@ -315,10 +323,18 @@ def problems(key: str, form: Form, *, slots=None) -> dict:
         row = form.rows[one.setting]
         if one.kind == "cell" or not row.is_shown():
             continue
-        problem = _problem(one, row, slots=slots)
+        problem = _problem(one, row, slots=slots, added=_added(one, form))
         if problem is not None:
             found[one.setting] = problem
     return found
+
+
+def _added(one: FormRow, form: Form) -> int:
+    """The most the stage adds to the seed of ``one`` for its runs: one less than the count its ``adds`` row holds, as
+    the repeated calibration seeds its repeat r at the seed and r; 0 for a seed it uses as it is, or while that count is
+    not a whole number from 1."""
+    count = form.rows[one.adds].value() if one.adds else None
+    return count - 1 if isinstance(count, int) and not isinstance(count, bool) and count >= 1 else 0
 
 
 def _handed(one: FormRow, value):
