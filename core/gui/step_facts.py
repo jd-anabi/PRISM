@@ -860,6 +860,66 @@ def observation_in_use(label: str, body) -> tuple[str, str]:
     return label, said.format(f"{seconds:g}")
 
 
+#: What Inference says after its run: the table of each parameter's estimate, its columns and how an assumed input is
+#: marked; how many of the observation's features fall inside what the posterior predicts; the records it saved; an
+#: observation saved without the name asked for; and an observation saved by a run whose inference was refused its
+#: name.
+RESULT_COLUMNS = ("Parameter", "5 %", "50 %", "95 %", "Unit")
+TRUE_VALUE = "True value"
+ASSUMED_TEXT = "{} (assumed input)"
+COVERAGE_TEXT = "Of the observation's features, {} % fall inside what the posterior predicts (90 % interval)."
+SAVED_AS_TEXT = "Saved as the inference {} and the observation {}."
+UNNAMED_OBSERVATION_TEXT = "It was saved without its name: '{}' was taken while the run was going."
+OBSERVATION_KEPT_TEXT = "The observation was saved as {}; give the inference another name."
+NARROW_WORDS = "Narrow around this observation"
+ANOTHER_WORDS = "Run another inference"
+
+
+def _estimate(value) -> str:
+    """One estimate as the table says it: four figures, or nothing for a value the record does not hold."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{number:.4g}" if math.isfinite(number) else ""
+
+
+def result_table(summary, *, units, truth=None) -> "TableWords | None":
+    """Each parameter's estimate, from an inference's ``posterior_summary`` in the record's order: its name, an assumed
+    input marked so, its 5 %, 50 % and 95 % values and its unit (``units``, by the parameter's name; "" for none); and
+    for a simulated cell the value it was simulated with, from ``truth``. None for a record that holds no estimate."""
+    entries = [one for one in (summary or ()) if isinstance(one, dict) and isinstance(one.get("name"), str)]
+    if not entries:
+        return None
+    truth = truth if isinstance(truth, dict) else None
+    columns = RESULT_COLUMNS + ((TRUE_VALUE,) if truth is not None else ())
+    rows = []
+    for one in entries:
+        name = one["name"]
+        row = (ASSUMED_TEXT.format(name) if one.get("assumed") else name, _estimate(one.get("q05")),
+               _estimate(one.get("median")), _estimate(one.get("q95")), units.get(name, ""))
+        rows.append(row + ((_estimate(truth.get(name)),) if truth is not None else ()))
+    return TableWords(columns, tuple(rows), right=frozenset({1, 2, 3, *((5,) if truth is not None else ())}))
+
+
+def result_facts(*, inference: str, observation: str, coverage=None, asked: str = "", saved_as: str = "") -> tuple:
+    """What Inference says under its table: the share of the observation's features inside what the posterior predicts,
+    left out when the record holds none; the two records saved, by their labels; and, when the observation was asked a
+    name, ``asked``, that another record took while the run went, that it was saved without it (``saved_as`` its name
+    then)."""
+    facts = []
+    try:
+        share = float(coverage) if coverage is not None else None
+    except (TypeError, ValueError):
+        share = None
+    if share is not None and math.isfinite(share):
+        facts.append(Fact("info", COVERAGE_TEXT.format(_rounded(share * 100))))
+    facts.append(Fact("info", SAVED_AS_TEXT.format(inference, observation)))
+    if asked and saved_as != asked:
+        facts.append(Fact("warn", UNNAMED_OBSERVATION_TEXT.format(asked)))
+    return tuple(facts)
+
+
 def _cycles(count: float) -> str:
     """Drive cycles as a reading says them: to a tenth below ten, whole above."""
     return f"{count:.1f}" if count < 10 else f"{count:.0f}"
@@ -911,10 +971,10 @@ def inference_facts(*, mode: str = "simulated", uses: str = "", narrowed_words: 
     """The facts of the fifth step, in the order of its table, those that block first. ``uses``: what the inference runs
     on, "" while no posterior is in use, which blocks: nothing can be inferred. ``narrowed_words``: the observation a
     narrowed posterior was narrowed around, by its label ("" for a posterior that is not). ``cell_problem``: why the
-    cell chosen does not fit the configuration in use, which blocks until another is chosen. ``length``, the recording length
-    typed, against ``trained``, the shortest and the longest the posterior was trained on, in seconds: outside them it
-    may extrapolate, which never blocks. ``checked``: whether the cell is checked against what training saw (None where
-    nothing is checked, in the second mode). ``rows`` driven recordings against the posterior's ``slots`` (None where
+    cell chosen does not fit the configuration in use, which blocks until another is chosen. ``length``, the recording
+    length typed, against ``trained``, the shortest and the longest the posterior was trained on, in seconds: outside
+    them it may extrapolate, which never blocks. ``checked``: whether the cell is checked against what training saw
+    (None where nothing is checked, in the second mode). ``rows`` driven recordings against the posterior's ``slots`` (None where
     it reads none): more block, saying how many to remove. ``blanks``: the rows left blank, each by its field key, or as
     a sentence with its words beside the button. Then the other steps' changes not applied, the names', the fields' and
     the plan's facts. Reads nothing, and raises on nothing a reading or a session holds."""

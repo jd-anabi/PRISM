@@ -15,6 +15,12 @@ has started with them, and put back as choices at the next launch, the cell only
 A posterior narrowed around one observation asks before every inference, in both modes, "Cancel" preselected; its
 answer is handed to that run alone and never remembered.
 
+Once the run is over the page says its result, read from the two records it saved: each parameter's estimate with
+its unit, and its value for a simulated cell; the corner figure, the record's other figures and the observation's trace;
+how much of the observation the posterior predicts; and what was saved. From there the next steps narrow around that
+observation, opening the narrowing round with it chosen, or run another inference. The run's own figures stand on its
+run's page alone.
+
 The page reads the configuration in use as it draws, never as another page hands it one: a change of what is in use
 marks the page to read again, at once while it is shown, else at its next showing. Its reading lists the cell files of
 the model in use, checks the cell chosen against the configuration in use, and finds the label of the observation a
@@ -22,6 +28,7 @@ narrowed posterior was narrowed around; nothing of it while a run is live.
 """
 import inspect
 import math
+from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QRadioButton, QVBoxLayout, QWidget
@@ -29,6 +36,7 @@ from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QRadi
 from core import cli, config, orchestrator
 from core.artifacts import Accept, default_store
 from core.config import CELL_PATH
+from core.artifacts.store import slug
 from core.Helpers import file_manager, labels
 from core.refusals import Refusal, require_at_least, require_file, require_finite, require_positive
 from core.SBI.observations import RecordingSet
@@ -38,15 +46,17 @@ from ...fields import label
 from ...remembered import (CELL_KEY, CELL_MODEL_KEY, DRIVEN_FILE_KEY, DRIVEN_FREQUENCY_KEY, DRIVEN_SIZE_KEY, FORCED_KEY,
                            INFER_MODE_KEY, SPONT_KEYS, put_many)
 from ...run.model import RunSpec
-from ...step_facts import (CANCEL, CELL_PROBLEM_TEXT, INFER_BLANKS, INFER_REMOVE, NO_OBSERVATION_WORDS,
-                           NOT_MEASURED_TEXT, PLAN_NEEDS_LENGTH_TEXT, PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact,
+from ...step_facts import (ANOTHER_WORDS, CANCEL, CELL_PROBLEM_TEXT, INFER_BLANKS, INFER_REMOVE, NARROW_WORDS,
+                           NO_OBSERVATION_WORDS, NOT_MEASURED_TEXT, OBSERVATION_KEPT_TEXT, PLAN_NEEDS_LENGTH_TEXT,
+                           PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact,
                            driven_reading, inference_facts, inference_uses, narrowed_question_words, observation_in_use,
-                           origin_words)
+                           origin_words, parameter_units, result_facts, result_table)
 from ...widgets.ask import ask
 from ...widgets.artifact_picker import ArtifactPicker
-from ...widgets.form import NameAndNote, OtherName, RowTable, _dress
+from ...widgets.form import NameAndNote, OtherName, RowTable, _dress, name_trouble
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
 from ...widgets.param_grid import ValuesGrid
+from ...widgets.result_region import NextStep
 from .help_text import HELP
 from .step_page import StepPage
 
@@ -86,6 +96,9 @@ BAD_FREQUENCY_TEXT = "The frequency must be greater than 0 Hz."
 #: What "Before you start" says of a driven recording the engine would refuse, its reason under its row.
 REFUSED_ROW_TEXT = "A driven recording cannot be used: its reason stands under it."
 REFUSED_ROW_BLOCKS = "a driven recording cannot be used"
+#: The caption of the inference's corner figure, by the engine's title made a file's name, which stands first among
+#: the pictures; any other figure is captioned by its own title, read back from its file's name.
+CORNER = "Posterior corner"
 #: The least width of the table of driven recordings, in the look's pixels at the ordinary text size: a path of the
 #: usual length on its line, with its remove button beside it.
 DRIVEN_LEAST = 330
@@ -112,6 +125,28 @@ def _plain(value):
     if isinstance(value, (list, tuple)):
         return [_plain(one) for one in value]
     return str(value)
+
+
+def _caption(name: str) -> str:
+    """A figure's caption from its file's name: the corner's by its words, any other by its title, read back."""
+    stem = Path(name).stem
+    stem = stem.rsplit("-", 1)[0] if stem.rsplit("-", 1)[-1].isdigit() else stem
+    if stem == slug(CORNER):
+        return CORNER
+    words = stem.replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+def _pictures(record, *, first: bool = True) -> list:
+    """The figures ``record`` holds, as ``(caption, path)``, in its order; with ``first``, the corner figure first."""
+    listed = getattr(getattr(record, "manifest", None), "figures", None)
+    folder = getattr(record, "path", None)
+    if not isinstance(listed, list) or folder is None:
+        return []
+    found = [(_caption(name), Path(folder) / name) for name in listed if isinstance(name, str)]
+    if first:
+        found.sort(key=lambda one: one[0] != CORNER)
+    return found
 
 
 def _draws() -> int:
@@ -295,6 +330,8 @@ class InferPanel(StepPage):
         self._planned: dict = {}             # what the planner read of each driven recording: what it held, its line
         self._remembered: dict = {}          # what the last inference started with, as the settings file gave it back
         self._cell_looked = False            # whether a reading has listed the cell files of the model in use yet
+        self._made = None                    # the two records a run of this page returned, until the run has ended
+        self._handed = None                  # the names and the note this page's last inference was handed
         form = self.form
         self.modes = _Modes()
         form.add("infer_mode", self.modes, usual="simulated", label=RUN_ON)
@@ -719,6 +756,7 @@ class InferPanel(StepPage):
                 return
             accept = Accept(other_observation=True)
         if self._start(values, accept):
+            self._handed = (self._names.name_value(), self._names.other_value(), self._names.note_value())
             put_many(self._what_is_remembered())
 
     def _start(self, values: dict, accept) -> bool:
@@ -833,6 +871,68 @@ class InferPanel(StepPage):
 
     def _on_inference(self, payload) -> None:
         """The run returned its observation and the inference made on it, while it is still live: the observation comes
-        into use."""
-        observation, _inference = payload
+        into use, and nothing is read until the run has ended."""
+        observation, inference = payload
+        self._made = (observation, inference)
         self._screen.take_observation(observation)
+
+    def _run_ended(self, status) -> None:
+        """A run has ended. One of this page's that returned its records: its result said, read from them. One of this
+        page's that failed once its observation was saved under the name asked for, its inference refused the name
+        another inference took meanwhile: the observation's name emptied, and the page says why. Then the reading."""
+        made, self._made = self._made, None
+        handed, self._handed = self._handed, None
+        if made is not None:
+            self._say_the_result(*made, asked=handed[1] if handed else "")
+        elif handed is not None and getattr(status, "outcome", None) == "failed" and getattr(status, "place", None) == (
+                _PLACE):
+            name, other, _note = handed
+            if name and other and name_trouble("observation", other) and name_trouble("inference", name):
+                self._names.other_name.clear()
+                self.own_line(OBSERVATION_KEPT_TEXT.format(other), "warning")
+        super()._run_ended(status)
+
+    def _units(self) -> dict:
+        """Each parameter's unit by its name, from the configuration in use; none from one that cannot say its units."""
+        cfg = self._held()[0]
+        if cfg is None:
+            return {}
+        try:
+            kinds = {name: labels._RESCALE_KIND.get(name) for name in cfg.rescale_idx}
+            units = {"length": cfg.length_unit, "time": cfg.time_unit, "force": cfg.force_unit}
+            return parameter_units(kinds, units, cfg.assumed_params)
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its units shows none
+            return {}
+
+    def _say_the_result(self, observation, inference, *, asked: str) -> None:
+        """The result of the run that has ended, read from its two records, never while a run is live: the table of the
+        estimates, the pictures, what it says, and the next steps."""
+        results = getattr(inference, "results", None)
+        results = results if isinstance(results, dict) else {}
+        ppc = results.get("ppc") if isinstance(results.get("ppc"), dict) else {}
+        region = self.result
+        region.set_table(result_table(results.get("posterior_summary"), units=self._units(),
+                                      truth=results.get("ground_truth")))
+        region.set_sentences(result_facts(inference=record_words.label_of(inference),
+                                          observation=record_words.label_of(observation),
+                                          coverage=ppc.get("coverage_90"), asked=asked,
+                                          saved_as=getattr(observation, "name", "") or ""))
+        region.set_pictures(_pictures(inference) + _pictures(observation, first=False))
+        region.set_next_steps((NextStep(NARROW_WORDS, "narrowing", {"observation": observation.id}),
+                               NextStep(ANOTHER_WORDS, self.step)))
+
+    def _next_step_pressed(self, step) -> None:
+        """A next step of the result: "Run another inference" empties the result, the names and the note, on this page;
+        any other opens its step with what it carries."""
+        if step.step == self.step:
+            self.result.clear()
+            self._names.clear()
+            self.redraw()
+            return
+        super()._next_step_pressed(step)
+
+    def _fit_figures(self) -> None:
+        """The figures a run draws stand on its run's page alone: once it is over, the records' own stand in its
+        result."""
+        if self._body.indexOf(self.figure_stack) >= 0:
+            self.figure_stack.setVisible(False)

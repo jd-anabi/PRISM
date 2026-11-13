@@ -5404,3 +5404,142 @@ def test_the_cell_check_runs_in_the_reading_and_never_while_a_run_is_live(tmp_pa
         stand_in.release()
         turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
         assert len(checked) == 2 and checked[-1].endswith("master_weak.txt"), checked
+
+
+def _a_record(folder, figures, **fields):
+    """A record an inference's run returns, as a stand-in that says what the page reads of it: ``fields``, and its figures
+    by their files' names, each a small picture in ``folder``."""
+    from PySide6.QtGui import QImage
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in figures:
+        image = QImage(8, 6, QImage.Format_RGB32)
+        image.fill(0xFFFFFF)
+        image.save(str(folder / name))
+    return SimpleNamespace(manifest=SimpleNamespace(figures=list(figures)), path=folder, **fields)
+
+
+#: An inference's estimates, as its record holds them: in the record's order, an assumed input among them.
+SUMMARY = [{"name": "k", "q05": 0.11, "median": 0.2345, "q95": 0.4, "assumed": False},
+           {"name": "x_scale", "q05": 20.0, "median": 30.5, "q95": 41.0, "assumed": False},
+           {"name": "t_scale", "q05": 2.5, "median": 3.1, "q95": 4.0, "assumed": False},
+           {"name": "T", "q05": 290.0, "median": 300.0, "q95": 310.0, "assumed": True}]
+
+
+def _inferred(page, tmp_path, *, mode="simulated", coverage=0.93, observation="cell_b", saved_as="cell_b", truth=True):
+    """Run an inference on ``page`` in ``mode`` to its end, its stand-in run returning an observation saved as
+    ``saved_as`` (asked ``observation``), and an inference saved as retrain_inf whose record holds ``SUMMARY``, the
+    truth when ``truth``, ``coverage`` and three figures; the observation's record holds its trace. The observation's
+    id."""
+    from core import orchestrator
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    _ready(page, tmp_path, mode=mode)
+    page.names.other_name.setText(observation)
+    page.names.name.setText("retrain_inf")
+    page.read_facts()
+    stand_in = orchestrator.simulated_inference if mode == "simulated" else orchestrator.experimental_inference
+    page._main_clicked()
+    assert stand_in.started.wait(5), page.foot.reason.text()
+    made = _an_observation(saved_as or "unnamed_made_here")        # the observation the stage saves
+    held = _a_record(tmp_path / "observation", ["simulated_observation.png"], kind="observation", id=made,
+                     name=saved_as)
+    results = {"posterior_summary": SUMMARY, "ppc": {"coverage_90": coverage},
+               "ground_truth": {"k": 0.2, "x_scale": 31.0, "t_scale": 3.0, "T": 300.0} if truth else None}
+    inference = _a_record(tmp_path / "inference", ["posterior_predictive_check.png", "posterior_corner.png",
+                                                   "eye_test.png"],
+                          kind="inference", id="20261113T150000", name="retrain_inf", results=results)
+    stand_in.release((held, inference))
+    turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+    return made
+
+
+def test_the_result_names_each_parameters_values_with_units_and_the_true_value(tmp_path, monkeypatch):
+    """After a simulated cell's inference the page says its result, read from the two records once the run is over: a
+    ruled table of each parameter's 5 %, 50 % and 95 % values in the record's order, an assumed input marked so, the
+    unit of each from the configuration in use, and the value the cell was simulated with; the corner figure first, then
+    the inference's other figures and the observation's trace, each captioned by its title; how much of the observation
+    the posterior predicts; and what was saved. The run's own figures stand on its run's page alone. The observation
+    comes into use."""
+    with _fifth_step(tmp_path, monkeypatch) as (_window, screen, page, _runs):
+        _inferred(page, tmp_path)
+        table = page.result.table_words()
+        assert table.columns == ("Parameter", "5 %", "50 %", "95 %", "Unit", "True value")
+        assert table.rows == (("k", "0.11", "0.2345", "0.4", "", "0.2"),
+                              ("x_scale", "20", "30.5", "41", "nm", "31"),
+                              ("t_scale", "2.5", "3.1", "4", "ms", "3"),
+                              ("T (assumed input)", "290", "300", "310", "", "300")), table.rows
+        assert table.right == frozenset({1, 2, 3, 5})
+        assert [caption.text() for caption, _picture in page.result.pictures] == [
+            "Posterior corner", "Posterior predictive check", "Eye test", "Simulated observation"]
+        assert [(fact.kind, fact.sentence) for fact in page.result.sentences()] == [
+            ("info", "Of the observation's features, 93 % fall inside what the posterior predicts (90 % interval)."),
+            ("info", "Saved as the inference retrain_inf and the observation cell_b.")]
+        assert [step.words for step in page.result.next_steps()] == ["Narrow around this observation",
+                                                                    "Run another inference"]
+        assert not page.result.isHidden() and page.figure_stack.isHidden()
+        assert getattr(screen.session.observation, "name", None) == "cell_b"
+
+
+def test_the_coverage_sentence_is_left_out_when_the_record_holds_none(tmp_path, monkeypatch):
+    """A record that holds no share of the observation's features says nothing of it; recordings carry no truth, so the
+    table has no column for it; and an observation saved without the name it was asked, another record having taken
+    that name while the run went, is said so."""
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, _runs):
+        _inferred(page, tmp_path, mode="recordings", coverage=None, observation="cell_b", saved_as="", truth=False)
+        assert page.result.table_words().columns == ("Parameter", "5 %", "50 %", "95 %", "Unit")
+        said = [(fact.kind, fact.sentence) for fact in page.result.sentences()]
+        assert not any("fall inside" in sentence for _kind, sentence in said), said
+        assert said[-1] == ("warn", "It was saved without its name: 'cell_b' was taken while the run was going."), said
+        assert said[0][1].startswith("Saved as the inference retrain_inf and the observation Unnamed observation"), said
+
+
+def test_narrow_around_this_observation_opens_the_round(tmp_path, monkeypatch):
+    """"Narrow around this observation" opens the narrowing round with the observation just made chosen in its list,
+    another observation listed before it; nothing is applied and no run starts. "Run another inference" stays on the
+    page, its result, its names and its note emptied."""
+    from core.gui.run.controller import controller
+    with _fifth_step(tmp_path, monkeypatch) as (window, screen, page, runs):
+        _an_observation("cell_a")
+        made = _inferred(page, tmp_path)
+        held = (screen.session.cfg, screen.session.inf_prior, screen.session.posterior, screen.session.observation)
+        calls = len(runs["simulated"].calls)
+        page.result.next_buttons[0].click()
+        assert window.current_place() == ("inference", "narrowing")
+        assert screen.tsnpe_panel.obs_picker.key() == made, "the observation just made is not chosen on the round"
+        assert (screen.session.cfg, screen.session.inf_prior, screen.session.posterior,
+                screen.session.observation) == held, "the round's opening changed what is in use"
+        assert not controller().is_live() and len(runs["simulated"].calls) == calls
+        window.go_to("inference", "infer")
+        page.names.note.setText("a note")
+        page.result.next_buttons[1].click()
+        assert window.current_place() == ("inference", "infer") and page.result.isHidden()
+        assert (page.names.name_value(), page.names.other_value(), page.names.note_value()) == ("", "", "")
+
+
+def test_an_inference_name_taken_meanwhile_empties_the_observations_name_and_says_why(tmp_path, monkeypatch):
+    """An inference whose own name another inference took while the run went is refused once its observation is saved:
+    the run's page says the refusal, and Inference empties the observation's name, which that observation now holds, and
+    says under what is in use that the observation was saved and the inference needs another name."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._fixtures import _nad_cfg
+    from tests._runs import turn_until
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, runs):
+        _ready(page, tmp_path, mode="simulated")
+        page.names.name.setText("retrain_inf")
+        page.read_facts()
+        page._main_clicked()
+        assert runs["simulated"].started.wait(5), page.foot.reason.text()
+        _an_observation("cell_b")                                   # the observation the stage saved
+        with default_store().create("inference", _nad_cfg(), name="retrain_inf") as writer:
+            writer.body = {"results": {}}                           # the inference another program saved meanwhile
+        runs["simulated"].fail(Refusal("an inference named 'retrain_inf' already exists; rename or delete it first",
+                                       field="name"))
+        turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+        assert page.names.other_value() == "", "the observation's name, now taken, still stands"
+        said = page.in_use.said
+        assert not said.isHidden() and said.sentence.plain_text() == (
+            "Attention. The observation was saved as cell_b; give the inference another name."), (
+            said.sentence.plain_text())
+        assert page.names.name_value() == "retrain_inf"

@@ -4785,6 +4785,67 @@ def test_the_training_buttons_stand_inside_the_smallest_window_with_real_metrics
     assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
 
 
+#: What stands beside Inference's main button in each state its test of the real screen reads, as a probe of the same
+#: state read it offscreen.
+INFERENCE_BESIDE = {"a simulated cell, nothing typed": "Cannot start yet: needs a posterior, and 3 more above.",
+                    "twelve driven recordings, one in error": (
+                        "Cannot start yet: no spontaneous recording is chosen, and 3 more above.")}
+
+
+@pytest.mark.display
+def test_the_inference_buttons_stand_inside_the_smallest_window_with_real_metrics(tmp_path):
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
+    platform's fonts and their metrics, at the least size the window takes on the screen it stands on, at the ordinary
+    text size and at one and a half times it, Inference's main button and the words beside it stand inside the window
+    with nothing drawn over them: on a simulated cell with nothing typed, no posterior in use and the fold open; and on
+    recordings of a frequency response, twelve driven recordings, one in error. The window is laid out where no screen
+    shows it and is never shown or brought to the front: the window in front stays in front."""
+    import ctypes
+    from PySide6.QtCore import QPoint, QRect, Qt
+    from PySide6.QtGui import QGuiApplication
+    from core.gui import fonts
+    app = QApplication.instance() or QApplication([])
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    front = user32.GetForegroundWindow()
+    for factor in (1.0, 1.5):
+        with text_size(factor), _the_look(False):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            window.setAttribute(Qt.WA_DontShowOnScreen)
+            available = window.screen().availableGeometry()
+            _opening, least = design.window_sizes((available.width(), available.height()))
+            window.setMinimumSize(1, 1)
+            window.resize(*least)
+            window.show()
+            window.go_to("inference", "infer")
+            page = window.part("inference").infer_panel
+            for state, said in INFERENCE_BESIDE.items():
+                if state == "twelve driven recordings, one in error":
+                    _twelve_driven_recordings_one_in_error(page)
+                page.form.fold.set_open(True)
+                page.redraw()
+                for _ in range(5):
+                    app.processEvents()
+                assert page.foot.reason.text() == said, (factor, state, page.foot.reason.text())
+                inside = QRect(0, 0, window.width(), window.height())
+                for part in (page.foot.main_button, page.foot.reason):
+                    edge = QRect(part.mapTo(window, QPoint(0, 0)), part.size())
+                    assert part.isVisible() and inside.contains(edge), (factor, state, type(part).__name__, edge)
+                    for x, y in ((edge.left() + 2, edge.center().y()), (edge.center().x(), edge.center().y()),
+                                 (edge.right() - 2, edge.center().y())):
+                        found = window.childAt(QPoint(x, y))
+                        assert found is part or (found is not None and part.isAncestorOf(found)), (
+                            factor, state, type(part).__name__, "something stands over it", x, y, found)
+            assert not user32.IsWindowVisible(int(window.winId())), "the window was shown on the screen"
+            window.hide()
+            app.processEvents()
+    assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
+
+
 @pytest.mark.display
 def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(tmp_path):
     """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
