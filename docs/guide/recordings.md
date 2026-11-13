@@ -263,7 +263,7 @@ prints `inputs.bounds` and `config.mode`.
 In the window, step 1's "Kind of observation" list is the chi switch ("Frequency response" is chi
 mode) and step 2's Bounds file list chooses the bounds file. Step 5's "Experimental data" mode then shows the
 page for the mode: Spontaneous, with Forced and the drive boxes in forced mode, or, in chi mode,
-Passive, Drive F₀ (N) and the Forced probes table; each page has its own T_obs (s) box
+Passive, Drive F₀ (N) and the Forced probes table; each page has its own Recording length box, in s
 ([The inference settings](window.md#the-inference-settings)). On the command line,
 [infer](command-line.md#infer) lists the flags each mode takes and refuses. One example per mode;
 the recording paths and posterior names are placeholders, the forced drive is `master_weak.txt`'s in
@@ -285,7 +285,7 @@ python -m core infer --chi --bounds Resources/Bounds/nadrowski/master.txt --post
   (`core.config.DT_EXP_S`, the camera frame interval the network was trained on). Nothing reads a
   rate from the file: resample a recording made at another rate first, or every frequency and time
   in it is misread.
-- **Length.** T_obs (`--t-obs`, or the T_obs (s) box) is the recording's length in seconds. The
+- **Length.** T_obs (`--t-obs`, or the Recording length box, in s) is the recording's length in seconds. The
   passive recording should hold T_obs times 1,000 samples, and a warning says so when it is more than
   one sample off. In forced mode the driven recording must be exactly as long as the passive one,
   and a mismatch is refused. In chi mode each driven recording may have its own length, and is
