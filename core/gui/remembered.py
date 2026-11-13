@@ -38,6 +38,17 @@ PRIOR_KEY = "inference_prior/prior"
 POSTERIOR_KEY = "inference_posterior/posterior"
 NUM_RUNS_KEY = "inference_posterior/num_runs"
 RUN_SIZE_KEY = "inference_posterior/run_size_cap"
+#: What an inference started with, written once its run has been started and put back as choices at the next launch:
+#: the mode; the cell file of a simulated cell with the model it is a cell of, chosen again only for that model; the
+#: spontaneous recording by the kind of observation it was read as, the driven recording, and the driven recordings of a
+#: frequency response, below. Its recording length and drive amplitude are never written: they open blank at every
+#: launch.
+INFER_MODE_KEY = "inference_infer/infer_mode"
+CELL_KEY = "inference_infer/cell"
+CELL_MODEL_KEY = "inference_infer/cell_model"
+SPONT_KEYS = {"chi": "inference_infer/chi_spont", "forced": "inference_infer/exp_spont",
+              "spontaneous": "inference_infer/exp_spont"}
+FORCED_KEY = "inference_infer/exp_forced"
 #: The driven recordings of a frequency response an inference started with, how many and each one's file and
 #: frequency, put back as the rows of its table at the next launch, every one.
 DRIVEN_SIZE_KEY = "inference_infer/driven/size"

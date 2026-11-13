@@ -919,3 +919,69 @@ def test_more_driven_recordings_than_slots_blocks_and_names_how_many():
                  inference_facts(mode="simulated", uses=uses, slots=12, rows=14),
                  inference_facts(mode="recordings", uses=uses, slots=None, rows=14)):
         assert not any("at most" in fact.sentence for fact in kept), _said(kept)
+
+
+#: What the inference runs on, as the fifth step's facts are read with but where a test looks elsewhere.
+INFERRED = "Posterior retrain_posterior: frequency response, up to 12 driven recordings."
+
+
+def test_what_the_inference_runs_on_is_named():
+    """The first fact names the posterior in use and what it reads: a frequency response with its slots, one driven
+    recording, a spontaneous recording only; with no posterior in use it blocks, saying where to get one, as a block a
+    person lifts on the page."""
+    from core.gui.step_facts import inference_facts, inference_uses
+    assert inference_uses("retrain_posterior", "chi", 12) == INFERRED
+    assert inference_uses("retrain_posterior", "forced", 12) == (
+        "Posterior retrain_posterior: a spontaneous recording and one driven recording.")
+    assert inference_uses("retrain_posterior", "spontaneous", None) == (
+        "Posterior retrain_posterior: a spontaneous recording only.")
+    assert inference_uses("", "chi", 12) == ""
+    assert _said(inference_facts(mode="recordings", uses=INFERRED)) == [("info", INFERRED)]
+    none = inference_facts(mode="simulated", uses="")
+    assert _said(none) == [("lock", "Needs a posterior: train one in step 3, or load a saved one.")]
+    assert reason_beside(none, live=False, nothing_to_apply=False) == "Cannot start yet: needs a posterior."
+
+
+def test_a_narrowed_posterior_is_said():
+    """A posterior narrowed around one observation is said, by that observation's label, as an "Attention." that
+    blocks nothing: the question at the press asks for the consent. One that is not narrowed says nothing of it."""
+    from core.gui.step_facts import inference_facts
+    for mode in ("simulated", "recordings"):
+        held = inference_facts(mode=mode, uses=INFERRED, narrowed_words="cell_a")
+        assert ("warn", "This posterior was narrowed around the observation cell_a and is valid only near it.") in (
+            _said(held)), mode
+        assert not any(fact.blocks for fact in held), mode
+        assert not any("narrowed" in sentence for _kind, sentence in _said(inference_facts(mode=mode, uses=INFERRED)))
+
+
+@pytest.mark.parametrize("length, said", [
+    (75.0, "75 s is above the 60 s the posterior was trained on; it may extrapolate."),
+    (0.5, "0.5 s is below the 1 s the posterior was trained on; it may extrapolate."),
+    (60.0, None), (1.0, None), (4.5, None), (None, None), (0.0, None), (-2.0, None)])
+def test_a_length_outside_the_trained_range_is_said_and_does_not_block(length, said):
+    """A recording length outside the lengths the posterior was trained on is said, as the engine's judgement is, an
+    "Attention." that blocks nothing: the posterior may extrapolate. Inside them, at their ends, blank, or at or below 0
+    (which its row says), nothing of it is said here."""
+    from core.gui.step_facts import inference_facts
+    held = inference_facts(mode="recordings", uses=INFERRED, length=length, trained=(1.0, 60.0))
+    extrapolates = [sentence for kind, sentence in _said(held) if "extrapolate" in sentence]
+    assert extrapolates == ([] if said is None else [said]), extrapolates
+    assert not any(fact.blocks for fact in held)
+
+
+def test_the_cell_is_said_unchecked_when_the_prior_is_not_the_posteriors_own():
+    """A simulated cell is checked against what training saw only when the prior in use is the one the posterior was
+    trained with: else the page says so, as an "Information.", and blocks nothing. Recordings carry no truth to check,
+    and with no posterior nothing is said of it; a cell that does not fit the bounds file in use blocks, as an edit lifts
+    it."""
+    from core.gui.step_facts import UNCHECKED_TEXT, inference_facts
+    unchecked = inference_facts(mode="simulated", uses=INFERRED, checked=False)
+    assert ("info", UNCHECKED_TEXT) in _said(unchecked) and not any(fact.blocks for fact in unchecked)
+    assert UNCHECKED_TEXT.startswith("The cell is not checked against what training saw: the prior in use is not")
+    for quiet in (inference_facts(mode="simulated", uses=INFERRED, checked=True),
+                  inference_facts(mode="recordings", uses=INFERRED, checked=False),
+                  inference_facts(mode="simulated", uses="", checked=False)):
+        assert ("info", UNCHECKED_TEXT) not in _said(quiet)
+    misfit = inference_facts(mode="simulated", uses=INFERRED, cell_problem="This cell does not fit the bounds file in "
+                                                                             "use: missing ND parameters k.")
+    assert reason_beside(misfit, live=False, nothing_to_apply=False) == "Cannot start yet: the cell does not fit."

@@ -8,7 +8,12 @@ its drive, or a frequency response, a table of driven recordings, each a file an
 the drive's amplitude. With no posterior in use the second mode says so in place of a form. The two modes never mix:
 the rows of the other mode stand off the page and are neither judged nor passed.
 
-The recording length and the drive amplitude open blank at every launch. Nothing is remembered as it is typed.
+The recording length and the drive amplitude open blank at every launch. Nothing is remembered as it is typed: the
+mode, the cell file with its model, the recordings' paths and the driven recordings are remembered once an inference
+has started with them, and put back as choices at the next launch, the cell only for the model it was chosen for.
+
+A posterior narrowed around one observation asks before every inference, in both modes, "Cancel" preselected; its
+answer is handed to that run alone and never remembered.
 
 The page reads the configuration in use as it draws, never as another page hands it one: a change of what is in use
 marks the page to read again, at once while it is shown, else at its next showing. Its reading lists the cell files of
@@ -22,7 +27,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QRadioButton, QVBoxLayout, QWidget
 
 from core import cli, config, orchestrator
-from core.artifacts import default_store
+from core.artifacts import Accept, default_store
 from core.config import CELL_PATH
 from core.Helpers import file_manager, labels
 from core.refusals import Refusal, require_at_least, require_file, require_finite, require_positive
@@ -30,11 +35,14 @@ from core.SBI.observations import RecordingSet
 
 from ... import design, record_words, settings
 from ...fields import label
-from ...remembered import DRIVEN_FILE_KEY, DRIVEN_FREQUENCY_KEY, DRIVEN_SIZE_KEY
+from ...remembered import (CELL_KEY, CELL_MODEL_KEY, DRIVEN_FILE_KEY, DRIVEN_FREQUENCY_KEY, DRIVEN_SIZE_KEY, FORCED_KEY,
+                           INFER_MODE_KEY, SPONT_KEYS, put_many)
 from ...run.model import RunSpec
-from ...step_facts import (CELL_PROBLEM_TEXT, INFER_BLANKS, INFER_REMOVE, NO_OBSERVATION_WORDS, NOT_MEASURED_TEXT,
-                           PLAN_NEEDS_LENGTH_TEXT, PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact, driven_reading,
-                           inference_facts, inference_uses, observation_in_use)
+from ...step_facts import (CANCEL, CELL_PROBLEM_TEXT, INFER_BLANKS, INFER_REMOVE, NO_OBSERVATION_WORDS,
+                           NOT_MEASURED_TEXT, PLAN_NEEDS_LENGTH_TEXT, PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact,
+                           driven_reading, inference_facts, inference_uses, narrowed_question_words, observation_in_use,
+                           origin_words)
+from ...widgets.ask import ask
 from ...widgets.artifact_picker import ArtifactPicker
 from ...widgets.form import NameAndNote, OtherName, RowTable, _dress
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
@@ -94,6 +102,16 @@ _RULES = {"t_obs": None, "chi_f0_si": None, "n_samples": 1, "drive_amplitude": N
           "drive_phase": "finite"}
 # Where the window shows this step's runs: Parameter inference, its step Inference.
 _PLACE = ("inference", "infer")
+
+
+def _plain(value):
+    """``value`` as a run's history holds it: a name, a number, a truth value or nothing as it is; a list of them as a
+    list; anything else by its words."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(one) for one in value]
+    return str(value)
 
 
 def _draws() -> int:
@@ -275,6 +293,8 @@ class InferPanel(StepPage):
         self._drives: dict = {}              # the drive's rows made so far, by forcing name: their form keys
         self._typed_from = None              # the cell file the values typed by hand were last filled from
         self._planned: dict = {}             # what the planner read of each driven recording: what it held, its line
+        self._remembered: dict = {}          # what the last inference started with, as the settings file gave it back
+        self._cell_looked = False            # whether a reading has listed the cell files of the model in use yet
         form = self.form
         self.modes = _Modes()
         form.add("infer_mode", self.modes, usual="simulated", label=RUN_ON)
@@ -503,10 +523,19 @@ class InferPanel(StepPage):
         names = [fact for fact in (self._names.name_fact(), self._names.other_fact(), self._names.note_fact()) if fact]
         field_facts = [*grid, *(Fact("err", line, SETTING_BLOCKS) for line in broken.values())]
         chi = not simulated and kind == "chi"
-        return inference_facts(mode=self.mode(), uses=uses, cell_problem=cell_problem,
+        draws = self.form.rows["n_samples"]
+        draws.set_origin(origin_words(held=False, at_source=False, at_usual=draws.at_usual(), kept=False))
+        narrowed = getattr(getattr(posterior, "posterior", None), "x_obs_digest", None) is not None
+        shown = self.form.rows["t_obs"].is_shown()
+        return inference_facts(mode=self.mode(), uses=uses,
+                               narrowed_words=(self._observation_label or NO_OBSERVATION_WORDS) if narrowed else "",
+                               cell_problem=cell_problem, length=self.form.rows["t_obs"].value() if shown else None,
+                               trained=trained_lengths(posterior, cfg) if posterior is not None else None,
+                               checked=self._prior_handed() is not None if simulated and posterior is not None else None,
                                slots=posterior_slots(posterior, cfg) if chi else None,
-                               rows=len(self.driven.rows()) if chi else 0, blanks=blank, name_facts=names,
-                               field_facts=field_facts)
+                               rows=len(self.driven.rows()) if chi else 0, blanks=blank,
+                               others_pending=self._others_pending(), name_facts=names, field_facts=field_facts,
+                               plan_lines=self.plan_lines())
 
     # ── the reading of the disk ──
     def read_disk(self) -> None:
@@ -519,8 +548,13 @@ class InferPanel(StepPage):
         model = getattr(draft, "model", None) or getattr(cfg, "model", None)
         if isinstance(model, str) and model:
             folder = CELL_PATH / model.lower()
-            if folder != self.cell_picker.base_path:
-                self.cell_picker.repoint(folder, "")
+            if folder != self.cell_picker.base_path or not self._cell_looked:
+                # The list of another model's cells, or the first reading: the choice made in this folder stands, else
+                # the cell remembered for this model, and for no other.
+                mine = self._remembered.get(CELL_MODEL_KEY) == model
+                here = self.cell_picker.key() if folder == self.cell_picker.base_path else ""
+                self.cell_picker.repoint(folder, here or (self._remembered.get(CELL_KEY, "") if mine else ""))
+                self._cell_looked = True
             else:
                 self.cell_picker.refresh()
         path = self.cell_picker.selected_path()
@@ -528,8 +562,8 @@ class InferPanel(StepPage):
         if cfg is not None and path:
             try:
                 self._cell_problems = list(cli.validate_gt_file(cfg, path))
-            except Exception as error:       # noqa: BLE001 -- a check that cannot be made is said, never raised
-                self._cell_problems = [f"it cannot be checked: {type(error).__name__}: {error}"]
+            except Exception:                # noqa: BLE001 -- a check that cannot be made stops nothing: the stage
+                self._cell_problems = []         # checks the cell again before it simulates
         self._cell_read = (path, cfg)
         self._observation_label = ""
         if getattr(getattr(posterior, "posterior", None), "x_obs_digest", None) is not None:
@@ -546,6 +580,7 @@ class InferPanel(StepPage):
         what is in use since the last reading marks the page to read again: at once while it is shown, else at its next
         showing."""
         self._show_the_mode()
+        self._put_back()
         read = self._held_for
         if read is not None and any(now is not then for now, then in zip(self._held(), read)):
             self._held_for = None
@@ -664,15 +699,27 @@ class InferPanel(StepPage):
         return prior if prior is not None and trained_with and getattr(prior, "id", None) == trained_with else None
 
     def main_pressed(self) -> None:
-        """Run the inference on the configuration and the posterior in use, with what the form holds."""
-        if self._held()[1] is None:
+        """Run the inference on the configuration and the posterior in use, with what the form holds. A posterior
+        narrowed around one observation asks first, at every run, "Cancel" preselected: the run is handed the consent to
+        run on another observation, for itself alone. What it started with is remembered once it has started."""
+        posterior = self._held()[1]
+        if posterior is None:
             return
         try:
             values = self._read_inputs()
         except Refusal as refused:
             self._refusal(refused)
             return
-        self._start(values, None)
+        accept = None
+        if getattr(getattr(posterior, "posterior", None), "x_obs_digest", None) is not None:
+            title, sentence, beneath, other = narrowed_question_words(
+                observation_words=self._observation_label or NO_OBSERVATION_WORDS,
+                simulated=self.mode() == "simulated")
+            if not ask(self, title, sentence, CANCEL, other, beneath=beneath):
+                return
+            accept = Accept(other_observation=True)
+        if self._start(values, accept):
+            put_many(self._what_is_remembered())
 
     def _start(self, values: dict, accept) -> bool:
         """Dispatch the inference: a simulated cell, or the recordings as one set; the names and the draws. True when
@@ -698,16 +745,78 @@ class InferPanel(StepPage):
         return self.dispatch(orchestrator.experimental_inference, cfg, posterior, rec, **common)
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
-        """An inference, of a simulated cell or of recordings: it writes an observation and the inference made on it."""
+        """An inference, of a simulated cell or of recordings: it writes an observation and the inference made on it, and
+        its run's history keeps what it was started with."""
         if fn not in (orchestrator.simulated_inference, orchestrator.experimental_inference):
             return super().run_spec(fn, *args, **kwargs)
         return RunSpec("Inference", _PLACE, name=kwargs.get("name", ""), stop_button=STOP_WORDS,
-                       kinds=("observation", "inference"))
+                       kinds=("observation", "inference"), settings=self.settings_entry())
+
+    def settings_entry(self) -> dict:
+        """What this inference is started with, as its run's history keeps it: names and numbers only. The model and the
+        kind of observation, the mode, the posterior and the prior in use by their ids, the names and the note, and one
+        row for each setting on the page the run reads, with its label, its value and its usual one."""
+        session = getattr(self._screen, "session", None)
+        draft, cfg = getattr(session, "draft", None), self._held()[0]
+        posterior, prior = getattr(session, "posterior", None), getattr(session, "inf_prior", None)
+        keys = [key for key in self._shown_rows() if key not in ("name", "observation_name", "note", "cell_typed")]
+        rows = [{"step": self.step, "name": key, "label": self.form.rows[key].label_text(),
+                 "value": _plain(self.form.rows[key].value()), "usual": _plain(self.form.rows[key].usual())}
+                for key in keys]
+        return {"model": _plain(getattr(draft, "model", None) or getattr(cfg, "model", None)),
+                "observation": _plain(self.kind()), "mode": self.mode(),
+                "posterior": _plain(getattr(posterior, "id", None)), "prior": _plain(getattr(prior, "id", None)),
+                "typed_by_hand": self.mode() == "simulated" and self.typed_tick.isChecked(),
+                "name": self._names.name_value(), "observation_name": self._names.other_value(),
+                "note": self._names.note_value(), "rows": rows}
+
+    # ── what is remembered ──
+    def _model(self) -> "str | None":
+        session = getattr(self._screen, "session", None)
+        model = (getattr(getattr(session, "draft", None), "model", None)
+                 or getattr(getattr(session, "cfg", None), "model", None))
+        return model if isinstance(model, str) and model else None
+
+    def _what_is_remembered(self) -> list:
+        """What an inference started now is remembered by: the mode; for a simulated cell its file and the model it is a
+        cell of; for recordings the spontaneous recording under the kind it is read as, the driven recording, and each
+        driven recording with how many there are; and the plan last used with the model."""
+        rows, mode = self.form.rows, self.mode()
+        pairs = [(INFER_MODE_KEY, mode)]
+        if mode == "simulated":
+            if self.cell_picker.key() and self._model():
+                pairs += [(CELL_KEY, self.cell_picker.key()), (CELL_MODEL_KEY, self._model())]
+        else:
+            kind = self.kind()
+            pairs.append((SPONT_KEYS[kind], rows["recording_spont"].widget.edit.text().strip()))
+            if kind == "forced":
+                pairs.append((FORCED_KEY, rows["recording_forced"].widget.edit.text().strip()))
+            if kind == "chi":
+                held = self.driven.rows()
+                pairs.append((DRIVEN_SIZE_KEY, str(len(held))))
+                for at, row in enumerate(held):
+                    pairs += [(DRIVEN_FILE_KEY.format(at), row.path.edit.text().strip()),
+                              (DRIVEN_FREQUENCY_KEY.format(at), row.hz.text().strip())]
+        return pairs + self._screen.last_used(self._model())
+
+    def _put_back(self) -> None:
+        """The recordings remembered for the kind of observation the posterior in use reads, into the rows still blank:
+        a row typed into is never overwritten."""
+        rows, kind = self.form.rows, self.kind()
+        for key, remembered in (("recording_spont", SPONT_KEYS.get(kind)), ("recording_forced", FORCED_KEY)):
+            path = self._remembered.get(remembered or "", "")
+            if path and not rows[key].widget.edit.text().strip():
+                rows[key].widget.set_value(path)
 
     # ── what is remembered ──
     def restore_settings(self, qs) -> None:
-        """The driven recordings the last inference started with, every one, put back as the table's rows, never run;
-        one blank row when none is remembered."""
+        """What the last inference started with, put back as choices, never run: the mode; the driven recordings, every
+        one, or one blank row when none is remembered; and, once the page knows them, the cell file for the model it was
+        chosen for and the recordings for the kind they were read as. The recording length and the drive amplitude, and
+        any key an older page wrote of them, are not read."""
+        self.modes.set_value(settings.get_str(qs, INFER_MODE_KEY, ""))
+        self._remembered = {key: settings.get_str(qs, key, "") for key in
+                            (CELL_KEY, CELL_MODEL_KEY, FORCED_KEY, *set(SPONT_KEYS.values()))}
         try:
             count = int(settings.get_str(qs, DRIVEN_SIZE_KEY, "0") or 0)
         except ValueError:

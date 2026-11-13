@@ -816,7 +816,7 @@ INFER_BLANKS = {"cell": ("Choose a cell file.", "no cell file is chosen"),
 #: The question a narrowed posterior asks before every inference, in both modes: its title, its sentence, what it says
 #: beneath for a simulated cell and for recordings, what it says last, and the answer that runs.
 INFER_NARROWED_TITLE = "Run on another observation?"
-INFER_NARROWED_TEXT = "This posterior is valid only near the observation it was narrowed around, {}."
+INFER_QUESTION_TEXT = "This posterior is valid only near the observation it was narrowed around, {}."
 SIMULATED_NEVER_TEXT = "A cell simulated now has new noise, so it is never that observation."
 SAME_RECORDINGS_TEXT = ("If these are the same recordings with the same description, PRISM finds them to be that "
                         "observation and the inference runs as on it; your answer is then not recorded, though the "
@@ -954,7 +954,7 @@ def narrowed_question_words(*, observation_words: str, simulated: bool) -> tuple
     was narrowed around by ``observation_words``, what it says beneath for a simulated cell or for recordings, and the
     answer that runs the inference all the same ("Cancel" is the other)."""
     beneath = f"{SIMULATED_NEVER_TEXT if simulated else SAME_RECORDINGS_TEXT} {EXTRAPOLATION_TEXT}"
-    return (INFER_NARROWED_TITLE, INFER_NARROWED_TEXT.format(observation_words or NO_OBSERVATION_WORDS), beneath,
+    return (INFER_NARROWED_TITLE, INFER_QUESTION_TEXT.format(observation_words or NO_OBSERVATION_WORDS), beneath,
             RUN_ANYWAY)
 
 

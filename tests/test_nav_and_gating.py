@@ -1167,6 +1167,56 @@ def test_the_tsnpe_new_run_box_is_not_persisted():
     assert "new_run" not in src, "restore_settings must not restore the near-miss consent"
 
 
+def test_a_narrowed_posterior_asks_at_every_run_and_cancel_starts_nothing(tmp_path, monkeypatch):
+    """The narrowed-posterior consent is a question at the press, never a box: a posterior narrowed around one
+    observation asks before every inference, in both modes; "Cancel", the guard's answer, dispatches nothing, and "Run
+    inference anyway" hands the run Accept(other_observation=True), on that run alone. An amortized posterior asks
+    nothing and hands no Accept at all. Nothing on the page keeps the answer: there is no box to remember."""
+    from core.artifacts import Accept
+    from tests._dialogs import choose
+    from tests._fixtures import all_asked, forget_asked
+
+    qt_app()
+    inf = build_inference(cfg=_chi_cfg(k=1))
+    panel, sent, refused = _inference_page(inf)
+    cell, passive, driven = (tmp_path / name for name in ("cell.txt", "passive.npy", "driven.npy"))
+    for path in (cell, passive, driven):
+        path.touch()
+    rows = panel.form.rows
+    panel.cell_picker.selected_path = lambda: str(cell)
+    rows["t_obs"].widget.setText("2.0")
+    rows["chi_f0_si"].widget.setText("1.0")
+    rows["recording_spont"].widget.edit.setText(str(passive))
+    panel.driven.rows()[0].set_value((str(driven), 12.5))
+    assert not hasattr(panel, "other_obs") and not hasattr(panel, "_accept"), "a box still holds the consent"
+
+    inf.session.posterior = _posterior_stub(id_="amort")
+    inf.refresh_gates()
+    for mode in ("simulated", "recordings"):
+        panel.modes.set_value(mode)
+        forget_asked()
+        sent.clear()
+        panel.main_pressed()
+        assert all_asked() == [] and sent["kwargs"]["accept"] is None, (mode, all_asked(), sent)
+
+    inf.session.posterior = _posterior_stub(id_="trunc", truncation=object(), x_obs_digest="d" * 16)
+    inf.refresh_gates()
+    for mode in ("simulated", "recordings"):
+        panel.modes.set_value(mode)
+        forget_asked()
+        sent.clear()
+        panel.main_pressed()
+        assert [box.title for box in all_asked()] == ["Run on another observation?"] and sent == {}, (mode, sent)
+        choose(monkeypatch, words="Run inference anyway")
+        panel.main_pressed()
+        assert sent["kwargs"]["accept"] == Accept(other_observation=True), (mode, sent["kwargs"]["accept"])
+        choose(monkeypatch)
+        sent.clear()
+        panel.main_pressed()
+        assert sent == {}, "the answer was kept for the next run"
+    assert refused == []
+
+
 def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     """The window's half of the refusal contract. A Refusal names its field by a key and never a box,
     tab, button or flag; the yellow "Check your inputs" box gets its "how to fix here" line from ONE

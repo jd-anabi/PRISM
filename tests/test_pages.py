@@ -2969,7 +2969,7 @@ def test_a_later_step_says_of_an_earlier_step_that_holds_nothing_its_changes_alo
     assert page._others_pending() == [said]
 
 
-def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
+def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path, monkeypatch):
     """STANDING. Beside each rebuilt page's main button, a block that neither waiting nor a press elsewhere lifts, one of
     the facts' table of such blocks, reads "Cannot start: …"; one that a run's end or a press on this page or another
     lifts reads "Cannot start yet: …"; a run live says only that it is, whatever blocks. Every stand-in page in its turn;
@@ -3000,6 +3000,56 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
         turn_until(qt_app(), lambda: not controller().is_live())
         window.hide()
     _the_checks_lists_blocks(tmp_path / "checks")
+    _the_inference_blocks(tmp_path / "inference", monkeypatch)
+
+
+def _the_inference_blocks(tmp_path, monkeypatch) -> None:
+    """Inference's own blocks, each alone in the state that makes it, read beside its main button: no posterior, a
+    recording length left blank, a cell that does not fit the bounds file in use, more driven recordings than the
+    posterior takes, and one with no file: each lifted by a load or an edit on the page."""
+    from types import SimpleNamespace
+    from core import cli
+    from core.gui.session import SbiSession
+    from tests._fixtures import prior_stub
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    window, page = _a_stand_in(tmp_path, InferPanel, "infer")
+    screen = page._screen
+    cell = tmp_path / "cell.txt"
+    cell.touch()
+    cfg = SimpleNamespace(model="NADROWSKI", params_dict={}, rescale_params={}, force_params_dict={}, has_forcing=False,
+                          chi_mode=True, chi_n_freqs=3, chi_k_pad=2, observation_mode="chi")
+    posterior = SimpleNamespace(kind="posterior", id="q1", name="retrain_posterior", manifest=None,
+                                posterior=SimpleNamespace(x_obs_digest=None))
+    rows = page.form.rows
+
+    def beside(session) -> str:
+        screen.session = session
+        screen.refresh_gates()
+        page.read_facts()
+        return page.foot.reason.text()
+
+    page.cell_picker.selected_path = lambda: str(cell)
+    page.names.other_name.setText("cell_a")
+    rows["t_obs"].widget.setText("4.5")
+    monkeypatch.setattr(cli, "validate_gt_file", lambda cfg, path: [])        # the cell fits until it is said not to
+    assert beside(SbiSession(cfg=cfg, inf_prior=prior_stub())) == "Cannot start yet: needs a posterior."
+    rows["t_obs"].widget.setText("")
+    assert beside(SbiSession(cfg=cfg, inf_prior=prior_stub(), posterior=posterior)) == (
+        "Cannot start yet: no recording length is typed.")
+    rows["t_obs"].widget.setText("4.5")
+    monkeypatch.setattr(cli, "validate_gt_file", lambda cfg, path: ["ND parameter k = 9 is outside its bounds (0, 1)"])
+    assert beside(SbiSession(cfg=cfg, inf_prior=prior_stub(), posterior=posterior)) == (
+        "Cannot start yet: the cell does not fit.")
+    page.modes.set_value("recordings")
+    rows["chi_f0_si"].widget.setText("1.0")
+    rows["recording_spont"].widget.edit.setText(str(cell))
+    page.driven.set_value([(str(cell), 1.5 + at) for at in range(3)])
+    page.redraw()
+    assert page.foot.reason.text() == "Cannot start yet: too many driven recordings."
+    page.driven.set_value([(str(cell), 1.5), (None, 2.5)])
+    page.redraw()
+    assert page.foot.reason.text() == "Cannot start yet: a driven recording is not complete."
+    window.hide()
 
 
 def _the_checks_lists_blocks(tmp_path) -> None:

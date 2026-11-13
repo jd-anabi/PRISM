@@ -673,10 +673,11 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
     """What the window writes of steps 1 to 3 into the settings file, each key at its moment and at no other: the model
     and the kind of observation as step 1 is applied; the bounds file, the model it came into use with and the prior as a
     prior's run returns it; the batches and the simulations per batch as a training starts, as the text of their boxes;
-    the posterior as a training's run returns it; and at each of these moments the plan last used with the model and
+    the posterior as a training's run returns it; the mode, the cell file with its model or the recordings, and the
+    driven recordings as an inference starts; and at each of these moments the plan last used with the model and
     when, blank with no plan in use. Nothing is written as a choice is made or a button is pressed before a run starts,
     nor as a plan is filled; and closing writes the window's size and place and the groups of the pages not rebuilt yet,
-    never a key of the three steps nor of the plans."""
+    never a key of the rebuilt steps nor of the plans."""
     from types import SimpleNamespace
     from PySide6.QtCore import QSettings
     from core import orchestrator
@@ -743,12 +744,33 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
         trained.release(SimpleNamespace(kind="posterior", id="20261008T130000", name="retrain", manifest=None))
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert at_the_moment() == ["inference_posterior/posterior", *plans]
+        inferred = screen.infer_panel
+        window.go_to("inference", "infer")
+        inferred.cell_picker.restore_key("master_spont.txt")
+        inferred.form.rows["t_obs"].widget.setText("4.5")
+        inferred.names.other_name.setText("cell_a")
+        inferred.read_facts()
+        assert at_the_moment() == [], "Inference's choices were written as they were made"
+        inference = StandIn(word="Inference")
+        monkeypatch.setattr(orchestrator, "simulated_inference", inference)
+        inferred._main_clicked()
+        assert inference.started.wait(5), inferred.foot.reason.text()
+        assert at_the_moment() == ["inference_infer/cell", "inference_infer/cell_model", "inference_infer/infer_mode",
+                                   *plans]
+        assert st.settings().value("inference_infer/cell_model") == "NADROWSKI"
+        inference.release((SimpleNamespace(kind="observation", id="20261008T140000", name="cell_a", manifest=None,
+                                           path=None),
+                           SimpleNamespace(kind="inference", id="20261008T140001", name="", manifest=None, path=None,
+                                           results={})))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert at_the_moment() == [], "an inference's end wrote what it started with again"
         window._save_state()
         closing = at_the_moment()
         groups = {key.split("/")[0] for key in closing}
         assert "window/geometry" in closing
-        assert groups <= {"window", "layout", "inference_infer", "inference_tsnpe", "artifacts"}, sorted(groups)
-        assert not groups & {"inference_config", "inference_prior", "inference_posterior", "plans"}, closing
+        assert groups <= {"window", "layout", "inference_tsnpe", "artifacts"}, sorted(groups)
+        assert not groups & {"inference_config", "inference_prior", "inference_posterior", "inference_infer", "plans"}, (
+            closing)
 
 
 

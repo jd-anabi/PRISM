@@ -5072,3 +5072,335 @@ def test_the_checks_list_reads_once_and_never_while_a_run_is_live(tmp_path, monk
         _settle()
         assert read() == 1, "the run's end with the list in sight"
         window.hide()
+
+
+# ── the fifth step, Inference ──
+def _a_posterior(cfg, prior_id, *, narrowed_around=None):
+    """A posterior held, as a stand-in that says what Inference reads of one: of ``cfg``'s kind of observation and
+    twelve slots, trained with the prior ``prior_id``; narrowed around the observation ``narrowed_around`` when it is
+    handed."""
+    return SimpleNamespace(
+        kind="posterior", id="20261003T031200", name="retrain_posterior",
+        manifest=SimpleNamespace(parents={"prior": prior_id, "observation": narrowed_around},
+                                 body={"mode": cfg.observation_mode, "conditioning": {"chi_k_pad": 12}}, config={},
+                                 created="2026-10-03T03:12:00+00:00"),
+        posterior=SimpleNamespace(x_obs_digest="d" * 16 if narrowed_around else None, truncation=None))
+
+
+@contextlib.contextmanager
+def _fifth_step(tmp_path, monkeypatch, *, chi=False, narrowed=False, own_prior=True, posterior=True):
+    """Inference in a whole window in sight, off the screen, on the test's own clock and store: the first step applied;
+    a real Nadrowski configuration of the master bounds file, of the frequency response with ``chi``, and a prior of it
+    in use; a posterior of it held unless ``posterior`` is False, narrowed around the observation cell_a with
+    ``narrowed``, trained with that prior unless ``own_prior`` is False; the page read, and both inference stages
+    stand-in runs: (window, screen, page, the two stand-ins by the mode that starts each)."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    from tests._runs import StandIn
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window, screen, first = _shown_first_step(tmp_path)
+        _apply(first)
+        cfg = _nad_cfg(chi_mode=chi)
+        prior = default_store().load_prior(cfg, _prior_artifact(default_store(), cfg, name="retrain_prior").id)
+        around = _an_observation("cell_a") if narrowed else None
+        held = _a_posterior(cfg, prior.id if own_prior else "20260101T000000", narrowed_around=around)
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior,
+                                    posterior=held if posterior else None)
+        screen.refresh_gates()
+        window.go_to("inference", "infer")
+        page = screen.infer_panel
+        runs = {"simulated": StandIn(word="Inference"), "recordings": StandIn(word="Inference")}
+        monkeypatch.setattr(orchestrator, "simulated_inference", runs["simulated"])
+        monkeypatch.setattr(orchestrator, "experimental_inference", runs["recordings"])
+        page.read_facts()
+        yield window, screen, page, runs
+
+
+def _shown(page) -> set:
+    """The keys of the rows Inference stands on the page, but the names and the note."""
+    return {key for key, row in page.form.rows.items() if row.is_shown()} - {"name", "observation_name", "note"}
+
+
+def _ready(page, tmp_path, *, mode) -> None:
+    """Every row of ``mode`` given: a cell file of the model, or the recordings the posterior reads, a length and the
+    drive; the observation named."""
+    rows = page.form.rows
+    page.modes.set_value(mode)
+    rows["t_obs"].widget.setText("4.5")
+    page.names.other_name.setText("cell_b")
+    if mode == "simulated":
+        page.cell_picker.restore_key("master_spont.txt")
+        return
+    for stem in ("spont.npy", "forced.npy", "driven.npy"):
+        (tmp_path / stem).touch()
+    rows["recording_spont"].widget.edit.setText(str(tmp_path / "spont.npy"))
+    if page.kind() == "forced":
+        rows["recording_forced"].widget.edit.setText(str(tmp_path / "forced.npy"))
+        for key, text in (("drive_amplitude", "1.5"), ("drive_frequency", "5"), ("drive_phase", "0"),
+                          ("drive_offset", "0")):
+            rows[key].widget.setText(text)
+    else:
+        rows["chi_f0_si"].widget.setText("1.0")
+        row = page.driven.rows()[0]
+        row.path.edit.setText(str(tmp_path / "driven.npy"))
+        row.hz.setText("12.5")
+
+
+def _made(name="cell_b") -> tuple:
+    """What an inference's run returns, as stand-ins that say what a page reads of them: the observation ``name`` and
+    the inference made on it."""
+    return (SimpleNamespace(kind="observation", id="20261113T140000", name=name, manifest=None, path=None),
+            SimpleNamespace(kind="inference", id="20261113T140001", name="", manifest=None, path=None, results={}))
+
+
+def _run_ends(stand_in, payload=None) -> None:
+    """The stand-in run ``stand_in`` returns ``payload`` (an inference's two records, by default), and has ended."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    stand_in.release(_made() if payload is None else payload)
+    turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+
+
+def test_the_two_modes_never_mix_and_the_second_shows_the_posteriors_form(tmp_path, monkeypatch):
+    """The two modes, both named at the top of the form: a simulated cell shows its rows alone, and the recordings of
+    the posterior in use show theirs alone, named on the page: one driven recording and its drive, or a frequency
+    response's table and its drive amplitude. What one mode was given is never passed by the other: a simulated cell's
+    call holds no recording, and the recordings' call no cell."""
+    from core import orchestrator
+    for chi, rows, reads in ((False, {"recording_spont", "recording_forced", "drive_amplitude", "drive_frequency",
+                                      "drive_phase", "drive_offset"}, "This posterior reads one driven recording."),
+                             (True, {"recording_spont", "recording_probe", "chi_f0_si"},
+                              "This posterior reads a frequency response.")):
+        (tmp_path / str(chi)).mkdir()
+        with _fifth_step(tmp_path / str(chi), monkeypatch, chi=chi) as (_window, _screen, page, runs):
+            assert [button.text() for button in page.modes.buttons.values()] == ["A simulated cell",
+                                                                                 "Your own recordings"]
+            assert page.form.rows["infer_mode"].label_text() == "Run on"
+            assert page.mode() == "simulated" and _shown(page) == {"infer_mode", "cell", "cell_typed", "t_obs",
+                                                                     "n_samples"}
+            assert page.reads_line.isHidden()
+            _ready(page, tmp_path, mode="simulated")
+            _ready(page, tmp_path, mode="recordings")
+            assert _shown(page) == {"infer_mode", "t_obs", "n_samples", *rows}, (chi, _shown(page))
+            assert page.reads_line.plain_text() == reads
+            page._main_clicked()
+            assert runs["recordings"].started.wait(5), (chi, page.foot.reason.text())
+            args, kwargs = runs["recordings"].calls[-1]
+            assert not {"cell", "gt_values"} & set(kwargs) and args[2].spont.endswith("spont.npy"), kwargs
+            _run_ends(runs["recordings"])
+            page.modes.set_value("simulated")
+            page._main_clicked()
+            assert runs["simulated"].started.wait(5), (chi, page.foot.reason.text())
+            args, kwargs = runs["simulated"].calls[-1]
+            assert kwargs["cell"].endswith("master_spont.txt") and not any(
+                "npy" in str(value) for value in kwargs.values()), kwargs
+            _run_ends(runs["simulated"])
+            assert orchestrator.simulated_inference is runs["simulated"]
+
+
+def test_with_no_posterior_the_second_mode_says_why_in_place_of_a_form(tmp_path, monkeypatch):
+    """With no posterior in use, "Your own recordings" shows no form, since the form is the one the posterior reads: the
+    page says so in its place, and the start is greyed with the reason, a step a person can take."""
+    with _fifth_step(tmp_path, monkeypatch, posterior=False) as (_window, _screen, page, _runs):
+        page.modes.set_value("recordings")
+        page.redraw()
+        assert _shown(page) == {"infer_mode", "n_samples"}, _shown(page)
+        assert page.reads_line.plain_text() == "The form depends on the posterior. Load or train one in step 3."
+        said = [(fact.kind, fact.sentence) for fact in page.facts_from_form()]
+        assert ("lock", "Needs a posterior: train one in step 3, or load a saved one.") in said, said
+        assert page.foot.reason.text().startswith("Cannot start yet: needs a posterior"), page.foot.reason.text()
+        assert not page.foot.main_button.isEnabled()
+
+
+def test_the_recording_length_and_drive_amplitude_open_blank_at_every_launch(tmp_path, monkeypatch):
+    """The recording length and the drive amplitude open blank at every launch, and so does every row of the drive: an
+    inference started with them writes none of them, and the keys an older page wrote of them are read by nothing."""
+    from core.gui import settings as st
+    with _fifth_step(tmp_path, monkeypatch, chi=True) as (_window, _screen, page, runs):
+        _ready(page, tmp_path, mode="recordings")
+        page._main_clicked()
+        assert runs["recordings"].started.wait(5)
+        _run_ends(runs["recordings"])
+    held = st.settings()
+    written = [key for key in held.allKeys() if key.startswith("inference_infer/")]
+    assert written and not [key for key in written if "tobs" in key or "t_obs" in key or "f0" in key], written
+    for old in ("sim_tobs", "exp_tobs", "chi_tobs", "chi_f0_si"):
+        held.setValue(f"inference_infer/{old}", "7.5")
+    held.sync()
+    again = build_inference().infer_panel
+    blank = ("t_obs", "chi_f0_si", "drive_amplitude", "drive_frequency", "drive_phase")
+    assert [again.form.rows[key].widget.text() for key in blank] == [""] * len(blank)
+
+
+def test_the_observation_must_be_named_and_the_inference_need_not_be(tmp_path, monkeypatch):
+    """The observation an inference makes needs a name, as every record but an inference does: left blank it is said
+    and greys the start; the inference's own name may stay blank. A name another observation holds is said under its
+    row in the window's words once it has been read."""
+    from tests._fixtures import qt_app as _qt_app
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, _runs):
+        _ready(page, tmp_path, mode="simulated")
+        page.names.other_name.setText("")
+        page.redraw()
+        said = [(fact.kind, fact.sentence, fact.blocks) for fact in page.facts_from_form()]
+        assert ("err", "Type a name for the observation.", "a name is needed") in said, said
+        assert page.names.name_value() == "" and not any("inference" in sentence for _kind, sentence, _ in said)
+        assert page.form.rows["name"].label_text() == "Name of the inference"
+        assert page.form.rows["observation_name"].label_text() == "Name of the observation"
+        _an_observation("cell_a")
+        page.names.other_name.setText("cell_a")
+        page.names.check_now()
+        _qt_app().processEvents()
+        line = page.form.rows["observation_name"].line
+        assert (line.kind, line.words) == ("err", "The name 'cell_a' is taken by another observation. Choose another "
+                                                  "name."), (line.kind, line.words)
+        page.names.other_name.setText("cell_b")
+        page.names.check_now()
+        page.redraw()
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+
+
+@pytest.mark.parametrize("mode", ["simulated", "recordings"])
+def test_a_narrowed_posterior_asks_at_every_run_in_both_modes(mode, tmp_path, monkeypatch):
+    """A posterior narrowed around one observation asks before every inference, in both modes, the question's words
+    exact for each, "Cancel" preselected: "Cancel" starts nothing; "Run inference anyway" hands the run the consent to
+    run on another observation; and the next press asks again, for the answer is never kept."""
+    from core.artifacts import Accept
+    from core.gui.step_facts import EXTRAPOLATION_TEXT, SAME_RECORDINGS_TEXT, SIMULATED_NEVER_TEXT
+    with _fifth_step(tmp_path, monkeypatch, narrowed=True) as (_window, _screen, page, runs):
+        _ready(page, tmp_path, mode=mode)
+        forget_asked()
+        page._main_clicked()
+        said = asked()
+        beneath = f"{SIMULATED_NEVER_TEXT if mode == 'simulated' else SAME_RECORDINGS_TEXT} {EXTRAPOLATION_TEXT}"
+        assert (said.title, said.sentence, said.beneath, said.answers, said.default) == (
+            "Run on another observation?",
+            "This posterior is valid only near the observation it was narrowed around, cell_a.", beneath,
+            ("Run inference anyway", "Cancel"), "Cancel"), said
+        assert not runs[mode].started.is_set(), "Cancel started a run"
+        choose(monkeypatch, words="Run inference anyway")
+        page._main_clicked()
+        assert runs[mode].started.wait(5)
+        assert runs[mode].calls[-1][1]["accept"] == Accept(other_observation=True)
+        _run_ends(runs[mode])
+        forget_asked()
+        choose(monkeypatch)
+        page._main_clicked()
+        assert [box.title for box in all_asked()] == ["Run on another observation?"], "the answer was kept"
+        assert len(runs[mode].calls) == 1
+
+
+def test_the_inference_page_reads_the_model_in_use_alone(tmp_path, monkeypatch):
+    """With a Hopf configuration in use beside Nadrowski's cells and a Nadrowski cell remembered, the list of cells is
+    Hopf's and the remembered cell is not chosen; the drive's rows are Hopf's, its second amplitude among them. Back to
+    Nadrowski, its own again: its cells, the cell remembered for it, and its drive."""
+    from core import cli, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    from core.gui.remembered import CELL_KEY, CELL_MODEL_KEY
+    from core.gui import settings as st
+    held = st.settings()
+    held.setValue(CELL_KEY, "master_spont.txt")
+    held.setValue(CELL_MODEL_KEY, "NADROWSKI")
+    held.sync()
+    hopf = cli.make_sim_config("HOPF", VALID_LABELS[VALID_MODELS.index("HOPF")], registry.state_dep_drift("HOPF"),
+                               str(BOUNDS_PATH / "hopf" / "cell.txt"))
+    with _fifth_step(tmp_path, monkeypatch) as (_window, screen, page, _runs):
+        nadrowski = screen.session.cfg
+        assert (page.cell_picker.base_path.name, page.cell_picker.key()) == ("nadrowski", "master_spont.txt")
+        for cfg, model, cells, chosen, drives in (
+                (hopf, "hopf", ["cell.txt"], "", {"drive_amplitude", "drive_amp_y", "drive_frequency", "drive_phase",
+                                                  "drive_offset"}),
+                (nadrowski, "nadrowski", None, "master_spont.txt", {"drive_amplitude", "drive_frequency",
+                                                                    "drive_phase", "drive_offset"})):
+            screen.session.draft.model = cfg.model
+            screen.session.cfg = cfg
+            screen.session.posterior = _a_posterior(cfg, screen.session.inf_prior.id)
+            screen.refresh_gates()
+            page.read_facts()
+            combo = page.cell_picker.combo
+            listed = [combo.itemData(at) for at in range(combo.count())]
+            assert page.cell_picker.base_path.name == model and (cells is None or listed == cells), (model, listed)
+            assert page.cell_picker.key() == chosen, (model, page.cell_picker.key())
+            page.modes.set_value("recordings")
+            shown = {key for key in _shown(page) if key.startswith("drive_")}
+            assert shown == drives, (model, shown)
+            page.modes.set_value("simulated")
+
+
+def test_the_remembered_rows_are_written_when_an_inference_starts_and_never_at_closing(tmp_path, monkeypatch):
+    """What an inference started with is written once its run has started, each key at that moment and at no other: the
+    mode, a simulated cell's file with its model, the recordings' paths under the kind they are read as and the driven
+    recordings, how many and each one; nothing as the form is filled in or a choice is made, and nothing at closing."""
+    from PySide6.QtCore import QSettings
+    written = []
+    kept = QSettings.setValue
+    monkeypatch.setattr(QSettings, "setValue", lambda qs, key, value: (
+        written.append(f"{qs.group()}/{key}" if qs.group() else key), kept(qs, key, value))[1])
+    plans = ["plans/last_used/nadrowski", "plans/last_used_at/nadrowski"]
+    for chi in (False, True):
+        (tmp_path / str(chi)).mkdir()
+        with _fifth_step(tmp_path / str(chi), monkeypatch, chi=chi) as (window, _screen, page, runs):
+            written.clear()
+            _ready(page, tmp_path, mode="simulated")
+            page.read_facts()
+            assert written == [], "a choice of Inference was written as it was made"
+            page._main_clicked()
+            assert runs["simulated"].started.wait(5)
+            assert sorted(set(written)) == ["inference_infer/cell", "inference_infer/cell_model",
+                                            "inference_infer/infer_mode", *plans], written
+            _run_ends(runs["simulated"])
+            written.clear()
+            _ready(page, tmp_path, mode="recordings")
+            page._main_clicked()
+            assert runs["recordings"].started.wait(5)
+            recordings = (["inference_infer/chi_spont", "inference_infer/driven/0/file",
+                           "inference_infer/driven/0/frequency", "inference_infer/driven/size"] if chi else
+                          ["inference_infer/exp_forced", "inference_infer/exp_spont"])
+            assert sorted(set(written)) == sorted(["inference_infer/infer_mode", *recordings, *plans]), written
+            _run_ends(runs["recordings"])
+            written.clear()
+            window._save_state()
+            assert not [key for key in written if key.startswith("inference_infer/")], written
+
+
+def test_a_remembered_cell_of_another_model_is_not_selected(tmp_path, monkeypatch):
+    """A cell file is remembered with the model it is a cell of, and chosen again only for that model: one remembered
+    for Hopf is not chosen in Nadrowski's list, though Nadrowski's folder holds a file of that name."""
+    from core.gui.remembered import CELL_KEY, CELL_MODEL_KEY
+    from core.gui import settings as st
+    held = st.settings()
+    held.setValue(CELL_KEY, "master_spont.txt")
+    held.setValue(CELL_MODEL_KEY, "HOPF")
+    held.sync()
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, _runs):
+        combo = page.cell_picker.combo
+        assert "master_spont.txt" in [combo.itemData(at) for at in range(combo.count())]
+        assert page.cell_picker.key() == "", "a cell remembered for another model was chosen"
+
+
+def test_the_cell_check_runs_in_the_reading_and_never_while_a_run_is_live(tmp_path, monkeypatch):
+    """The cell chosen is checked against the configuration in use by the page's reading alone: not as it is chosen,
+    but 300 ms after, or at the next reading; while a run is live, never, the line saying so, and at the run's end,
+    once."""
+    from core import cli
+    from core.gui.run.controller import controller
+    from tests._runs import StandIn, start_run, turn_until
+    checked = []
+    real = cli.validate_gt_file
+    monkeypatch.setattr(cli, "validate_gt_file", lambda cfg, path: (checked.append(path), real(cfg, path))[1])
+    with _fifth_step(tmp_path, monkeypatch) as (_window, screen, page, _runs):
+        checked.clear()
+        page.cell_picker.restore_key("master_spont.txt")
+        assert checked == [], "the cell was checked as it was chosen"
+        page.read_timer.timeout.emit()
+        assert [path.endswith("master_spont.txt") for path in checked] == [True], checked
+        stand_in = StandIn(word="Other run")
+        start_run(screen.prior_panel, stand_in)
+        page.cell_picker.restore_key("master_weak.txt")
+        page.read_timer.timeout.emit()
+        page.read_facts()
+        page.foot.check_again.click()
+        assert len(checked) == 1, "the cell was checked while a run was live"
+        stand_in.release()
+        turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+        assert len(checked) == 2 and checked[-1].endswith("master_weak.txt"), checked
