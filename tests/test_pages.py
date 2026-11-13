@@ -1136,9 +1136,10 @@ def _a_detail_open(page) -> None:
 
 
 def _the_most_rows_in_error(page) -> None:
-    """The Checks list with the page of its check of the most rows open, identifiability across the prior, beside the
-    list or in its place as the width says, and its recording length, which opens blank, said under it."""
-    page.open_check("across_prior")
+    """The Checks list with the page of its check of the most rows open, the card test, beside the list or in its place
+    as the width says, and its recording length emptied, said under it."""
+    page.open_check("card_test")
+    page.form.rows["t_obs"].widget.setText("")
     page.redraw()
     assert page.form.rows["t_obs"].in_error()
 
@@ -2971,8 +2972,8 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path):
 def _the_checks_lists_blocks(tmp_path) -> None:
     """The Checks list's own blocks, each in the state that makes it, read beside its main button: no prior, a posterior
     needed, no cell file chosen, the prior in use not the posterior's own, a setting blank, each a load or an edit
-    lifts; a check the window cannot run yet, and one a posterior trained without what it reads cannot run, which
-    waiting will not lift; a run live, said alone."""
+    lifts; one a posterior trained without what it reads cannot run, which waiting will not lift; a run live, said
+    alone."""
     from types import SimpleNamespace
     from core.gui.session import SbiSession
     from tests._fixtures import _nad_cfg, prior_stub
@@ -2993,8 +2994,6 @@ def _the_checks_lists_blocks(tmp_path) -> None:
     cfg = _nad_cfg(chi_mode=True)
     assert beside(SbiSession(), None) == "Cannot start yet: needs a prior."
     assert beside(SbiSession(cfg=cfg, inf_prior=held), "calibration") == "Cannot start yet: needs a posterior."
-    assert beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "card_test") == (
-        "Cannot start: this check cannot be run from the window yet.")
     beside(SbiSession(cfg=cfg, inf_prior=held, posterior=posterior), "band")
     check_forms.cell_picker(page.form).restore_key("")
     page.redraw()
@@ -3439,10 +3438,11 @@ WALKED_CHECKS = {
                              lambda page: [page.names.name, page.names.note],
                              lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
     "the check of the most rows open": (
-        _a_check_open("across_prior"), _the_check_list_or_back,
-        lambda page: [page.form.rows["cell"].widget, page.form.rows["t_obs"].widget, page.form.rows["n_points"].widget],
-        lambda page: [page.form.rows[key].widget for key in ("m", "m_noise", "rel", "seed")],
-        lambda page: [page.names.name, page.names.note],
+        _a_check_open("card_test"), _the_check_list_or_back,
+        lambda page: [page.form.rows["cell"].widget, page.form.rows["t_obs"].widget],
+        lambda page: [page.form.rows[key].widget for key in ("num_runs", "run_size_cap", "n_cal", "epochs",
+                                                             "hidden_features", "num_transforms", "seed")],
+        lambda page: [],
         lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again]),
     "a check with no setting open": (_a_check_open("comparison"), _the_check_list_or_back, lambda page: [],
                                      lambda page: None, lambda page: [], lambda page, small: [page.foot.check_again]),

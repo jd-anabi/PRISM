@@ -1376,9 +1376,6 @@ _GREYED = {
         "fixed_number", dict(pair_refused="refused", posterior_prior_words="older_prior"),
         [("lock", "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")],
         "Cannot start yet: the prior in use is not the posterior's own."),
-    "the card test, which the window cannot run yet": (
-        "card_test", dict(), [("lock", "This check cannot be run from the window yet.")],
-        "Cannot start: this check cannot be run from the window yet."),
     "the calibration, free to run": ("calibration", dict(), [], ""),
 }
 
@@ -1388,7 +1385,6 @@ _GREYED = {
 _BLOCK_WORDS = (("Needs a prior", "needs a prior", "Cannot start yet:"),
                 ("Needs a posterior", "needs a posterior", "Cannot start yet:"),
                 ("The prior in use is not", "the prior in use is not the posterior's own", "Cannot start yet:"),
-                ("This check cannot be run", "this check cannot be run from the window yet", "Cannot start:"),
                 ("This posterior was trained without keeping", "the posterior was trained without keeping its simulations",
                  "Cannot start:"),
                 ("This posterior was trained without the rotation", "the posterior was trained without the rotation",
@@ -1404,14 +1400,13 @@ def test_each_checks_button_is_greyed_with_the_reason_of_its_table(case):
     """Each check's button is greyed by the reason its row gives, each in its table's exact words: a block a load lifts,
     the prior, the posterior or the posterior's own prior, says "Cannot start yet:"; one that waiting will not lift, a
     posterior trained without what the check reads, a model, a kind of observation or a bounds file the check does not
-    apply to, and a check the window cannot run yet, says "Cannot start:". The prior a posterior was trained on is named
+    apply to, says "Cannot start:". The prior a posterior was trained on is named
     when the reading found its record, and said without its name when it is gone. Each reason has its own words beside
     the button, read alone after their lead. A live run is said first."""
-    from core.gui.panels.inference.check_forms import FORMS, NOT_BUILT_TEXT
     from core.gui.step_facts import reason_beside
     key, given, facts, beside = _GREYED[case]
     row = _row(check_lineage.rows(_held(**given), (), ()), key)
-    made = check_lineage.button_facts(row, not_built="" if key in FORMS else NOT_BUILT_TEXT)
+    made = check_lineage.button_facts(row)
     assert [(fact.kind, fact.sentence) for fact in made] == facts, made
     assert reason_beside(made, live=False, nothing_to_apply=False) == beside
     for fact in made:
@@ -3208,16 +3203,22 @@ def test_every_check_form_row_is_a_keyword_of_the_function_its_check_starts(tmp_
     configuration. Each check's press is followed to the function it dispatches. And each row opens at the default of
     that parameter, but the few whose usual value is the window's own, each with its reason: the audit's batches, at
     the least that counts; the two calibrations' sizes the stage takes from the settings when it is handed none, as the
-    window opens them; the timing's batches and epochs, the retraining runbook's, which its call has no default for. A
-    row that is only shown hands nothing by its own name: the timing's networks are handed as a network's width and
-    depth."""
+    window opens them; the timing's batches and epochs, the retraining runbook's, and the card test's sizes, the engine's
+    card test's own (held to them in its own test), which their calls have no default for. A row that is only shown
+    hands nothing by its own name: the timing's networks are handed as a network's width and depth. The card test's
+    cell is handed by its path, since the engine's card test reads it itself."""
     import inspect
     from core import config
     from core.gui.panels.inference import check_forms
     own = {("audit", "mask_num_runs"): check_readings.AUDIT_LEAST_BATCHES,
            ("calibration", "n_cal"): config.SBC_N_CAL, ("calibration", "cal_n_scales"): config.CAL_N_SCALES,
            ("fixed_number", "cal_n_scales"): config.CAL_N_SCALES,
-           ("timing", "num_runs"): check_forms.TIMING_BATCHES, ("timing", "epochs"): check_forms.TIMING_EPOCHS}
+           ("timing", "num_runs"): check_forms.TIMING_BATCHES, ("timing", "epochs"): check_forms.TIMING_EPOCHS,
+           **{("card_test", setting): usual for setting, usual in (
+               ("t_obs", check_forms.CARD_LENGTH_S), ("num_runs", check_forms.CARD_BATCHES),
+               ("run_size_cap", check_forms.CARD_PER_BATCH), ("n_cal", check_forms.CARD_DATASETS),
+               ("epochs", check_forms.CARD_EPOCHS), ("hidden_features", check_forms.BUILT_IN_NETWORK[0]),
+               ("num_transforms", check_forms.BUILT_IN_NETWORK[1]), ("seed", 0))}}
     seen = _tripwire(monkeypatch)
     pressed = set()
     for chi in (True, False):
@@ -3233,8 +3234,8 @@ def test_every_check_form_row_is_a_keyword_of_the_function_its_check_starts(tmp_
                 pressed.add(key)
                 taken = inspect.signature(seen["fn"]).parameters
                 for one in rows:
-                    if one.kind == "cell":
-                        assert one.argument == "" and one.setting not in seen["kwargs"], key
+                    if one.kind == "cell":            # the card test reads its cell itself, handed by its path
+                        assert one.argument == "" and (one.setting in seen["kwargs"]) == (key == "card_test"), key
                         continue
                     if one.kind == "network":
                         assert one.setting not in seen["kwargs"] and {"hidden_features", "num_transforms"} <= set(
@@ -4087,3 +4088,249 @@ def test_the_not_kept_message_is_not_shown_for_a_check_that_keeps_nothing():
         model.feed([(not_kept, "info"), (NOT_SAVED, "info")])
     assert timing.messages() == ()
     assert [message.kind for message in training.messages()] == ["info", "info"]
+
+
+def _a_card_result(**seconds):
+    """What the engine's card test hands back, as a card test reads it: each stage's seconds and the stages run."""
+    seconds = seconds or {"prior": 118.0, "posterior": 150.0, "validate": 40.0, "infer": 28.0}
+    return SimpleNamespace(seconds=seconds, stages_run=tuple(seconds), prior=object(), posterior=object())
+
+
+def test_the_card_test_hands_its_one_call_the_forms_arguments_and_a_scratch_store(tmp_path, monkeypatch):
+    """A press of the card test hands its one call what its form holds, by the call's own names, on a configuration of
+    its own made as the session's, with no cell loaded on it, the cell chosen handed by its path, and the page's own
+    way of hearing its stages; the call hands the engine's card test those, its epoch limit one less than its epochs,
+    nothing kept or saved by a name, and a store of its own. The form's usual sizes are the engine's card test's own."""
+    import inspect
+    from core import diagnostics
+    from core.diagnostics.card import card_test
+    from core.gui import check_scratch
+    from core.gui.panels.inference import check_forms
+    seen = _tripwire(monkeypatch)
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        _ready(page, "card_test")
+        form = page.check_pages["card_test"].form
+        cell = check_forms.cell_picker(form).selected_path()
+        for typed, changed in (({}, {}), ({"t_obs": "2", "n_cal": "20", "seed": "5"},
+                                          {"t_obs_s": 2.0, "n_cal": 20, "seed": 5})):
+            _typed_into(form, typed)
+            page._main_clicked()
+            assert seen["fn"] is check_scratch.card_check, page.foot.reason.text()
+            handed = {name: value for name, value in seen["kwargs"].items() if name not in _CONTROLLERS}
+            assert handed == {"cell": cell, "t_obs_s": 1.0, "seed": 0, "num_runs": 4, "run_size_cap": 32, "n_cal": 40,
+                              "epochs": 6, "hidden_features": 128, "num_transforms": 8,
+                              "on_stage": page._card_stages.tell, **changed}, handed
+            made, = seen["args"]
+            assert made is not screen.session.cfg and made.sources.get("cell") is None
+            assert made.chi_mode is screen.session.cfg.chi_mode
+            assert seen["kwargs"]["spec"].check == {"key": "card_test", "sizes": check_forms.sizes_of("card_test",
+                                                                                                      form)}
+    called, stores = [], []
+    monkeypatch.setattr(diagnostics, "card_test", lambda *args, **kwargs: (called.append((args, kwargs)),
+                                                                           _a_card_result())[1])
+    cfg, hear, sink = object(), print, object()
+    made = check_scratch.card_check(cfg, cell="c.txt", t_obs_s=1.0, seed=0, num_runs=4, run_size_cap=32, n_cal=40,
+                                    epochs=6, hidden_features=128, num_transforms=8, on_stage=hear, fig_sink=sink,
+                                    store_factory=lambda: _a_store_of_its_own(tmp_path, stores))
+    (args, kwargs), = called
+    assert args == (cfg,) and kwargs == {"cell": "c.txt", "t_obs_s": 1.0, "seed": 0, "num_runs": 4, "run_size_cap": 32,
+                                         "n_cal": 40, "max_num_epochs": 5, "hidden_features": 128,
+                                         "num_transforms": 8, "checkpoint": False, "save": False, "on_stage": hear,
+                                         "fig_sink": sink, "store": stores[0]}, kwargs
+    assert made.check_result == {"seconds": {"prior": 118.0, "posterior": 150.0, "validate": 40.0, "infer": 28.0},
+                                 "stages_run": ["prior", "posterior", "validate", "infer"], "unusable": None,
+                                 "split": 0}
+    usual = inspect.signature(card_test).parameters
+    assert (check_forms.CARD_BATCHES, check_forms.CARD_PER_BATCH, check_forms.CARD_DATASETS,
+            check_forms.CARD_EPOCHS - 1) == tuple(usual[name].default for name in (
+                "num_runs", "run_size_cap", "n_cal", "max_num_epochs")) and usual["seed"].default == 0
+
+
+def test_a_scratch_check_writes_nothing_in_the_real_store(tmp_path, monkeypatch):
+    """STANDING. The timing of a short fit and the card test, each run through the window with a stage of the engine's
+    standing in that writes into the store it is handed, write nothing into the store in use: every call is handed a
+    store of its own among the computer's temporary files, which is gone when the run has ended, and the process's
+    store is never swapped."""
+    import tempfile
+    from core import diagnostics, orchestrator
+    from core.artifacts import store as artifact_store
+    from core.artifacts.store import KIND_DIRS
+    from tests._runs import StandIn, turn_until
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "temp"))
+    (tmp_path / "temp").mkdir()
+    app = qt_app()
+    handed = []
+
+    def writing(stand_in):
+        def stage(*args, **kwargs):
+            folder = Path(kwargs["store"].root)
+            handed.append(folder)
+            (folder / "made_here.txt").write_text("a record of its own", encoding="utf-8")
+            return stand_in(*args, **kwargs)
+        return stage
+
+    fit, card = StandIn(word="Check"), StandIn(word="Check")
+    monkeypatch.setattr(orchestrator, "build_posterior", writing(fit))
+    monkeypatch.setattr(diagnostics, "card_test", writing(card))
+    with _checks_page(tmp_path) as (_window, _screen, page, store):
+        def listing():
+            return {kind: sorted(summary.id for summary in store.list(kind)) for kind in KIND_DIRS}
+        before = listing()
+
+        def never(*_args, **_kwargs):
+            raise AssertionError("the process's store was swapped")
+        for module in (artifact_store, __import__("core.artifacts", fromlist=["use_store"])):
+            monkeypatch.setattr(module, "use_store", never)
+            monkeypatch.setattr(module, "set_default_store", never)
+        for key, stand_in, result in (("timing", fit, _a_posterior()), ("card_test", card, _a_card_result())):
+            _ready(page, key)
+            page._main_clicked()
+            assert stand_in.started.wait(5), (key, page.foot.reason.text())
+            stand_in.release(result)
+            turn_until(app, lambda: not controller().is_live(), 10.0)
+            _settle()
+        assert listing() == before
+    assert len(handed) == 2 and all(folder.parent == tmp_path / "temp" and folder != Path(store.root)
+                                    for folder in handed), handed
+    assert list((tmp_path / "temp").iterdir()) == [], "a scratch folder was left"
+
+
+def test_the_card_tests_stage_line_follows_its_stages(tmp_path, monkeypatch):
+    """The card test's stages, told by the engine on the worker's thread, are heard on the window's: each begun
+    begins on the run's page in its words, in turn, the one before it done; each event is kept as it was told."""
+    import threading
+    from core import diagnostics
+    from core.gui.run.view import RunView
+    from tests._runs import StandIn, turn_until
+    stand_in = StandIn(word="Check")
+    monkeypatch.setattr(diagnostics, "card_test", stand_in)
+    threads = []
+    real = RunView.set_stage
+    monkeypatch.setattr(RunView, "set_stage", lambda view, name: (threads.append(threading.current_thread()),
+                                                                  real(view, name))[1])
+    app = qt_app()
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        _ready(page, "card_test")
+        page._main_clicked()
+        assert stand_in.started.wait(5)
+        said = []
+        for stage, words in (("prior", "Prior"), ("posterior", "Training"), ("validate", "Calibration"),
+                             ("infer", "Inference")):
+            stand_in.stage(stage, "started")
+            turn_until(app, lambda: controller().model.stage == words)
+            said.append([(word.name, word.marker) for word in controller().model.stage_line()])
+            stand_in.stage(stage, "finished", 2.0)
+        stand_in.release(_a_card_result())
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        heard = list(page.card_heard)
+    names = ["Prior", "Training", "Calibration", "Inference"]
+    assert said == [[(name, "now" if at == now else "done" if at < now else "later") for at, name in enumerate(names)]
+                    for now in range(4)], said
+    assert [(stage, event) for stage, event, _seconds in heard] == [
+        (stage, event) for stage in ("prior", "posterior", "validate", "infer") for event in ("started", "finished")]
+    assert len(threads) == 4 and all(thread is threading.main_thread() for thread in threads), threads
+
+
+def test_the_card_tests_page_hears_any_order_of_its_stages_and_never_raises(tmp_path):
+    """What the card test's run is handed to tell its stages only says them, and never raises, whatever it is told and
+    in whatever order, with no run of the page's own live: the page keeps each, and begins nothing on the run's page
+    but for a run of its own."""
+    told = (("infer", "finished", 1.0), ("prior", "started", None), ("prior", "started", None),
+            ("no such stage", "failed", "not a number"), (None, 3, object()))
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        before = page.run_view.stage_line.words()
+        for one in told:
+            page._card_stages.tell(*one)
+        _settle()
+        assert [event[:2] for event in page.card_heard] == [(str(stage), str(event)) for stage, event, _ in told]
+        assert page.run_view.stage_line.words() == before
+
+
+def _card_run(at, outcome, *, seconds=None, stage=None, stages=None, unusable=None, split=0):
+    """A card test's run as its history holds it."""
+    result = {} if seconds is None else {"seconds": seconds, "stages_run": list(seconds), "unusable": unusable,
+                                         "split": split}
+    return {"id": f"2026100812{at:02d}00-check", "word": "Check", "outcome": outcome, "stage": stage,
+            "started": _at(8, 12, at).isoformat(), "check": {"key": "card_test", "seconds": 340.0,
+                                                             "stages": stages or {}, "result": result}}
+
+
+def test_the_card_tests_result_says_done_or_where_it_failed(tmp_path):
+    """The card test's result says every stage ran on the card and in how long, or the stage it failed in; its table
+    gives each stage's seconds beside the last finished run's; it says the share of unusable driven recordings its
+    training simulated, with what that share means at this size, the batches split for lack of memory, and what the
+    test shows; its calibration's verdict never. Its row reads "Done" only from a run that finished."""
+    from core.gui.panels.inference.check_results import card_block
+    earlier = _card_run(1, "finished", seconds={"prior": 120.0, "posterior": 160.0, "validate": 41.0, "infer": 30.0})
+    done = _card_run(2, "finished", seconds={"prior": 118.0, "posterior": 150.0, "validate": 40.0, "infer": 28.0},
+                     unusable=0.412, split=0)
+    failed = _card_run(3, "failed", stage="Training", stages={"Prior": 118.0, "Training": 30.5})
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        region = card_block(done, parent=page, earlier=earlier)
+        assert (region.verdict.kind, region.verdict.sentence.plain_text()) == (
+            "done", "Card test: done. Every stage ran on the graphics card in 5 min 36 s.")
+        assert region.table_words().rows == (("Prior", "1 min 58 s", "2 min"), ("Training", "2 min 30 s", "2 min 40 s"),
+                                             ("Calibration", "40.0 s", "41.0 s"), ("Inference", "28.0 s", "30.0 s"))
+        assert [fact.sentence for fact in region.sentences()] == [
+            "Unusable driven recordings in its training: 41.2 %. At this size a share within about 12 points of 37 % "
+            "says nothing either way.", "Batches split for lack of memory: 0.",
+            "This shows that the chain runs. It says nothing about calibration: at these sizes the test has no power."]
+        region = card_block(failed, parent=page, earlier=done)
+        assert (region.verdict.kind, region.verdict.sentence.plain_text()) == ("err", "Card test: failed in Training.")
+        assert region.table_words().rows[:2] == (("Prior", "1 min 58 s", "1 min 58 s"),
+                                                 ("Training", "30.5 s", "2 min 30 s"))
+        assert not any("calibrat" in word.lower() and "passed" in word.lower() for word in _block_words(region))
+    for histories, state in (((failed,), "Not run yet"), ((done, failed), "Done")):
+        assert _row(check_lineage.rows(_held(), (), histories), "card_test").state == state, histories
+
+
+def test_the_card_tests_before_you_start_says_its_four_stages_its_time_and_the_memory():
+    """"Before you start" of the card test says, in one sentence, that it builds its prior at full size and runs three
+    small stages after it on the card, how long it took here last time, or that it has not run here, and that nothing
+    else can run and nothing is kept; then the memory lines. Before the history is read, no time is said."""
+    from core.gui.panels.inference import check_forms
+    memory = ("Memory limit: none.", "The last run on this computer ran with no limit.")
+    head = ("This builds a prior at full size and then trains a small posterior, calibrates it and runs one inference "
+            "on a simulated cell: four real stages, the last three at very small sizes, on the graphics card. It takes "
+            "minutes")
+    tail = ". Nothing else can run meanwhile, and nothing it makes is kept."
+    for last, read, words in ((None, True, "; it has not run on this computer yet"),
+                              ({"check": {"seconds": 336.0}}, True, " (5 min 36 s here last time)"),
+                              ({"check": {"seconds": 336.0}}, False, "")):
+        said = check_forms.before_you_start("card_test", sizes={}, last=last, memory=memory, read=read)
+        assert [(fact.kind, fact.sentence) for fact in said] == [("info", head + words + tail),
+                                                                 ("info", " ".join(memory))], said
+
+
+def test_the_card_tests_network_is_step_threes_until_it_is_changed(tmp_path):
+    """The card test's network width and depth are step 3's form's while they stand at their usual value, which they
+    take; a width typed on the card test's form stays what was typed when step 3's changes."""
+    with _checks_page(tmp_path) as (_window, screen, page, _store):
+        rows = page.check_pages["card_test"].form.rows
+        _step_three(screen, 256, 10)
+        page.open_check("card_test")
+        assert [(rows[key].value(), rows[key].at_usual()) for key in ("hidden_features", "num_transforms")] == [
+            (256, True), (10, True)]
+        rows["hidden_features"].widget.setText("64")
+        _step_three(screen, 300, 12)
+        page.refresh_local_gates()
+        assert [rows[key].value() for key in ("hidden_features", "num_transforms")] == [64, 12]
+
+
+def test_no_check_says_it_cannot_be_run_from_the_window(tmp_path):
+    """STANDING. Every check with a button has its form and its start, and none says it cannot be run from the window:
+    its words are gone from the window's code, and each check's page opens with its main button named."""
+    from core.gui.check_catalogue import CHECKS
+    from core.gui.panels.inference import check_forms, validate_tab
+    buttons = {one.key for one in CHECKS if one.button}
+    assert buttons == set(check_forms.FORMS) == set(validate_tab._STARTS), sorted(buttons ^ set(check_forms.FORMS))
+    assert not hasattr(check_forms, "NOT_BUILT_TEXT")
+    said = [path.name for path in (REPO / "core" / "gui").rglob("*.py")
+            if "cannot be run from the window" in path.read_text(encoding="utf-8")]
+    assert said == [], said
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        for key in sorted(buttons):
+            page.open_check(key)
+            assert page.foot.main_button.text().replace("&", "") in (check_catalogue.entry(key).button,
+                                                                    check_catalogue.AGAIN_WORDS), key
+            assert not any("cannot be run" in fact.sentence for fact in page.facts_from_form()), key

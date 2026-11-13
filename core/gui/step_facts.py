@@ -882,7 +882,7 @@ def training_facts(*, needs_prior: bool = False, uses: str = "", budget: str = "
 
 #: The words beside a check's greyed button, by what greys it: the posterior it needs, a prior in use that is not the
 #: posterior's own, a posterior trained without what the check reads, a model, a kind of observation or a bounds file
-#: the check does not apply to, and a check the window cannot run yet.
+#: the check does not apply to.
 NEEDS_A_POSTERIOR_BLOCKS = "needs a posterior"
 OTHER_PRIOR_BLOCKS = "the prior in use is not the posterior's own"
 NO_SIMULATIONS_KEPT_BLOCKS = "the posterior was trained without keeping its simulations"
@@ -891,15 +891,14 @@ FREQUENCY_ONLY_BLOCKS = "it applies only with the frequency response"
 NADROWSKI_ONLY_BLOCKS = "it applies only to the Nadrowski model"
 NO_FORCING_BLOCKS = "the bounds file has no forcing section"
 NOT_WITH_FREQUENCY_BLOCKS = "it does not apply with the frequency response"
-NOT_BUILT_BLOCKS = "this check cannot be run from the window yet"
 
 #: The blocks that neither waiting nor an edit on the page lifts, beside which the button reads "Cannot start:": a model
 #: parameter inference cannot take, a file or a record that cannot be read, a record made for another model, nothing
 #: to continue, a posterior trained without what a check reads, a model, a kind of observation or a bounds file a check
-#: does not apply to, and a check the window cannot run yet. Every other block is lifted on the page (a field, a
+#: does not apply to. Every other block is lifted on the page (a field, a
 #: choice, a name, a step applied, a record chosen or made, a prior or a posterior loaded) and reads "Cannot start
 #: yet:".
 FINAL_BLOCKS = frozenset({UNUSABLE_BLOCKS, BOUNDS_BLOCKS, PRIOR_BLOCKS, OTHER_MODEL_BLOCKS, NOTHING_TO_CONTINUE_BLOCKS,
                           POSTERIOR_BLOCKS, OTHER_MODEL_POSTERIOR_BLOCKS, NO_SIMULATIONS_KEPT_BLOCKS,
                           NO_ROTATION_BLOCKS, FREQUENCY_ONLY_BLOCKS, NADROWSKI_ONLY_BLOCKS, NO_FORCING_BLOCKS,
-                          NOT_WITH_FREQUENCY_BLOCKS, NOT_BUILT_BLOCKS})
+                          NOT_WITH_FREQUENCY_BLOCKS})

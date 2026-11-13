@@ -796,14 +796,13 @@ def test_plan_facts_read_the_form_of_their_own_step_and_what_the_others_hold():
 # ── the lead beside the button ──
 #: The blocks that neither waiting nor an edit on the page lifts: a model inference cannot take, a file or a record
 #: that cannot be read, a record made for another model, nothing to continue, a posterior trained without what a check
-#: reads, a model, a kind of observation or a bounds file a check does not apply to, and a check the window cannot run
-#: yet.
+#: reads, and a model, a kind of observation or a bounds file a check does not apply to.
 FINAL = ("this model cannot be used", "the bounds file cannot be read", "the prior cannot be read",
          "this prior is for another model", "there is nothing to continue", "the posterior cannot be read",
          "this posterior is for another model", "the posterior was trained without keeping its simulations",
          "the posterior was trained without the rotation", "it applies only with the frequency response",
          "it applies only to the Nadrowski model", "the bounds file has no forcing section",
-         "it does not apply with the frequency response", "this check cannot be run from the window yet")
+         "it does not apply with the frequency response")
 #: The blocks a person lifts on the page: a field, a choice, a name, a step applied, a record chosen or made, a prior
 #: or a posterior loaded.
 YET = ("a setting cannot be used", "the limits typed cannot be used", "the last start was refused", "needs a model",

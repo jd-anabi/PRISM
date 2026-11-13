@@ -91,6 +91,18 @@ def timing_block(runs, *, parent, expected=None, planned: "int | None" = None) -
     return region
 
 
+def card_block(run: Mapping, *, parent, earlier: "Mapping | None" = None) -> ResultRegion:
+    """The result of a card test, from its ``run`` in the run history beside ``earlier``, the run of it that finished
+    before: done in how long, or the stage it failed in, each stage's seconds beside the last time's, and what it read
+    of its training; never its calibration's verdict. Made inside ``parent``."""
+    marker, sentence, table, lines = check_readings.card_words(run, earlier)
+    region = ResultRegion(parent)
+    region.set_verdict(marker, sentence)
+    region.set_table(table)
+    region.set_sentences(tuple(Fact("info", line) for line in lines))
+    return region
+
+
 def comparison_block(sentence: str, state: str, *, parent, narrowed: bool = False) -> ResultRegion:
     """The comparison after simulating, which writes no record: its sentence with the marker of its state, and for a
     posterior from a narrowing round that the audit measured the whole prior; made inside ``parent``."""

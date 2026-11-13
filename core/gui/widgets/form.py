@@ -317,6 +317,11 @@ class Row:
         """The built-in value the field opens at."""
         return self._usual
 
+    def set_usual(self, value) -> None:
+        """The value the field is usual at from now: a row whose usual value is another form's, as that form holds it.
+        Nothing is shown here."""
+        self._usual = value
+
     def at_usual(self) -> bool:
         """Whether the field reads as its built-in value: as it reads, never as it is typed, so that "1e-3" is 0.001 and
         a box that reads as nothing is not a number's usual value. A blank box and a tick that stands for nothing both read

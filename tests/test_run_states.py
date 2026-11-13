@@ -1440,7 +1440,8 @@ _DISPATCHES = {("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchest
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_drive"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel",
                 "identifiability.identifiability_laplace"),
-               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "check_scratch.short_fit")}
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "check_scratch.short_fit"),
+               ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "check_scratch.card_check")}
 
 
 def _entries(path) -> list:
@@ -1811,7 +1812,8 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     qt_app()
     entry_of = {"calibration": "calibration", "frequency band": "band", "audit": "audit", "input use": "input_use",
                 "identifiability": "identifiability", "pin down": "pin_down", "fixed number": "fixed_number",
-                "drive study": "drive_study", "across the prior": "across_prior", "timing": "timing"}
+                "drive study": "drive_study", "across the prior": "across_prior", "timing": "timing",
+                "card test": "card_test"}
     found, forwards = set(), []
     for path in sorted((REPO / "core" / "gui").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1875,6 +1877,10 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "timing": (inference.validate_panel, check_scratch.short_fit, (cfg, None),
                    {"num_runs": 20, "run_size_cap": 0, "epochs": 10, "hidden_features": 256, "num_transforms": 10},
                    ("Check", ("inference", "checks"), "Stop this check…", (), no, yes, no, yes)),
+        "card test": (inference.validate_panel, check_scratch.card_check, (cfg,),
+                      {"cell": "a.txt", "t_obs_s": 1.0, "seed": 0, "num_runs": 4, "run_size_cap": 32, "n_cal": 40,
+                       "epochs": 6, "hidden_features": 128, "num_transforms": 8, "on_stage": print},
+                      ("Check", ("inference", "checks"), "Stop this check…", (), no, yes, no, yes)),
         "inference, simulated": (inference.infer_panel, orchestrator.simulated_inference, (cfg, None, 1.5), {},
                                  ("Inference", ("inference", "infer"), "Stop the inference…",
                                   ("observation", "inference"), no, yes, no, yes)),
@@ -1896,14 +1902,19 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         if spec.word == "Check":
             stages = (check_forms.CALIBRATION_STAGES if kind == "calibration" else check_forms.REPEATED_STAGES
                       if kind == "fixed number" else check_forms.TIMING_STAGES if kind == "timing"
-                      else (Stage(check_forms.MEASURING),))
-            facts = ({"network": (256, 10), "rotated": True, "keeps_nothing": True} if kind == "timing" else {})
+                      else check_forms.CARD_STAGES if kind == "card test" else (Stage(check_forms.MEASURING),))
+            facts = ({"network": (256, 10), "rotated": True, "keeps_nothing": True} if kind == "timing"
+                     else {"keeps_nothing": True} if kind == "card test" else {})
             assert (spec.stages, spec.facts, spec.check["key"]) == (stages, facts, entry_of[kind]), kind
             if kind == "timing":
                 assert spec.check["sizes"] == {"num_runs": 20, "epochs": 10, "run_size_cap": 0,
                                                "network": [[256, 10]]}, spec.check
                 assert (spec.patience, spec.epoch_limit) == (config.TRAINING_STOP_AFTER_EPOCHS, 9)
                 assert [stage.begins for stage in spec.stages] == [stage.begins for stage in _TRAINING[:3]]
+            if kind == "card test":
+                assert spec.check["sizes"] == {"t_obs": 1.0, "num_runs": 4, "run_size_cap": 32, "n_cal": 40,
+                                               "epochs": 6, "network": [128, 8]}, spec.check
+                assert [stage.name for stage in spec.stages] == ["Prior", "Training", "Calibration", "Inference"]
         elif not trains:
             assert (spec.stages, spec.facts) == ((), {}), kind
         assert not spec.own_view and spec.records == (), kind
@@ -5732,10 +5743,11 @@ def test_the_form_comes_back_with_the_figures_and_a_divider_left_by_hand_stands_
 
 
 def _the_most_rows_in_error(page) -> None:
-    """The Checks list with the check of the most rows open, identifiability across the prior, its fold open and its
-    recording length, which opens blank, in error under its field."""
-    page.open_check("across_prior")
+    """The Checks list with the check of the most rows open, the card test, its fold open and its recording length
+    emptied, in error under its field."""
+    page.open_check("card_test")
     page.form.fold.set_open(True)
+    page.form.rows["t_obs"].widget.setText("")
     page.redraw()
     assert page.form.rows["t_obs"].in_error(), page.form.rows["t_obs"].line.words
 
@@ -6192,8 +6204,9 @@ for name, host, form in (("frame", frame, frame.controls_scroll), ("rebuilt", re
         window.go_to("inference", "checks")
         settle()
         if name == "checks":
-            host.open_check("across_prior")
+            host.open_check("card_test")
             host.form.fold.set_open(True)
+            host.form.rows["t_obs"].widget.setText("")
             host.redraw()
         else:
             host.open_detail()

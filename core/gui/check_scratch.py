@@ -18,8 +18,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from PySide6.QtCore import QObject, Signal
+
 from core.artifacts import ArtifactStore
 
+from .check_readings import CARD_STAGE_WORDS  # noqa: F401 -- the card test's stages in the words its page says them
 from .run import readings
 
 log = logging.getLogger(__name__)
@@ -165,3 +168,59 @@ def short_fit(cfg, prior, *, num_runs: int, run_size_cap: int, epochs: int, hidd
                      "epochs": trained, "span": span,
                      "per_epoch": span / trained if span is not None and trained else None,
                      "median_epoch": float(statistics.median(noted.took)) if noted.took else None, "press": press})
+
+
+@dataclass(frozen=True)
+class CardCheck:
+    """What a card test hands back: its result, names and numbers, which its run's history keeps. It names no record:
+    the five it made went with its scratch store."""
+    check_result: dict
+
+
+class _CardStages(QObject):
+    """What a card test's run tells of its stages, from the worker's thread: ``stage`` carries each (the engine's name,
+    the event, the seconds or None), heard on the thread the object lives on, the window's, as a queued signal is.
+    ``tell`` is what the run is handed: it only emits, and never raises."""
+
+    stage = Signal(str, str, object)
+
+    def tell(self, stage, event, seconds) -> None:
+        try:
+            self.stage.emit(str(stage), str(event), seconds)
+        except Exception:                        # noqa: BLE001 -- what tells a run's stages never stops it
+            pass
+
+
+def card_test_seconds(seconds) -> dict:
+    """The seconds of each stage a card test ran, as names and numbers: a stage whose seconds are no number is left
+    out."""
+    held = seconds if isinstance(seconds, dict) else {}
+    return {str(stage): float(took) for stage, took in held.items()
+            if isinstance(took, (int, float)) and not isinstance(took, bool)}
+
+
+def card_check(cfg, *, cell: str, t_obs_s: float, seed: int, num_runs: int, run_size_cap: int, n_cal: int,
+               epochs: int, hidden_features: int, num_transforms: int, on_stage, fig_sink=None,
+               store_factory=scratch_store) -> CardCheck:
+    """One card test on ``cfg``, a configuration holding no cell, in a scratch store: the prior at full size, then a
+    training on ``num_runs`` batches of at most ``run_size_cap`` simulations of the network ``hidden_features`` by
+    ``num_transforms`` for at most ``epochs`` epochs (the limit sent is one less), its calibration on ``n_cal`` test
+    datasets and one inference on a simulated cell from ``cell`` over ``t_obs_s`` seconds, all inside one ``seed``; its
+    simulations not kept and nothing it makes saved by a name. ``on_stage`` hears each stage begin and end. Its result:
+    each stage's seconds, the stages that ran, the share of unusable driven recordings in its training's first total
+    (None without one), and how many batches were run in smaller pieces for lack of the card's memory."""
+    from core import diagnostics
+    noted = _Noted()
+    with store_factory() as store, _noting(noted):
+        result = diagnostics.card_test(cfg, cell=cell, t_obs_s=t_obs_s, seed=seed, num_runs=num_runs,
+                                       run_size_cap=run_size_cap, n_cal=n_cal, max_num_epochs=epochs - 1,
+                                       hidden_features=hidden_features, num_transforms=num_transforms,
+                                       checkpoint=False, save=False, on_stage=on_stage, fig_sink=fig_sink,
+                                       store=store)
+        seconds = card_test_seconds(getattr(result, "seconds", None))
+        ran = [str(stage) for stage in getattr(result, "stages_run", None) or ()]
+        del result                           # its five records go with their folder: nothing of them is held on to
+    masked = noted.masked
+    return CardCheck({"seconds": seconds, "stages_run": ran,
+                      "unusable": masked[0] / masked[1] if masked is not None and masked[1] else None,
+                      "split": len(noted.split)})

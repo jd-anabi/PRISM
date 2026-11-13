@@ -971,7 +971,15 @@ KEPT_NOTHING_TEXT = "Nothing is kept but the result."
 #: The checks that keep nothing but their result, which their run's history holds.
 KEEPS_NOTHING = ("timing", "card_test")
 #: The checks that simulate on the graphics card: beside them the memory limit in force and the last run are said.
-ON_THE_CARD = ("band", "audit", "calibration", "pin_down", "timing", "fixed_number", "drive_study", "across_prior")
+ON_THE_CARD = ("band", "audit", "calibration", "pin_down", "timing", "fixed_number", "card_test", "drive_study",
+               "across_prior")
+#: The card test, said in one sentence: its prior built at full size (the stage takes no size of its own), then its
+#: three small stages; how long it took here last time, or that it has not run here; and that it keeps nothing.
+CARD_TEXT = ("This builds a prior at full size and then trains a small posterior, calibrates it and runs one inference "
+             "on a simulated cell: four real stages, the last three at very small sizes, on the graphics card. It takes "
+             "minutes{}. Nothing else can run meanwhile, and nothing it makes is kept.")
+CARD_TOOK_WORDS = " ({} here last time)"
+CARD_NOT_RUN_WORDS = "; it has not run on this computer yet"
 #: The timing of a short fit: its two fits, one per network, or one when the Training form's network is the built-in
 #: one, each computing the rotation of its own simulations first.
 TIMING_COUNTS_TEXT = ("Trains two short fits, one per network, each on {} batches for {} epochs; each computes its own "
@@ -1083,9 +1091,12 @@ def before_you_start(key: str, *, sizes: Mapping, last: Mapping | None, memory: 
     held = last.get("check") if isinstance(last, Mapping) else None
     seconds = held.get("seconds") if isinstance(held, Mapping) else None
     timed = isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0
+    lines = " ".join(line for line in memory if line)
+    if key == "card_test":
+        took = "" if not read else CARD_TOOK_WORDS.format(seconds_words(seconds)) if timed else CARD_NOT_RUN_WORDS
+        return (Fact("info", CARD_TEXT.format(took)), *((Fact("info", lines),) if lines else ()))
     if read:
         said.append(Fact("info", TOOK_TEXT.format(duration_text(seconds)) if timed else NOT_TIMED_TEXT))
-    lines = " ".join(line for line in memory if line)
     if key in ON_THE_CARD and lines:
         said.append(Fact("info", lines))
     said += [Fact("info", ONE_AT_A_TIME_TEXT), Fact("info", KEPT_NOTHING_TEXT if key in KEEPS_NOTHING
@@ -1229,3 +1240,53 @@ def timing_words(runs, *, expected=None, planned: "int | None" = None) -> tuple:
         seconds = first[1] * (planned / simulations) * expected[0]
         projection = PROJECTION_TEXT.format(_hours_words(seconds), number_text(expected[0]), _source_words(expected))
     return sentence, table, projection
+
+
+#: The card test's stages, by the engine's names for them, in the words its run's stage line says them.
+CARD_STAGE_WORDS = {"prior": "Prior", "posterior": "Training", "validate": "Calibration", "infer": "Inference"}
+#: The card test's result: that every stage ran on the card and in how long, or the stage it failed in; a table of
+#: each stage's seconds beside the last time's; the share of unusable driven recordings its training simulated, read
+#: against the audit's expected share at a size where it says nothing (the command line's own reading of it); the
+#: batches split for lack of memory; and what the test can and cannot show. Its calibration's verdict is never said.
+CARD_DONE_TEXT = "Card test: done. Every stage ran on the graphics card in {}."
+CARD_FAILED_TEXT = "Card test: failed in {}."
+CARD_COLUMNS = ("Stage", "Seconds", "Last time")
+CARD_RIGHT = frozenset({1, 2})
+CARD_UNUSABLE_TEXT = ("Unusable driven recordings in its training: {} %. At this size a share within about 12 points of "
+                      "37 % says nothing either way.")
+CARD_SPLIT_TEXT = "Batches split for lack of memory: {}."
+CARD_POWER_TEXT = ("This shows that the chain runs. It says nothing about calibration: at these sizes the test has no "
+                   "power.")
+
+
+def card_words(run: Mapping, earlier: "Mapping | None" = None) -> tuple:
+    """The result of a card test's ``run`` in the run history, beside ``earlier``, the run of it that finished before
+    (None for none): its sentence and the marker of its state, its table and the sentences under it; for a run that
+    did not finish, the stage it was in, from its history. Never raises on what a history holds."""
+    held = run.get("check") if isinstance(run.get("check"), Mapping) else {}
+    result = held.get("result") if isinstance(held.get("result"), Mapping) else {}
+    seconds = result.get("seconds") if isinstance(result.get("seconds"), Mapping) else {}
+    before = ((earlier.get("check") or {}).get("result") or {}) if isinstance(earlier, Mapping) else {}
+    last = before.get("seconds") if isinstance(before, Mapping) and isinstance(before.get("seconds"), Mapping) else {}
+    if run.get("outcome") == "finished":
+        took = [one for one in (_number(value) for value in seconds.values()) if one is not None]
+        sentence, marker = CARD_DONE_TEXT.format(seconds_words(sum(took))), "done"
+    else:
+        stage, failed = run.get("stage"), run.get("outcome") == "failed"
+        sentence = (CARD_FAILED_TEXT.format(stage) if failed and isinstance(stage, str) and stage
+                    else run_sentence("card_test", run))
+        marker = "err" if failed else "later"
+        stages = held.get("stages") if isinstance(held.get("stages"), Mapping) else {}
+        seconds = {name: stages.get(words) for name, words in CARD_STAGE_WORDS.items()}
+    rows = tuple((words, "" if _number(seconds.get(name)) is None else seconds_words(_number(seconds.get(name))),
+                  "" if _number(last.get(name)) is None else seconds_words(_number(last.get(name))))
+                 for name, words in CARD_STAGE_WORDS.items())
+    lines = []
+    share = _number(result.get("unusable"))
+    if share is not None:
+        lines.append(CARD_UNUSABLE_TEXT.format(_share(share)))
+    split = result.get("split")
+    if _is_whole(split):
+        lines.append(CARD_SPLIT_TEXT.format(number_text(split)))
+    lines.append(CARD_POWER_TEXT)
+    return marker, sentence, TableWords(CARD_COLUMNS, rows, right=CARD_RIGHT), tuple(lines)

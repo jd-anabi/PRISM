@@ -3,8 +3,8 @@ makes a check's form from its rows, with the name and the note of the record its
 rows through the rules the check's stage applies again; what a form hands its stage, by the stage's own names; and the
 run a press of a check starts, as its page describes it to the run's controller.
 
-A check whose rows are not here yet cannot be run from the window, and its button says so. Nothing on a check's form is
-remembered between launches: every row opens at its usual value. A row is held to its stage's own rule, called and never
+Every check with a button has its rows here. Nothing on a check's form is remembered between launches: every row opens
+at its usual value, but a card test's network, whose usual value is step 3's form's. A row is held to its stage's own rule, called and never
 copied: the line under a field says it in the window's words, from the row's label, and a press that reaches the stage
 with it is refused in the stage's own sentence.
 """
@@ -19,7 +19,7 @@ from core.config import CELL_PATH
 from core.refusals import Refusal, require_at_least, require_between, require_positive
 from core.rng import SEED_MAX, require_seed
 
-from ... import check_readings, fields
+from ... import check_readings, check_scratch, fields
 from ...check_catalogue import entry
 from ...check_readings import before_you_start  # noqa: F401 -- "Before you start" of a check, words with no widget
 from ...run.model import SIMULATION_ROW, RunSpec, Said, Stage
@@ -30,8 +30,6 @@ from ...widgets.labeled_inputs import FloatField, IntField
 from .base import TRAINING_STAGES
 from .help_text import HELP
 
-#: What greys the button of a check whose form is not built yet.
-NOT_BUILT_TEXT = "This check cannot be run from the window yet."
 #: What a check's list of cell files shows while it holds none, and the fact that says so.
 CHOOSE_CELL = "Choose a cell file"
 NO_CELL_TEXT = "Choose a cell file."
@@ -71,6 +69,8 @@ REPEATED_STAGES = (Stage(MEASURING, said=Said("patho_total", "sbc_repeat", RANKI
 TIMING_STAGES = (Stage("Rotation", TRAINING_STAGES[0].begins),
                  Stage("Simulation", TRAINING_STAGES[1].begins, TRAINING_STAGES[1].counts),
                  Stage("Fit", TRAINING_STAGES[2].begins, TRAINING_STAGES[2].counts))
+#: The card test's stages, in the words its stage line says them: each begun as the engine says it begins.
+CARD_STAGES = tuple(Stage(words) for words in check_scratch.CARD_STAGE_WORDS.values())
 #: The kinds of row a check's form holds, and those whose value is no size of the run: a cell file is loaded on the
 #: check's own configuration, and a seed changes no cost.
 KINDS = ("whole", "number", "lengths", "cell", "seed", "blank_seed", "epochs", "ticked_count", "network")
@@ -109,6 +109,13 @@ NETWORKS_TEXT = "Networks: {}, as step 3's form holds them, then the built-in {}
 NETWORK_ONE_TEXT = "Network: {}, as step 3's form holds it, which is the built-in one."
 NETWORK_UNREAD_TEXT = "Networks: as step 3's form holds them, which cannot be used now, then the built-in {}."
 NETWORK_WORDS = "{} by {}"
+#: The card test's sizes, the engine's card test's own usual ones: its batches, simulations per batch, test datasets
+#: and epochs (its limit of 5, sent one less), and the length of the recording its inference simulates, in seconds.
+CARD_BATCHES = 4
+CARD_PER_BATCH = 32
+CARD_DATASETS = 40
+CARD_EPOCHS = 6
+CARD_LENGTH_S = 1.0
 #: What separates the numbers of a list typed in one field.
 _BETWEEN = re.compile(r"[,\s]+")
 
@@ -192,6 +199,16 @@ FORMS: dict[str, tuple[FormRow, ...]] = {
                FormRow("epochs", EPOCHS_LABEL, "epochs", TIMING_EPOCHS, least=LEAST_EPOCHS, help_text=EPOCHS_HELP,
                        rule="epochs"),
                FormRow("network", None, "network", None, folded=True)),
+    "card_test": (FormRow("cell", None, "cell", None),
+                  FormRow("t_obs", None, "number", CARD_LENGTH_S, unit="s", rule="positive", argument="t_obs_s"),
+                  FormRow("num_runs", None, "whole", CARD_BATCHES, folded=True, rule="at_least"),
+                  FormRow("run_size_cap", None, "whole", CARD_PER_BATCH, folded=True, least=0, rule="at_least"),
+                  FormRow("n_cal", None, "whole", CARD_DATASETS, folded=True, rule="at_least"),
+                  FormRow("epochs", EPOCHS_LABEL, "epochs", CARD_EPOCHS, folded=True, least=LEAST_EPOCHS,
+                          help_text=EPOCHS_HELP, rule="epochs"),
+                  FormRow("hidden_features", None, "whole", BUILT_IN_NETWORK[0], folded=True, rule="at_least"),
+                  FormRow("num_transforms", None, "whole", BUILT_IN_NETWORK[1], folded=True, rule="at_least"),
+                  FormRow("seed", None, "seed", 0, folded=True, least=0, rule="seed")),
 }
 
 
@@ -452,7 +469,7 @@ def check_spec(key: str, *, sizes: dict, facts: Mapping = {}, plan: dict | None 
     with ``facts``, what is known of it before it says it."""
     one = entry(key)
     stages = (CALIBRATION_STAGES if key == "calibration" else REPEATED_STAGES if key == "fixed_number"
-              else TIMING_STAGES if key == "timing" else (Stage(MEASURING),))
+              else TIMING_STAGES if key == "timing" else CARD_STAGES if key == "card_test" else (Stage(MEASURING),))
     # A check that keeps nothing says so to its run, which then says nothing of a training not kept; the timing's fit
     # ends at the limit its epochs set, or by the training's own patience before it.
     kept_nothing = {"keeps_nothing": True} if key in check_readings.KEEPS_NOTHING else {}

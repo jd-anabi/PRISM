@@ -1284,8 +1284,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         # one step; two steps, the second beginning with its own number
         "t_obs": "Set it in the 'Recording length' box in step 4, Checks, or step 5, Inference.",
         "num_runs": "Set it in the 'Batches' box in step 3, Training, or step 4, Checks, or step 6, Narrowing round.",
-        "run_size_cap": ("Set it in the 'Simulations per batch' box in step 3, Training, or step 6, "
-                         "Narrowing round."),
+        "run_size_cap": ("Set it in the 'Simulations per batch' box in step 3, Training, or step 4, Checks, or "
+                         "step 6, Narrowing round."),
         # the consents and the dialogs quote their controls' own text (tsnpe_tab.py:102,
         # posterior_tab.py:232, infer_tab.py:150)
         "new_run": ("Answer 'Start training on a new simulation set' in the question 'Start training' asks in step 3, "
@@ -1325,8 +1325,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "stability_units": "Set it in the 'Stability test length' box in step 2, Prior.",
         "min_cluster_size": "Set it in the 'Smallest cluster' box in step 2, Prior.",
         "min_samples": "Set it in the 'Cluster density' box in step 2, Prior.",
-        "hidden_features": "Set it in the 'Network width' box in step 3, Training.",
-        "num_transforms": "Set it in the 'Network depth' box in step 3, Training.",
+        "hidden_features": "Set it in the 'Network width' box in step 3, Training, or step 4, Checks.",
+        "num_transforms": "Set it in the 'Network depth' box in step 3, Training, or step 4, Checks.",
         "learning_rate": "Set it in the 'Learning rate' box in step 3, Training.",
         "stop_after_epochs": "Set it in the 'End the fit after … epochs without improvement' box in step 3, Training.",
         "fisher_m": "Set it in the 'Rotation: simulations per perturbation' box in step 3, Training.",

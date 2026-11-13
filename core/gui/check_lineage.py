@@ -671,12 +671,11 @@ _BUTTON_FACTS = {NEEDS_PRIOR_TEXT: (step_facts.NEEDS_A_PRIOR, step_facts.NEEDS_A
                  NOT_WITH_FREQUENCY_TEXT: (NOT_WITH_FREQUENCY_TEXT, step_facts.NOT_WITH_FREQUENCY_BLOCKS)}
 
 
-def button_facts(row: CheckRow, *, not_built: str = "") -> tuple[Fact, ...]:
-    """What stops the button of the check of ``row``, as blocking facts: ``not_built``, the sentence of a check that
-    cannot be run from the window yet ("" for one that can), first, then the reason its row gives. A prior in use that
+def button_facts(row: CheckRow) -> tuple[Fact, ...]:
+    """What stops the button of the check of ``row``, as blocking facts: the reason its row gives. A prior in use that
     is not the posterior's own is said with that prior's name when the reading found it. None for a check its row
     leaves free to run."""
-    facts = [Fact("lock", not_built, step_facts.NOT_BUILT_BLOCKS)] if not_built else []
+    facts = []
     if row.reason.startswith(OTHER_PRIOR_TEXT.split(".", 1)[0]):
         facts.append(Fact("lock", row.reason, step_facts.OTHER_PRIOR_BLOCKS))
     elif row.reason in _BUTTON_FACTS:

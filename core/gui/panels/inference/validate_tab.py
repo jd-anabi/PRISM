@@ -39,7 +39,7 @@ from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
 from ...run.questions import TRAINING_WORDS
-from ...step_facts import (FREQUENCY_ONLY_BLOCKS, NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS, NOT_BUILT_BLOCKS, Fact,
+from ...step_facts import (FREQUENCY_ONLY_BLOCKS, NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS, Fact,
                            parameter_units)
 from ...texts import date_text
 from ...widgets.list_detail import ListAndDetail
@@ -47,7 +47,7 @@ from ...widgets.page import Sentence, _ring_room
 from ...widgets.rule_table import Column, RuleTable, StateCell, TextCell
 from . import check_forms
 from .check_page import CheckPage
-from .check_results import comparison_block, history_block, result_block, timing_block
+from .check_results import card_block, comparison_block, result_block, timing_block
 from .step_page import StepPage
 
 TITLE = "Checks"
@@ -92,11 +92,11 @@ _ENGINE = {"band": (probes, "probe_band"), "audit": (probes, "probe_mask"),
            "identifiability": (identifiability, "identifiability_rotation"),
            "pin_down": (identifiability, "identifiability_jacobian"), "fixed_number": (sbc, "sbc_repeats"),
            "drive_study": (probes, "probe_drive"), "across_prior": (identifiability, "identifiability_laplace"),
-           "timing": (check_scratch, "short_fit")}
+           "timing": (check_scratch, "short_fit"), "card_test": (check_scratch, "card_check")}
 _STARTS = {"band": "_start_band", "audit": "_start_audit", "calibration": "_start_calibration",
            "input_use": "_start_input_use", "identifiability": "_start_identifiability",
            "pin_down": "_start_pin_down", "timing": "_start_timing", "fixed_number": "_start_fixed_number",
-           "drive_study": "_start_drive_study", "across_prior": "_start_across_prior"}
+           "card_test": "_start_card_test", "drive_study": "_start_drive_study", "across_prior": "_start_across_prior"}
 #: The keys that open the check of the row the keyboard is on.
 _OPENING_KEYS = (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space)
 
@@ -271,6 +271,11 @@ class ValidatePanel(StepPage):
         self._press: "dict | None" = None
         self._following = None
         self._planned: "int | None" = None
+        # What a card test's run tells of its stages, heard here on the window's thread, and each event heard of the
+        # run in hand: a failure returns no result, so what the stage line said is kept as it was told.
+        self._card_stages = check_scratch._CardStages(self)
+        self._card_stages.stage.connect(self._card_stage_heard, Qt.QueuedConnection)
+        self.card_heard: list = []
         self.list_detail = ListAndDetail(self.listing, beside_width=design.scaled(CHECK_BESIDE_WIDTH))
         self.list_detail.back_pressed.connect(self._all_checks)
         self.list_detail.switched.connect(self._switched)
@@ -345,6 +350,7 @@ class ValidatePanel(StepPage):
         title, sentence = self._title()
         self.head.title.setText(title)
         self.head.set_sentence(sentence)
+        self._follow_step_three()
         summary = getattr(self._screen, "checks_summary", lambda: None)()
         self.headline.setText(summary.headline if summary is not None else "")
         self.headline_sentence.set_text(summary.sentence if summary is not None else "")
@@ -372,14 +378,15 @@ class ValidatePanel(StepPage):
             return self._comparison_result(row, found, page)
         if key == "timing":
             return self._timing_result(kept, page)
-        if key in ("timing", "card_test"):
+        if key == "card_test":
             ran = [one for one in kept.histories
                    if isinstance(one.get("check"), dict) and one["check"].get("key") == key]
             if not ran:
                 return None, None
-            source = ran[-1].get("id")
+            earlier = next((one for one in reversed(ran[:-1]) if one.get("outcome") == "finished"), None)
+            source = (ran[-1].get("id"), ran[-1].get("outcome"), None if earlier is None else earlier.get("id"))
             return ((page.result, source) if page.result_source == source
-                    else (history_block(key, ran[-1], parent=page), source))
+                    else (card_block(ran[-1], parent=page, earlier=earlier), source))
         if row.record is None:
             return None, None
         # What the block's words say beside the record: the count of the others still open, which the calibration's
@@ -426,6 +433,18 @@ class ValidatePanel(StepPage):
         return (None if None in network else network,
                 held("run_size_cap", lambda value: require_at_least("run_size_cap", value, 0)),
                 held("num_runs", lambda value: require_at_least("num_runs", value, 1)))
+
+    def _follow_step_three(self) -> None:
+        """The card test's network is step 3's form's while its rows stand at their usual value: each that does takes
+        step 3's width or depth, which becomes its usual; one the person changed keeps what they typed. Reads
+        nothing."""
+        network = self._trained()[0]
+        rows = self.check_pages["card_test"].form.rows
+        for name, theirs in zip(check_forms.NETWORK_ROWS, network or ()):
+            row = rows[name]
+            if row.at_usual() and row.usual() != theirs:
+                row.set_usual(theirs)
+                row.set_value(theirs)
 
     def _sizes(self, key: str, form) -> dict:
         """The sizes of a run of the check ``key`` its form holds; the timing's with step 3's simulations per batch and
@@ -532,7 +551,7 @@ class ValidatePanel(StepPage):
             getattr(self, _STARTS[key])()
             return
         if key is not None and entry(key).button:
-            return                           # its facts grey it: the window cannot run it yet
+            return                           # every check with a button is started above
         following = self._next_check()
         if following is None:
             self._screen.navigate.emit("inference", "infer")
@@ -552,13 +571,7 @@ class ValidatePanel(StepPage):
             unread = tuple(Fact("warn", UNREADABLE_RECORD_TEXT.format(name)) for name in self._unreadable())
             return (*blocks, *others, *unread)
         row = self._by_key().get(key)
-        not_built = "" if key in check_forms.FORMS else check_forms.NOT_BUILT_TEXT
-        if row is not None:
-            blocks = check_lineage.button_facts(row, not_built=not_built)
-        else:
-            blocks = (Fact("lock", not_built, NOT_BUILT_BLOCKS),) if not_built else ()
-        if not_built:
-            return (*blocks, *others)
+        blocks = check_lineage.button_facts(row) if row is not None else ()
         form = self.check_pages[key].form
         found = check_forms.problems(key, form, slots=self._slots())
         for setting, row_ in form.rows.items():
@@ -617,6 +630,7 @@ class ValidatePanel(StepPage):
         on its first setting, or else on the way back; None for the whole list again. KeyError for a key that is no
         check's, before anything moves."""
         page = None if key is None else self.check_pages[key]
+        self._follow_step_three()
         self.open_key = key
         self.names = None if page is None else page.form.names
         self.list_detail.show_detail(page)
@@ -854,6 +868,25 @@ class ValidatePanel(StepPage):
         """The second fit of the press in hand, unless a run is live by now."""
         if self._press is not None and not controller().is_live():
             self._time_a_fit(network)
+
+    def _start_card_test(self) -> None:
+        """The card test: its four stages on a configuration of its own, made as the session's was with no cell loaded
+        on it, the cell chosen handed by its path, in a scratch store; its stage line told by the run, on this page."""
+        made = self._prepared("card_test", own=True)
+        if made is None:
+            return
+        cfg, arguments = made
+        picker = check_forms.cell_picker(self.check_pages["card_test"].form)
+        self.card_heard = []
+        self.dispatch(check_scratch.card_check, cfg, cell=picker.selected_path() or "",
+                      on_stage=self._card_stages.tell, provide_fig_sink=True, **arguments)
+
+    def _card_stage_heard(self, stage: str, event: str, seconds) -> None:
+        """A card test's stage was told, heard on the window's thread: kept, and a stage begun begins on the run's
+        page, in its words, while the run is this page's own."""
+        self.card_heard.append((stage, event, seconds))
+        if event == "started" and self.is_running():
+            self.run_view.set_stage(check_readings.CARD_STAGE_WORDS.get(stage, stage))
 
     def _start_fixed_number(self) -> None:
         """The calibration repeated at a fixed number of driven recordings, of the posterior in use with the prior in

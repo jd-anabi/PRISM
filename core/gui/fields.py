@@ -71,7 +71,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
     "t_obs": (("checks", "infer"), "Recording length"),
     "num_runs": (("training", "checks", "narrowing"), "Batches"),
-    "run_size_cap": (("training", "narrowing"), "Simulations per batch"),
+    "run_size_cap": (("training", "checks", "narrowing"), "Simulations per batch"),
     "checkpoint_every": ("training", "Save the simulations every … batches"),
     "resume": ("training", "Continue or start new"),
     "new_run": (f"Answer 'Start training on a new simulation set' in the question 'Start training' asks "
@@ -97,8 +97,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "min_cluster_size": ("prior", "Smallest cluster"),
     "min_samples": ("prior", "Cluster density"),
     # the flow and the Fisher rotation
-    "hidden_features": ("training", "Network width"),
-    "num_transforms": ("training", "Network depth"),
+    "hidden_features": (("training", "checks"), "Network width"),
+    "num_transforms": (("training", "checks"), "Network depth"),
     "learning_rate": ("training", "Learning rate"),
     "stop_after_epochs": ("training", "End the fit after … epochs without improvement"),
     "max_num_epochs": ("training", "Epoch limit"),
