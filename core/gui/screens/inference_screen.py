@@ -53,6 +53,12 @@ FIT_AGAIN_OTHER = "Fit again and start a new session"
 RESUME_TITLE = "Resume this training?"
 RESUME_OTHER = "Resume and start a new session"
 RESUME_WORDS = "Resume"
+#: A kept narrowing round's Resume: its question when the session holds a record, and the name it asks for.
+ROUND_RESUME_TITLE = "Resume this narrowing round?"
+ROUND_NAME_TITLE = "Name this narrowing round"
+ROUND_NAME_TAKEN_TEXT = ("Its name, {}, has been taken by another posterior since it was kept. The posterior it makes "
+                         "needs another.")
+ROUND_NAME_TEXT = "This kept narrowing round has no name yet. A posterior needs one."
 CONTINUE_WITH_WORDS = "Continue with these"
 #: The question "Continue with these" asks when it would set what was chosen on the forms and not applied.
 CONTINUE_WITH_TITLE = "Continue with these?"
@@ -781,6 +787,9 @@ class InferenceScreen(QWidget):
             self.posterior_panel.to_the_form()
             self.posterior_panel.say_on_row(ident, str(getattr(error, "message", None) or error))
             return None
+        if getattr(kept, "region", None) is not None:
+            # A kept narrowing round is resumed through the narrowing round alone, never as a training.
+            return self.resume_round(kept.id)
         problems = (continuing.as_sentence(kept.why_not),) if not kept.can_resume else resuming.resume_problems(
             kept, device=prism_config.detect_device(), store=store)
         if problems:
@@ -819,6 +828,70 @@ class InferenceScreen(QWidget):
         self.navigate.emit("inference", "training")
         self.posterior_panel.to_the_form()
         return loads
+
+    def resume_round(self, kept) -> "LoadChain | None":
+        """"Resume" for the kept narrowing round ``kept`` (its id, or the record), from the round page's list or a past
+        view, never from Home: its record read again; what stops it said on its row before anything is read (the
+        record's own reason, a training's reasons, the posterior it narrows or its observation gone); a name asked for
+        when its record holds none, or another posterior has taken it since ("Cancel" starts nothing); asked first when
+        the session holds a record; then its model and options, its bounds file, its prior, the posterior it narrows
+        and its observation put in use from its record by a chain of loads, the prior on the configuration its record
+        rebuilds; and, once the observation is loaded, the round resumed on its own record through the narrowing round
+        alone. The page's form is in sight once it is shown. The chain is handed back; None when nothing started."""
+        from core import config as prism_config
+        from core.artifacts import default_store
+        from core.SBI import fit_state
+        from ..widgets.ask import ask_text
+        if controller().is_live():
+            return None
+        self.clear_notice()
+        page = self.tsnpe_panel
+        ident = getattr(kept, "id", kept)
+        store = default_store()
+        try:
+            kept = fit_state.kept_fit(store, ident)
+        except Exception as error:           # noqa: BLE001 -- gone or torn since the list was read
+            self._said_on_the_round(ident, str(getattr(error, "message", None) or error))
+            return None
+        problems = (continuing.as_sentence(kept.why_not),) if not kept.can_resume else resuming.round_problems(
+            kept, device=prism_config.detect_device(), store=store)
+        if problems:
+            self._said_on_the_round(ident, " ".join(problems))
+            return None
+        name = ""
+        taken = bool(kept.posterior_name) and _name_trouble(store, kept.posterior_name) is not None
+        if not kept.posterior_name or taken:
+            from ..widgets.form import NAME_ID_TEXT, NAME_SHAPE_TEXT
+            sentence = ROUND_NAME_TAKEN_TEXT.format(kept.posterior_name) if taken else ROUND_NAME_TEXT
+            name = ask_text(self, ROUND_NAME_TITLE, sentence, "Name", RESUME_WORDS,
+                            check=lambda typed: _name_trouble(store, typed),
+                            room=(NAME_SHAPE_TEXT, NAME_ID_TEXT)) or ""
+            if not name:
+                return None
+        if not self._lets_go(ROUND_RESUME_TITLE, RESUME_OTHER):
+            return None
+        record, parents = kept.config or {}, kept.parents or {}
+        options = {"chi_mode": bool(record.get("chi_mode")), "chi_k_pad": record.get("chi_k_pad"),
+                   "chi_max_cycles": record.get("chi_max_cycles"), "reparam_rotate": record.get("reparam_rotate"),
+                   "units_override": resuming.resume_draft(kept).units_override}
+        cfg = resuming.resume_config(kept)
+        width = record.get("run_size")
+        own = isinstance(width, int) and not isinstance(width, bool) and width > 0
+        self._resumed = (cfg, getattr(getattr(getattr(cfg, "hw", None), "device", None), "type", None),
+                         width if own else None)
+        loads = self.load_chain(record.get("model"), options, resuming.bounds_key(kept), parents.get("prior"),
+                                posterior=parents.get("parent_posterior"), observation=parents.get("observation"),
+                                candidate=cfg, press=RESUME_WORDS, where="narrowing")
+        loads.finished.connect(lambda: page.resume(kept, name or None))
+        self.navigate.emit("inference", "narrowing")
+        page.to_the_form()
+        return loads
+
+    def _said_on_the_round(self, ident: str, sentence: str) -> None:
+        """What stops a kept round's Resume, said on its row of the round's page, the page shown with its form."""
+        self.navigate.emit("inference", "narrowing")
+        self.tsnpe_panel.to_the_form()
+        self.tsnpe_panel.say_on_row(ident, sentence)
 
     # ── a chain of loads ──
     def load_chain(self, model, options, bounds_file, prior, posterior=None, observation=None, *, fill=None,

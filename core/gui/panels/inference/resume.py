@@ -24,6 +24,9 @@ UNITS_CHANGED_TEXT = "The units file {} has changed since this training began."
 PRIOR_GONE_TEXT = "The prior it was trained with is no longer in Records."
 NO_CARD_TEXT = "It was trained on the graphics card; this computer has none now."
 NO_MODEL_TEXT = "Its model, {}, is no longer one PRISM can train."
+#: What stops a kept narrowing round's Resume besides: the posterior it narrows, or its observation, gone.
+PARENT_GONE_TEXT = "The posterior it narrows, {}, is no longer in Records."
+OBSERVATION_GONE_TEXT = "The observation it was trained around is no longer in Records."
 
 
 def read_offers(store, folder) -> tuple:
@@ -124,6 +127,22 @@ def resume_problems(kept, *, device, store) -> tuple[str, ...]:
     return tuple(found)
 
 
+def round_problems(kept, *, device, store) -> tuple[str, ...]:
+    """What stops the Resume of the kept narrowing round ``kept`` before anything is read, each a sentence: what stops a
+    training's (``resume_problems``), then the posterior it narrows and the observation it was trained around gone
+    from Records, each by the id its record names; the posterior named by that id, which is all that is known of a
+    record that is gone."""
+    found = list(resume_problems(kept, device=device, store=store))
+    parents = getattr(kept, "parents", None) or {}
+    for kind, key in (("posterior", "parent_posterior"), ("observation", "observation")):
+        ref = parents.get(key)
+        try:
+            store.get(kind, ref)
+        except Exception:                    # noqa: BLE001 -- deleted, torn, or never named
+            found.append(PARENT_GONE_TEXT.format(ref) if kind == "posterior" else OBSERVATION_GONE_TEXT)
+    return tuple(found)
+
+
 def resume_draft(kept) -> ConfigDraft:
     """The draft of step 1 the kept training was made with, from its record alone: its model, its units (the model's
     file, another file by its path, or the units typed when its record names no file), its kind of observation, its
@@ -187,6 +206,16 @@ def resume_call(kept, name: str = "") -> dict:
     """The keywords the window's Resume hands the training stage beside its four arguments: the kept training named,
     and the name asked for when its record holds none. Nothing the stage would compare with the record: no budget, no
     network, no patience, no ceiling, no cadence, no note, no saving switch and no policy."""
+    call = {"resume_fit": getattr(kept, "id")}
+    if name:
+        call["name"] = name
+    return call
+
+
+def round_call(kept, name: "str | None" = None) -> dict:
+    """The keywords the window's Resume of a kept narrowing round hands the round beside its four arguments: the kept
+    training named, and a name only when one was asked for. Nothing the round compares with the record: no number of
+    directions, no level, no budget, no network, no cadence and no note; the round reads its region from the record."""
     call = {"resume_fit": getattr(kept, "id")}
     if name:
         call["name"] = name

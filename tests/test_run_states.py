@@ -1898,6 +1898,10 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "observation loaded": (inference.tsnpe_panel, ArtifactStore.load_observation, (None, cfg, "o1"), {},
                                ("Observation load", ("inference", "narrowing"), "Stop loading", (), yes, no, no,
                                 no)),
+        "narrowing round resumed": (inference.tsnpe_panel, orchestrator.tsnpe_round, (cfg, None, None, None),
+                                    {"resume_fit": "20261003T130500"},
+                                    ("Narrowing round", ("inference", "narrowing"), "Stop the narrowing round…",
+                                     ("posterior", "simulation", "fit"), no, yes, yes, yes)),
     }
     specs = {}
     for kind, (panel, fn, args, kwargs, row) in kinds_of.items():
@@ -1905,7 +1909,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         assert (spec.word, spec.place, spec.stop_button, spec.kinds, spec.loads_only, spec.keeps_files, spec.retries,
                 spec.stop_asks) == row, kind
         assert spec.expected_epochs is None and spec.fn is None, kind
-        trains = kind in ("training", "narrowing round")
+        trains = kind in ("training", "narrowing round", "narrowing round resumed")
         assert (spec.simulation_set, spec.stages == _TRAINING) == (trains, trains), kind
         if spec.word == "Check":
             stages = (check_forms.CALIBRATION_STAGES if kind == "calibration" else check_forms.REPEATED_STAGES

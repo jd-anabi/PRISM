@@ -1822,6 +1822,181 @@ class _Unsaid(RuntimeError):
         raise ValueError("this error's message cannot be had")
 
 
+# ── a kept narrowing round's Resume, after a reopening ──
+def _a_kept_round(store, tmp_path, monkeypatch, *, name="retrain_round1", cfg=None, config=None):
+    """What a launch before this one left (``tests/test_shell.py``'s ``_a_launch_before``), a kept narrowing round of its
+    prior among it, narrowed from its posterior around an observation of the test's store, on Nadrowski's master.txt
+    unless ``cfg`` says otherwise; and the window of this launch, on the test's own clock and folder of runs. (the
+    launch's records, the round's id, the observation's id, the window, its Parameter inference)."""
+    from tests._fixtures import _nad_cfg, region_dict, write_observation
+    from tests.test_shell import _a_kept_training, _a_launch_before, _home_of_last_time
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    kept = _a_kept_training(store, held, name=name, cfg=cfg, config=config, region=region_dict(),
+                            parents={"parent_posterior": held.posterior, "observation": observed})
+    window, _home = _home_of_last_time(tmp_path)
+    return held, kept, observed, window, window.part("inference")
+
+
+def _nothing_started(monkeypatch) -> list:
+    """Every chain of loads and every run asked for from now on, none of them started: what was asked."""
+    from core.gui.run.controller import RunController
+    from core.gui.screens.inference_screen import InferenceScreen
+    asked = []
+    monkeypatch.setattr(InferenceScreen, "load_chain", lambda self, *args, **kwargs: asked.append(("chain", args)))
+    monkeypatch.setattr(RunController, "dispatch", lambda self, *args, **kwargs: asked.append(("run", args)) or False)
+    return asked
+
+
+@pytest.mark.parametrize("cause", ["parent posterior gone", "prior gone", "observation gone", "bounds file changed",
+                                   "card gone"])
+def test_a_kept_round_whose_records_have_moved_says_why_before_anything_is_read(cause, store, tmp_path, monkeypatch):
+    """A kept narrowing round whose world has moved since it was kept, each cause alone: its Resume says why on its row
+    of the round's page, the page shown with its form, and nothing is read, applied, loaded or started; nothing
+    raises."""
+    import shutil
+    from core import cli, config, registry
+    cfg = None
+    if cause == "bounds file changed":
+        copy = tmp_path / "bounds" / "master copy.txt"
+        copy.parent.mkdir()
+        shutil.copyfile(config.BOUNDS_PATH / "nadrowski" / "master.txt", copy)
+        cfg = cli.make_sim_config("NADROWSKI", config.VALID_LABELS[config.VALID_MODELS.index("NADROWSKI")],
+                                  registry.state_dep_drift("NADROWSKI"), str(copy), hw=config.cpu_device())
+    held, kept, observed, window, inference = _a_kept_round(store, tmp_path, monkeypatch, cfg=cfg,
+                                                            config={"device": "cuda"} if cause == "card gone" else None)
+    if cause == "parent posterior gone":
+        store.delete("posterior", held.posterior, force=True)
+    elif cause == "prior gone":
+        store.delete("prior", held.prior, force=True)
+    elif cause == "observation gone":
+        store.delete("observation", observed, force=True)
+    elif cause == "bounds file changed":
+        copy.write_bytes(copy.read_bytes() + b"\n")
+    elif cause == "card gone":
+        monkeypatch.setattr(config, "detect_device", config.cpu_device)
+    said = {"parent posterior gone": f"The posterior it narrows, {held.posterior}, is no longer in Records.",
+            "prior gone": "The prior it was trained with is no longer in Records.",
+            "observation gone": "The observation it was trained around is no longer in Records.",
+            "bounds file changed": "The bounds file master copy.txt has changed since this training began.",
+            "card gone": "It was trained on the graphics card; this computer has none now."}[cause]
+    asked = _nothing_started(monkeypatch)
+    assert inference.resume_round(kept) is None
+    assert inference.tsnpe_panel.said_on_row(kept) == said, inference.tsnpe_panel.said_on_row(kept)
+    assert asked == [] and inference.current_step() == "narrowing"
+    assert inference.session.draft is None, "something was applied"
+
+
+def test_a_kept_round_whose_name_was_taken_asks_for_a_name(store, tmp_path, monkeypatch):
+    """The same round started again from zero meanwhile takes the kept round's name for its posterior: the Resume asks
+    for another, "Name this narrowing round" with why; "Cancel" starts nothing; a name typed is handed to the round as
+    its name, and the Resume goes on."""
+    from core.gui.load_chain import LoadChain
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._dialogs import answer_in_turn, forget_asked
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+    held, kept, _observed, _window, inference = _a_kept_round(store, tmp_path, monkeypatch)
+    _posterior_artifact(store, _nad_cfg(), name="retrain_round1", parents={"prior": held.prior})
+    chains, resumed = [], []
+    monkeypatch.setattr(InferenceScreen, "load_chain",
+                        lambda self, *args, **kwargs: chains.append((args, kwargs)) or LoadChain(self))
+    monkeypatch.setattr(inference.tsnpe_panel, "resume", lambda record, name=None: resumed.append((record.id, name)))
+    forget_asked()
+    assert inference.resume_round(kept) is None and chains == []
+    asked, = all_asked()
+    assert (asked.title, asked.sentence) == (
+        "Name this narrowing round", "Its name, retrain_round1, has been taken by another posterior since it was kept. "
+        "The posterior it makes needs another.")
+    answer_in_turn(monkeypatch, ("Resume", "retrain_round1b"))
+    loads = inference.resume_round(kept)
+    assert loads is not None and len(chains) == 1
+    loads.finished.emit()
+    assert resumed == [(kept, "retrain_round1b")]
+
+
+def test_a_rounds_resume_goes_through_the_narrowing_round_alone(store, tmp_path, monkeypatch):
+    """A kept round's Resume starts the narrowing round on the records it put in use, handing it the kept round named
+    and the policy for a taken name, the figures' sink asked for with the dispatch, and nothing the round compares with
+    its record; the training stage is never started for it, its loads aside. A kept round handed to a training's
+    Resume goes the round's way."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.gui.run.controller import controller
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._runs import StandIn, turn_until
+    from tests.test_shell import _the_loads
+    held, kept, observed, _window, inference = _a_kept_round(store, tmp_path, monkeypatch)
+    _prior_load, posterior_load = _the_loads(monkeypatch, store, held)
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+        kind="observation", id=ref, name="cell_b", manifest=None))
+    page, dispatched = inference.tsnpe_panel, []
+    real = page.dispatch
+    monkeypatch.setattr(page, "dispatch", lambda fn, *args, **kwargs: (
+        dispatched.append((fn, kwargs)), real(fn, *args, **kwargs))[1])
+    app = qt_app()
+    rounds = StandIn(word="Narrowing round")
+    rounds.release(SimpleNamespace(kind="posterior", id="20261008T150000", name="retrain_round1", manifest=None))
+    monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+    loads = inference.resume_round(kept)
+    assert loads is not None
+    turn_until(app, lambda: not loads.is_going() and rounds.started.is_set() and not controller().is_live(), 10.0)
+    (args, kwargs), = rounds.calls
+    session = inference.session
+    assert (args[0], args[2]) == (session.cfg, session.inf_prior), "the round was not handed what was put in use"
+    assert (args[1].id, args[3].id) == (held.posterior, observed), (args[1], args[3])
+    assert set(kwargs) == {"resume_fit", "if_name_taken"}, kwargs
+    assert (kwargs["resume_fit"], kwargs["if_name_taken"]) == (kept, "unnamed")
+    handed = [given for fn, given in dispatched if fn is rounds]
+    assert len(handed) == 1 and handed[0]["provide_fig_sink"] is True, handed
+    assert all(call_args[3] is False for call_args, _kwargs in posterior_load.calls), "a Resume trained a posterior"
+    assert page._resumed_row == kept
+    routed = []
+    monkeypatch.setattr(InferenceScreen, "resume_round", lambda self, ident: routed.append(ident))
+    inference.resume_kept(kept)
+    assert routed == [kept] and len(posterior_load.calls) == 1, "a kept round went the way of a training"
+
+
+def test_resume_loads_the_parent_the_prior_and_the_observation_by_their_ids_first(store, tmp_path, monkeypatch):
+    """A kept round's Resume puts in use, by a chain of loads, its model and options, its bounds file and, by the ids
+    its record names, its prior, the posterior it narrows and its observation, the prior on the configuration its
+    record rebuilds; and only then starts the round."""
+    from core.gui.load_chain import LoadChain
+    from core.gui.screens.inference_screen import InferenceScreen
+    held, kept, observed, _window, inference = _a_kept_round(store, tmp_path, monkeypatch)
+    chains, resumed = [], []
+    monkeypatch.setattr(InferenceScreen, "load_chain",
+                        lambda self, *args, **kwargs: chains.append((args, kwargs)) or LoadChain(self))
+    monkeypatch.setattr(inference.tsnpe_panel, "resume", lambda record, name=None: resumed.append(record.id))
+    loads = inference.resume_round(kept)
+    (args, kwargs), = chains
+    assert (args[0], args[2], args[3]) == ("NADROWSKI", "master.txt", held.prior)
+    assert (kwargs["posterior"], kwargs["observation"], kwargs["where"]) == (held.posterior, observed, "narrowing")
+    assert kwargs["candidate"].model == "NADROWSKI" and resumed == []
+    loads.finished.emit()
+    assert resumed == [kept]
+
+
+def test_resume_asks_before_it_lets_go_of_what_is_held(store, tmp_path, monkeypatch):
+    """With a record held in the session, a kept round's Resume asks first, naming what it lets go, "Keep this session"
+    preselected: kept, nothing starts; the other answer goes on."""
+    from core.gui.load_chain import LoadChain
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._dialogs import forget_asked
+    _held, kept, _observed, _window, inference = _a_kept_round(store, tmp_path, monkeypatch)
+    inference.session.inf_prior = SimpleNamespace(kind="prior", id="p", name="held_prior", manifest=None)
+    chains = []
+    monkeypatch.setattr(InferenceScreen, "load_chain",
+                        lambda self, *args, **kwargs: chains.append(args) or LoadChain(self))
+    forget_asked()
+    assert inference.resume_round(kept) is None and chains == []
+    asked, = all_asked()
+    assert (asked.title, asked.sentence, asked.answers, asked.default) == (
+        "Resume this narrowing round?", "This lets go of the prior held_prior. Nothing is deleted: each stays in "
+        "Records.", ("Resume and start a new session", "Keep this session"), "Keep this session")
+    choose(monkeypatch, other=True)
+    assert inference.resume_round(kept) is not None and len(chains) == 1
+
+
 # The last test of the file: a run whose end is held up stays live, and no run after it in this process could start.
 def test_an_error_whose_message_cannot_be_had_still_ends_its_run(tmp_path):
     """A training that fails with an error whose message cannot be had -- which the engine's rule of the graphics

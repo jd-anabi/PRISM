@@ -177,3 +177,44 @@ def test_a_kept_training_resumes_through_the_windows_call_with_a_posterior_held(
     assert post.name == "window_resumed" and post.manifest.body["training"]["resumed_fit"] is True
     assert not [line for line in lines if "out of memory" in line.lower()], lines
     assert [k for k in fit_state.kept_fits(r.store) if k.id == kept.id] == []
+
+
+def test_a_kept_round_resumes_through_the_windows_call(tiny_run_cuda, monkeypatch, capsys):
+    """A tiny narrowing round on the card, its first training ended by an error raised right after its second pass is
+    saved, is resumed as the window's Resume resumes it: its configuration rebuilt from the kept round's own record, its
+    prior, the posterior it narrows and its observation loaded by the ids the record names, and the window's call to
+    the narrowing round (the kept round named, nothing it compares). It finishes as a resumed fit; the kept round is
+    gone; the card's memory in use before and after is written to the test's output."""
+    import torch
+    from core import orchestrator
+    from core.gui.panels.inference.resume import resume_config, round_call, round_problems
+    from core.SBI import fit_state
+    r = tiny_run_cuda
+    assert r.cfg.hw.device.type == "cuda"
+    observation = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="round_observation")
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 2, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, observation, n_directions=1, level=0.9, num_runs=3,
+                                     run_size_cap=8, hidden_features=8, num_transforms=1, stop_after_epochs=3,
+                                     max_num_epochs=5, checkpoint_every=1, new_run=True, name="round_resumed",
+                                     fig_sink=r.sink, store=r.store)
+    kept, = [k for k in fit_state.kept_fits(r.store) if k.posterior_name == "round_resumed"]
+    assert kept.region is not None and kept.can_resume and kept.passes == 2
+    assert round_problems(kept, device=r.cfg.hw, store=r.store) == ()
+    cfg = resume_config(kept)
+    prior = orchestrator.build_prior(cfg, kept.parents["prior"], False, fig_sink=r.sink, store=r.store)
+    parent = orchestrator.build_posterior(cfg, prior, kept.parents["parent_posterior"], False, fig_sink=r.sink,
+                                          store=r.store)
+    held = r.store.load_observation(cfg, kept.parents["observation"])
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    post = orchestrator.tsnpe_round(cfg, parent, prior, held, **round_call(kept), if_name_taken="unnamed",
+                                    fig_sink=r.sink, store=r.store)
+    torch.cuda.synchronize()
+    after = torch.cuda.memory_allocated()
+    with capsys.disabled():
+        print(f"\n[card] memory in use before the round's resume {before} bytes, after {after} bytes")
+    assert post.name == "round_resumed" and post.manifest.body["training"]["resumed_fit"] is True
+    assert [k for k in fit_state.kept_fits(r.store) if k.id == kept.id] == []
+    assert r.store.list("fit") == [], "a kept training was left in fits/"

@@ -8442,12 +8442,13 @@ def _a_failed_training(store, tmp_path, held, *, batches=236, outcome="failed", 
 
 
 def _a_kept_training(store, held, *, name="retrain_3", passes=7, stopped="on_purpose", cfg=None, config=None,
-                     identity=None, set_whole=True, region=None, batches=4, saved_at=None):
+                     identity=None, set_whole=True, region=None, batches=4, saved_at=None, parents=None):
     """A kept training of ``held``'s prior written as the training stage writes one: its record's configuration block
     and inputs those of ``cfg`` (Nadrowski on master.txt, the processor, unless one is handed) with the fit's settings,
     an identity whose code, constants and libraries are this process's, on a simulation set of its ``batches``, whole
     unless ``set_whole`` is False, last saved at ``saved_at`` (now for None); ``config`` and ``identity`` change what
-    they name; a narrowing round's with a ``region``. Its id."""
+    they name; a narrowing round's with a ``region``, ``parents`` naming its parent posterior and its observation. Its
+    id."""
     from core.artifacts import write_fit_manifest
     from core.artifacts.manifest import config_from_cfg
     from core.SBI import fit_state
@@ -8466,7 +8467,8 @@ def _a_kept_training(store, held, *, name="retrain_3", passes=7, stopped="on_pur
     body = {**_fit_body(passes=passes, stopped=stopped, posterior_name=name, identity=whole, saved_at=saved_at),
             "region": region}
     return write_fit_manifest(path, body=body, cfg=cfg, config=block,
-                              parents={"prior": held.prior, "simulation": folder.name}, hw=cfg.hw).id
+                              parents={"prior": held.prior, "simulation": folder.name, **(parents or {})},
+                              hw=cfg.hw).id
 
 
 def _settle(app, inference, then=None) -> None:

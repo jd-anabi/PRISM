@@ -46,6 +46,7 @@ from ...widgets.form import NameAndNote, TickedField
 from ...widgets.labeled_inputs import FloatField, IntField
 from ...widgets.result_region import NextStep
 from .base import training_spec
+from . import resume
 from .help_text import HELP
 from .posterior_tab import EARLIER_NAME_TEXT
 from .step_page import StepPage
@@ -142,6 +143,9 @@ class TSNPEPanel(StepPage):
         self._call = None                    # what the last round was dispatched with, for its start again
         self._bodies: dict = {}              # the body of the observation chosen at the last reading, by its id
         self._continuing = None              # the offer a "Continue from batch N" set the page to, until a round starts
+        self._resuming = None                # the kept round a Resume is starting, until its run is dispatched
+        self._resumed_row = None             # the kept round whose Resume this page last started, until its run ends
+        self._said_on_row: dict = {}         # what stops a kept round's Resume, by its id, until the list is read
         self.obs_picker = StorePicker("observation", parent=self, keeps_selection=True, hint=CHOOSE_OBSERVATION,
                                       row_filter=self._of_this_kind)
         self.obs_picker.combo.currentIndexChanged.connect(self._picked)
@@ -559,6 +563,60 @@ class TSNPEPanel(StepPage):
                       (RUN_SIZE_KEY, str(knobs["run_size_cap"]))] + self._screen.last_used(model))
         return started
 
+    def resume(self, kept, name: "str | None" = None) -> bool:
+        """Resume the kept narrowing round ``kept`` on its own record, through the narrowing round alone: the
+        configuration, the prior, the posterior it narrows and its observation the session holds, put in use from its
+        record, and the call naming the kept round, and a name only when one was asked for. True when its run was
+        started."""
+        cfg, prior, posterior = self._held()
+        observation = getattr(getattr(self._screen, "session", None), "observation", None)
+        if None in (cfg, prior, posterior, observation) or controller().is_live():
+            return False
+        self._resuming, self._resumed_row = kept, kept.id
+        try:
+            started = self.dispatch(orchestrator.tsnpe_round, cfg, posterior, prior, observation,
+                                    **resume.round_call(kept, name), if_name_taken="unnamed", provide_fig_sink=True,
+                                    on_result=self._on_round)
+        finally:
+            self._resuming = None
+        if started:
+            self._handed = (posterior, observation)
+        else:
+            self._resumed_row = None
+        return started
+
+    def say_on_row(self, ident: str, sentence: str) -> None:
+        """Say ``sentence`` on the kept round's row, in place of its Resume, until the list is next read."""
+        self._said_on_row[ident] = sentence
+        self.redraw()
+
+    def said_on_row(self, ident: str) -> str:
+        """What the kept round's row says in place of its Resume; "" for nothing."""
+        return self._said_on_row.get(ident, "")
+
+    def _kept_settings(self, kept, name: str) -> dict:
+        """What a Resume of a kept round is started with, as its run's history keeps it: the round's own record, never
+        the forms: its model and its options, its bounds file, its prior, the posterior it narrows and its observation,
+        its region's level, the name the run is called by, and one row for each fit's setting it was kept with."""
+        record = getattr(kept, "config", None) or {}
+        parents = getattr(kept, "parents", None) or {}
+        region = getattr(kept, "region", None) or {}
+        cfg = self._held()[0]
+        from .prior_tab import bounds_in_use
+        rows = [{"step": self.step, "name": key, "label": self.form.rows[key].label_text(), "value": _plain(record[key]),
+                 "origin": "kept training", "plan": None, "usual": _plain(self.form.rows[key].usual())}
+                for key in _FIT if key in record]
+        options = {key: _plain(record.get(key)) for key in ("chi_mode", "chi_k_pad", "chi_max_cycles",
+                                                            "reparam_rotate")}
+        options["units_override"] = _plain(resume.resume_draft(kept).units_override)
+        return {"model": _plain(record.get("model")), "chi_mode": _plain(record.get("chi_mode")), "options": options,
+                "bounds": _plain(bounds_in_use(cfg) if cfg is not None else None),
+                "prior": _plain(parents.get("prior")), "parent_posterior": _plain(parents.get("parent_posterior")),
+                "observation": _plain(parents.get("observation")),
+                "level": _plain(region.get("level") if isinstance(region, dict) else None), "directions": None,
+                "name": name, "note": getattr(kept, "note", "") or "", "rows": rows,
+                "resume_fit": getattr(kept, "id", None)}
+
     def continue_run(self, offer, settings_: dict) -> None:
         """The round's form filled from its history, for "Continue from batch N" or "Fit again on the saved
         simulations": the region's level and its directions the run's, the name and the note blank, the earlier run's
@@ -581,6 +639,12 @@ class TSNPEPanel(StepPage):
         setting away is a question, the stage's own sentence in it: "Start the narrowing round" dispatches the same call
         again with the consent and the objects already loaded; "Cancel", preselected, starts nothing. Answered, the
         objects go, but those a new start holds."""
+        if getattr(exc, "field", None) == "resume_fit" and self._resumed_row:
+            # A Resume refused (a race, a torn record, a process training it): said on the kept round's row, beside
+            # its "Delete", and the list read again.
+            said, row = str(getattr(exc, "message", None) or exc), self._resumed_row
+            self._screen.read_offers()
+            self.say_on_row(row, said)
         if getattr(exc, "field", None) != "new_run" or self._call is None or controller().is_live():
             super()._refusal(exc)
             return
@@ -615,6 +679,20 @@ class TSNPEPanel(StepPage):
         if fn is not orchestrator.tsnpe_round:
             return super().run_spec(fn, *args, **kwargs)
         rows = self._pre_run_rows()
+        if kwargs.get("resume_fit") and self._resuming is not None:
+            # A Resume runs as its record was kept: its patience, epoch limit, network and cadence the record's.
+            kept = self._resuming
+            record = getattr(kept, "config", None) or {}
+            given = {key: record.get(key) for key in ("stop_after_epochs", "max_num_epochs", "hidden_features",
+                                                      "num_transforms", "checkpoint_every")}
+            given.update(kwargs)
+            given["name"] = kwargs.get("name") or getattr(kept, "posterior_name", "") or ""
+            prior = args[2] if len(args) > 2 else None
+            return training_spec("Narrowing round", _PLACE, STOP_WORDS, args[0], given, narrowed=True, plan=None,
+                                 settings=self._kept_settings(kept, given["name"]),
+                                 audit=check_lineage.counted_audit(rows) if rows else None,
+                                 prior=getattr(prior, "id", None),
+                                 prior_words=record_words.phrase_of("prior", prior) if prior is not None else "")
         prior = args[2] if len(args) > 2 else None
         plan = self._screen.plan_entry() if hasattr(self._screen, "plan_entry") else None
         return training_spec("Narrowing round", _PLACE, STOP_WORDS, args[0], kwargs, narrowed=True, plan=plan,
