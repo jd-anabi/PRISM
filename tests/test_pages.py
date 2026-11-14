@@ -5053,7 +5053,7 @@ def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(t
     platform's fonts and their metrics, at the least size the window takes on the screen it stands on, at the ordinary
     text size and at one and a half times it, the Checks list's main button and the words beside it stand inside the
     window with nothing drawn over them: with the longest words its button has, the next check the comparison after
-    simulating; and with a check open in the list's place whose two blocks are said beside the greyed button. The
+    simulating; and with a check open in the list's place whose three blocks are said beside the greyed button. The
     window is laid out where no screen shows it and is never shown or brought to the front: the window in front stays
     in front."""
     import ctypes
@@ -5102,10 +5102,11 @@ def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(t
                     screen.session = SbiSession(cfg=cfg, inf_prior=held, posterior=posterior)
                     page.read_facts()
                     # identifiability across the prior: it does not apply with the frequency response, and its
-                    # recording length, which opens blank, is in error
+                    # cell file and its recording length, which open blank (Inference's list holds no cell until one
+                    # is chosen), are in error
                     page.open_check("across_prior")
                     assert page.foot.reason.text() == (
-                        "Cannot start: it does not apply with the frequency response, and 1 more above.")
+                        "Cannot start: it does not apply with the frequency response, and 2 more above.")
                 for _ in range(5):
                     app.processEvents()
                 inside = QRect(0, 0, window.width(), window.height())
