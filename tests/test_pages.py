@@ -3700,7 +3700,8 @@ def _a_round_to_start(page, *, narrowed: bool = False) -> None:
             page.names.name.setText("retrain_round1")
             page.read_facts()
     combo = page.obs_picker.combo
-    assert combo.model().item(combo.findData(made["cell_b"])).isEnabled() is not narrowed
+    flags = combo.model().flags(combo.model().index(combo.findData(made["cell_b"]), 0))
+    assert bool(flags & Qt.ItemFlag.ItemIsEnabled) is not narrowed
     assert page.foot.main_button.isEnabled(), page.foot.reason.text()
 
 

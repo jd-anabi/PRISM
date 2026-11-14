@@ -5698,14 +5698,20 @@ def test_a_new_observation_moves_the_list_and_says_so(tmp_path, monkeypatch):
 
 def test_the_observations_a_narrowed_posterior_cannot_use_are_greyed_with_their_reason(tmp_path, monkeypatch):
     """With a posterior narrowed around cell_a in use, cell_b, of another digest, is listed greyed with why, and chosen
-    all the same it is said under the list and greys the start; cell_a stays choosable, so one is on offer."""
+    all the same it is said under the list and greys the start; cell_a stays choosable, so one is on offer. The rows are
+    read through the list's own data, no item of it held."""
+    from PySide6.QtCore import Qt
     with _sixth_step(tmp_path, monkeypatch, narrowed=True) as (_window, _screen, page, _run, made):
         combo = page.obs_picker.combo
         at_b, at_a = combo.findData(made["cell_b"]), combo.findData(made["cell_a"])
-        item_b, item_a = combo.model().item(at_b), combo.model().item(at_a)
-        assert not item_b.isEnabled() and item_b.toolTip() == (
+
+        def choosable(at):
+            return bool(combo.model().flags(combo.model().index(at, 0)) & Qt.ItemFlag.ItemIsEnabled)
+
+        assert not choosable(at_b) and combo.itemData(at_b, Qt.ItemDataRole.ToolTipRole) == (
             "Cannot be used: this posterior was narrowed around another observation.")
-        assert item_a.isEnabled() and page.observation_on_offer()
+        assert choosable(at_a) and combo.itemData(at_a, Qt.ItemDataRole.ToolTipRole) is None
+        assert page.observation_on_offer()
         combo.setCurrentIndex(at_b)
         page.names.name.setText("retrain_round1")
         page.redraw()

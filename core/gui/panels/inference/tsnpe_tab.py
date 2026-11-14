@@ -65,6 +65,9 @@ _FIT = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learni
         "max_num_epochs", "checkpoint_every")
 # Where the window shows this step's runs: Parameter inference, its step Narrowing round.
 _PLACE = ("inference", "narrowing")
+# A list's row as it can be chosen, and the role under which the list's items keep their flags.
+_CHOOSABLE = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+_FLAGS_ROLE = Qt.ItemDataRole.UserRole - 1
 
 
 def observation_digests(store) -> dict:
@@ -195,18 +198,17 @@ class TSNPEPanel(StepPage):
         return wanted is None or not self._digests_read or self._digests.get(ident) == wanted
 
     def _grey(self) -> None:
-        """The observations the posterior in use cannot be used on, greyed in the list with why."""
+        """The observations the posterior in use cannot be used on, greyed in the list with why. Each row is told through
+        the list's own data, its flags under the role its items keep them in, and no item of the list is held: the list
+        deletes its items as it lists the store again, and a handle kept on one would outlive it."""
         combo = self.obs_picker.combo
-        model = combo.model()
         for at in range(combo.count()):
             ident = combo.itemData(at)
-            item = model.item(at) if hasattr(model, "item") else None
-            if item is None or ident is None:
+            if ident is None:
                 continue
             usable = self._usable(str(ident))
-            item.setEnabled(usable)
-            if not usable:
-                item.setToolTip(CANNOT_BE_USED_TEXT + ".")
+            combo.setItemData(at, (_CHOOSABLE if usable else Qt.ItemFlag.NoItemFlags).value, _FLAGS_ROLE)
+            combo.setItemData(at, None if usable else CANNOT_BE_USED_TEXT + ".", Qt.ItemDataRole.ToolTipRole)
 
     def observation_on_offer(self) -> bool:
         """Whether the list holds an observation the round can be drawn around, as the last reading found them."""
