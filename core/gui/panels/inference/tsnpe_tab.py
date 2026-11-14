@@ -27,7 +27,7 @@ from core.artifacts.store import MANIFEST
 from core.refusals import Refusal, require_at_least, require_between
 from core.SBI import truncate
 
-from ... import check_lineage, record_words, settings
+from ... import check_lineage, plans, record_words, settings
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import put_many
 from ...run import ends, history
@@ -64,6 +64,8 @@ RUN_SIZE_KEY = "inference_tsnpe/run_size_cap"
 #: The fit's settings a round reads, a training's own and under its rules, in the order the stage checks them.
 _FIT = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate", "stop_after_epochs",
         "max_num_epochs", "checkpoint_every")
+#: The rows a plan fills, in the form's order.
+PLAN_ROWS = ("hpd_level", "n_directions", *_FIT)
 # Where the window shows this step's runs: Parameter inference, its step Narrowing round.
 _PLACE = ("inference", "narrowing")
 # A list's row as it can be chosen, and the role under which the list's items keep their flags.
@@ -262,6 +264,17 @@ class TSNPEPanel(StepPage):
         else:
             self._carried = str(ident)
         self.redraw()
+
+    # ── what a plan fills ──
+    def plan_fields(self) -> dict:
+        """The rows a plan fills, in the form's order: the region's level and its directions, then the fit's settings.
+        The observation is a pick, and no plan holds it."""
+        return {key: self.form.rows[key] for key in PLAN_ROWS}
+
+    def plan_read(self, applied: bool) -> dict:
+        """What a narrowing round reads of this step: its form as it holds it, the epoch limit's blank among it; the
+        step holds nothing a later run reads."""
+        return {} if applied else {key: row.value() for key, row in self.plan_fields().items()}
 
     # ── what a page answers ──
     def main_words(self) -> str:
@@ -566,7 +579,8 @@ class TSNPEPanel(StepPage):
         """What this round is started with, as its run's history keeps it: names and numbers only. The model and its
         options as step 1 holds them, the bounds file, the prior, the posterior it is drawn from and the observation by
         their ids, the region's level and its directions, the name and the note, and one row for each fit's setting
-        the round reads, with its label, its value and its usual one."""
+        the round reads, with its label, its value, where the value came from, the value the source in use holds for it
+        and its usual one."""
         from .prior_tab import bounds_in_use
         session = getattr(self._screen, "session", None)
         draft = getattr(session, "draft", None)
@@ -574,9 +588,11 @@ class TSNPEPanel(StepPage):
         options = {name: _plain(getattr(draft, name, None))
                    for name in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles", "reparam_rotate",
                                 "units_override")}
-        rows = [{"step": self.step, "name": key, "label": self.form.rows[key].label_text(),
-                 "value": _plain(self.form.rows[key].value()), "origin": "", "plan": None,
-                 "usual": _plain(self.form.rows[key].usual())} for key in _FIT]
+        source, heading = getattr(self._screen, "plan_source", None), plans.HEADING_OF[self.step]
+        rows = [{"step": self.step, "name": key, "label": row.label_text(), "value": _plain(row.value()),
+                 "origin": plans.origin(row, source, kept=row.kept, heading=heading),
+                 "plan": _plain(plans.plan_value(source, heading, key)), "usual": _plain(row.usual())}
+                for key, row in ((key, self.form.rows[key]) for key in _FIT)]
         return {"model": _plain(getattr(draft, "model", None)), "chi_mode": _plain(getattr(draft, "chi_mode", None)),
                 "options": options, "bounds": _plain(bounds_in_use(cfg) if cfg is not None else None),
                 "prior": _plain(getattr(prior, "id", None)), "parent_posterior": _plain(getattr(posterior, "id", None)),

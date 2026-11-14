@@ -1,5 +1,5 @@
 """Plans in the window: a model's plans listed, one read with the two checks its reader cannot make, one saved, the
-forms of steps 1 to 3 filled from one, where each field's value came from, and what "Before you start" says of the plan
+forms of every step filled from one, where each field's value came from, and what "Before you start" says of the plan
 in use.
 
 The engine reads a plan and writes its text (``core/plans.py``); the window lists the folder, checks a plan against the
@@ -49,10 +49,11 @@ from .widgets.form import TickedField
 #: The folder whose sub-folders, one for each model, hold the plans. A test hands the screen a folder of its own, and
 #: the suites' session binds this one to a folder of their own.
 PLAN_FOLDER: Path = config.PLANS_PATH
-#: The heading of a plan each step's form takes its values from.
-HEADING_OF = {"model": "Model and options", "prior": "Prior", "training": "Training"}
-#: The headings a fill reaches, in their order: the steps whose pages are of the look. The later headings are read and
-#: shown, and not filled.
+#: The heading of a plan each step's form takes its values from, by the step's key: the checks' form a plan fills is the
+#: calibration's.
+HEADING_OF = {"model": "Model and options", "prior": "Prior", "training": "Training", "checks": "Calibration",
+              "infer": "Inference", "narrowing": "Narrowing round"}
+#: The headings a fill reaches, in their order: every heading of settings a plan holds.
 FILLED = tuple(HEADING_OF.values())
 #: The headings each step's run reads, by the step's key: what the earlier steps it follows hold, then its own form.
 #: A check, an inference and a narrowing round follow the model and the prior, never Training's form: a posterior is in
@@ -303,7 +304,7 @@ def open_folder(folder) -> None:
 # ── values and their words ──
 def source_of(plan: engine_plans.Plan, at: datetime) -> PlanSource:
     """The source a fill from ``plan`` leaves in use: the plan's name and file, its file's hash as the plan was read,
-    the moment ``at``, and its values of the headings a fill reaches. Every fill from a plan takes its source from
+    the moment ``at``, and its values of every heading a fill reaches. Every fill from a plan takes its source from
     here."""
     values = {pair: value for pair, value in plan.values.items() if pair[0] in FILLED}
     return PlanSource("plan", plan.name, plan.path, plan.sha256, at, values)
@@ -401,8 +402,9 @@ def origin(row, source: "PlanSource | None", *, kept: bool, heading: str) -> str
 
 # ── filling ──
 def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool = False) -> bool:
-    """Fill the forms of steps 1 to 3: every row each page hands through ``plan_fields`` takes the value ``values``
+    """Fill the forms of every step: every row each page hands through ``plan_fields`` takes the value ``values``
     holds for it under the page's heading, else its usual value; a bounds file the values do not name is left as it is.
+    On Checks the rows are the calibration's, whichever check is open: no other check's form is filled.
     With ``keep_remembered`` a row put back from the settings file and not touched since is left as it is. Nothing is
     asked, nothing applied, nothing started, no record's pick changed, and no session replaced: the source is kept by
     the screen, and the pages are drawn again. While a run is live nothing changes: False."""
@@ -426,7 +428,7 @@ def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool =
 
 def would_replace(screen, values: dict, *, steps=None, keep_remembered: bool = False,
                   source_kept: bool = True) -> tuple[str, ...]:
-    """What a fill with ``values`` would change that a person typed or that was put back: each row of steps 1 to 3 (of
+    """What a fill with ``values`` would change that a person typed or that was put back: each row of every step (of
     ``steps`` alone, when named) whose value is neither its usual one nor the source's in use, and that the fill would
     set to another, as "Batches: 9,500 becomes 10,000", in the steps' order; with ``keep_remembered``, a value put back
     from last time and not touched since is kept by the fill, so it is not counted. With ``source_kept`` False, a value

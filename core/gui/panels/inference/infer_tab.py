@@ -50,7 +50,7 @@ from ...step_facts import (ANOTHER_WORDS, CANCEL, CELL_PROBLEM_TEXT, INFER_BLANK
                            NO_OBSERVATION_WORDS, NOT_MEASURED_TEXT, OBSERVATION_KEPT_TEXT, PLAN_NEEDS_LENGTH_TEXT,
                            PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact,
                            driven_reading, inference_facts, inference_uses, narrowed_question_words, observation_in_use,
-                           origin_words, parameter_units, result_facts, result_table)
+                           parameter_units, result_facts, result_table)
 from ...widgets.ask import ask
 from ...widgets.artifact_picker import ArtifactPicker
 from ...widgets.form import NameAndNote, OtherName, RowTable, _dress, name_trouble
@@ -396,6 +396,17 @@ class InferPanel(StepPage):
         """The mode chosen: "simulated" or "recordings"."""
         return self.modes.value_or_none()
 
+    # ── what a plan fills ──
+    def plan_fields(self) -> dict:
+        """The one row a plan fills: the posterior draws. The recordings and their description belong to one
+        observation, and no plan holds them."""
+        return {"n_samples": self.form.rows["n_samples"]}
+
+    def plan_read(self, applied: bool) -> dict:
+        """What an inference reads of this step: the draws as the form holds them; the step holds nothing a later
+        step's run reads."""
+        return {} if applied else {"n_samples": self.form.rows["n_samples"].value()}
+
     def _held(self) -> tuple:
         """The configuration and the posterior in use, each None when none is held."""
         session = getattr(self._screen, "session", None)
@@ -561,8 +572,6 @@ class InferPanel(StepPage):
         names = [fact for fact in (self._names.name_fact(), self._names.other_fact(), self._names.note_fact()) if fact]
         field_facts = [*grid, *(Fact("err", line, SETTING_BLOCKS) for line in broken.values())]
         chi = not simulated and kind == "chi"
-        draws = self.form.rows["n_samples"]
-        draws.set_origin(origin_words(held=False, at_source=False, at_usual=draws.at_usual(), kept=False))
         narrowed = getattr(getattr(posterior, "posterior", None), "x_obs_digest", None) is not None
         shown = self.form.rows["t_obs"].is_shown()
         return inference_facts(mode=self.mode(), uses=uses,
@@ -785,11 +794,12 @@ class InferPanel(StepPage):
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
         """An inference, of a simulated cell or of recordings: it writes an observation and the inference made on it, and
-        its run's history keeps what it was started with."""
+        its run's history keeps what it was started with and the plan in use."""
         if fn not in (orchestrator.simulated_inference, orchestrator.experimental_inference):
             return super().run_spec(fn, *args, **kwargs)
+        plan = self._screen.plan_entry() if hasattr(self._screen, "plan_entry") else None
         return RunSpec("Inference", _PLACE, name=kwargs.get("name", ""), stop_button=STOP_WORDS,
-                       kinds=("observation", "inference"), settings=self.settings_entry())
+                       kinds=("observation", "inference"), plan=plan, settings=self.settings_entry())
 
     def settings_entry(self) -> dict:
         """What this inference is started with, as its run's history keeps it: names and numbers only. The model and the

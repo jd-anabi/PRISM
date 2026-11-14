@@ -14,8 +14,8 @@ were last applied, as choices; nothing else is read from the settings file, and 
 
 Plans stand under "Model", since a plan belongs to a model: the list of the model's plans, read again each time it
 opens and at the page's readings; what the plan shown holds, or why it cannot be used; and the three presses. Choosing
-in the list changes nothing. "Fill the forms from this plan" fills steps 1 to 3, asking first when it would replace a
-value a person typed or that was put back; with "No plan" shown it returns them to the usual values. "Save as a plan…"
+in the list changes nothing. "Fill the forms from this plan" fills every step's form, asking first when it would
+replace a value a person typed or that was put back; with "No plan" shown it returns them to the usual values. "Save as a plan…"
 writes the settings that differ from their usual values. The plan in use is the screen's, so it outlives the session
 applying replaces; a model chosen on the form leaves no plan in use and the values as they stand. Nothing of the folder
 is read while a run is live, and the choice in the list is never remembered: every launch opens on "No plan".
@@ -133,7 +133,6 @@ STEPS = "{} steps"
 HOLDS_TEXT = "{} in {}"
 SHOW_HOLDS = "Show what it holds"
 HOLDS_COLUMNS = ("Step", "Setting", "In the plan", "Usual")
-NOT_APPLIED_YET = "not applied yet"
 IN_USE_TEXT = "In use: {}."
 #: Under the list while it shows another plan than the plan in use: choosing in the list fills nothing, and applying the
 #: step does not fill it either, so the plan shown is not "Changed, not applied".
@@ -1088,16 +1087,15 @@ class ConfigPanel(StepPage):
 
     def _holds_rows(self, plan) -> list:
         """What the plan shown holds, a row a setting in the file's order: the step, the setting by its label with its
-        name in the file beside it, the plan's value, and the usual one; a setting of a later step is not applied
-        yet."""
+        name in the file beside it, the plan's value, and the usual one, a bounds file's none."""
         rows_of = {plans.HEADING_OF[page.step]: page.plan_fields() for page in self._step_pages()}
         rows = []
         for (heading, name), value in plan.values.items():
             row = rows_of.get(heading, {}).get(name)
             label = row.label_text() if row is not None else self._label_of(name)
             plan_words = plans.value_words(row, value) if row is not None else plans.value_words(None, value)
-            usual = NOT_APPLIED_YET if row is None else (plans.NONE_WORDS if name in plans.LEFT_ALONE
-                                                         else plans.value_words(row, row.usual()))
+            usual = "" if row is None else (plans.NONE_WORDS if name in plans.LEFT_ALONE
+                                            else plans.value_words(row, row.usual()))
             rows.append([TextCell(heading, wrap=True), TextCell(f"{label} ({name})", wrap=True),
                          TextCell(plan_words, wrap=True), TextCell(usual, wrap=True)])
         return rows
@@ -1110,7 +1108,7 @@ class ConfigPanel(StepPage):
             return name
 
     def _to_save(self) -> tuple:
-        """What a save would write, keyed as a plan's values are: every setting of steps 1 to 3 whose form differs from
+        """What a save would write, keyed as a plan's values are: every setting of every step whose form differs from
         its usual value, and the bounds file when one is selected in the folder of the model shown, or waits; the driven
         recordings' settings only with the frequency response. With each setting's remark: its label, and the words on
         the form where the file's differ. And what is wrong with the settings that hold no value: blank, or the row's
@@ -1162,7 +1160,7 @@ class ConfigPanel(StepPage):
         return bool(prior.bounds_picker.key()) and Path(prior.bounds_picker.base_path) != Path(shown)
 
     def _fill_pressed(self) -> None:
-        """Fill the forms of steps 1 to 3 from the plan shown, read and checked again now, or return them to their usual
+        """Fill the forms of every step from the plan shown, read and checked again now, or return them to their usual
         values with "No plan" shown: asked first when a value a person typed or that was put back would be replaced,
         "Keep what is there" preselected. Nothing while a run is live."""
         screen, name = self._screen, self.plan_choice.currentData()
@@ -1194,7 +1192,7 @@ class ConfigPanel(StepPage):
             plans.fill_forms(screen, values, source)
 
     def fill_with(self, source, *, keep_remembered: bool = False) -> bool:
-        """Fill steps 1 to 3 with ``source``, a plan's (``plans.source_of``), as "Fill the forms from this plan" does
+        """Fill every step with ``source``, a plan's (``plans.source_of``), as "Fill the forms from this plan" does
         and as Home's "Continue with these" does: the forms filled, then the list of plans read again and standing on
         the plan, which it holds as the plan shown, and the row drawn again, so that it says the plan shown is the plan
         in use. A source that is no plan (a run's settings, as "Continue from batch N" fills them) leaves the list on "No

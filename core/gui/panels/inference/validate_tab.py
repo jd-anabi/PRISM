@@ -82,6 +82,8 @@ BOUNDS_UNREAD_TEXT = "The bounds file cannot be read: {}"
 CELL_UNREAD_TEXT = "The cell file cannot be read: {}"
 #: A calibration's seed left blank is drawn at the press, below this, and its record names it.
 DRAWN_SEED_BELOW = 2 ** 31
+#: The calibration's rows a plan fills, in the order of its form: its sizes, never its seed.
+PLAN_ROWS = ("n_cal", "cal_n_scales", "num_posterior_samples")
 #: What stops the timing of a short fit while step 3's form holds no network or simulations per batch it can use.
 TRAINING_FORM_TEXT = ("The timing uses step 3's network and simulations per batch, and its form holds one that cannot "
                       "be used: correct it in step 3, Training.")
@@ -286,6 +288,20 @@ class ValidatePanel(StepPage):
         for table in (self.listing.whole, self.listing.narrow):
             table.view.selectionModel().currentChanged.connect(self._row_moved)
         self.refresh_local_gates()
+
+    # ── what a plan fills ──
+    def plan_fields(self) -> dict:
+        """The rows a plan fills: the calibration's sizes, on the calibration's own form, whichever check is open. No
+        other check's form is a plan's to fill."""
+        rows = self.check_pages["calibration"].form.rows
+        return {key: rows[key] for key in PLAN_ROWS}
+
+    def plan_read(self, applied: bool) -> dict:
+        """What a check's run reads of this step: the calibration's sizes as its form holds them; the step holds
+        nothing, so a later step's run reads none of them."""
+        if applied:
+            return {}
+        return {key: row.value() for key, row in self.plan_fields().items()}
 
     # ── what is in use ──
     def _held_records(self) -> tuple:
@@ -624,7 +640,9 @@ class ValidatePanel(StepPage):
         and each record that cannot be read. With a check open: what its run simulates or reads, how long it took here
         last at these sizes, the memory limit and the last run for a check on the graphics card, that nothing else can
         run meanwhile and what it writes; the earlier steps' changes; and what stops its button: its row's reason, a cell
-        file not chosen, the rules its form breaks, its name and its note."""
+        file not chosen, the rules its form breaks, its name and its note; and, last, what it says of the plan in use,
+        whose departures are those of the model, the prior and the calibration's sizes, as the line under the heading
+        counts them."""
         others = tuple(Fact("warn", said) for said in self._others_pending() if said)
         key = self.open_key
         if key is None or not entry(key).button:
@@ -659,7 +677,7 @@ class ValidatePanel(StepPage):
         counted = {setting: value for setting, value in sizes.items() if setting not in found}
         said = check_forms.before_you_start(key, sizes=counted, last=self._took(key, sizes), memory=self._memory(),
                                             read=self._history_read)
-        return (*said, *others, *names, *blocks, *cell, *fields)
+        return (*said, *others, *names, *blocks, *cell, *fields, *self.plan_lines())
 
     def _memory(self) -> tuple:
         """The memory limit in force and, once the history has been read, the last run on this computer."""

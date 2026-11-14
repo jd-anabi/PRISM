@@ -7811,6 +7811,8 @@ def test_the_press_during_a_run_reads_nothing_and_changes_nothing(store, tmp_pat
     assert picks.plan == "zz_last"
     forms = [(page.step, {key: row.value() for key, row in page.plan_fields().items()})
              for page in inference.step_pages()]
+    assert [step for step, _values in forms] == ["model", "prior", "training", "checks", "infer", "narrowing"]
+    assert all(values for _step, values in forms), "a step's form a plan fills was left out"
     with running(window.panel(InferPanel)):
         calls = readings_of_a_run(monkeypatch)
         loads = inference.continue_with(picks)

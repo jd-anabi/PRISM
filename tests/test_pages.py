@@ -3650,13 +3650,8 @@ def _inference_names(page) -> list:
 
 
 def _inference_foot(page, small: bool) -> list:
-    """The foot of Inference with its main button greyed by one or two facts: "Check again"."""
-    return [page.foot.check_again]
-
-
-def _inference_foot_of_four(page, small: bool) -> list:
-    """The foot of Inference with its main button greyed by four facts: "Show all 4" in the low window, and "Check
-    again"."""
+    """The foot of Inference with its main button greyed, its facts beyond what the low window shows (what greys it,
+    and what it says of the plan in use): "Show all" in the low window, and "Check again"."""
     return [*([page.foot.more] if small else []), page.foot.check_again]
 
 
@@ -3674,7 +3669,7 @@ WALKED_INFERENCE = {
         lambda page: _the_inference_fold(page, typed=True), _inference_names, _inference_foot),
     "recordings, twelve driven recordings, one in error": (
         _twelve_driven_recordings_one_in_error, lambda page: [page.help_button], _the_recordings_rows,
-        lambda page: _the_inference_fold(page, recordings=True), _inference_names, _inference_foot_of_four),
+        lambda page: _the_inference_fold(page, recordings=True), _inference_names, _inference_foot),
     "recordings, no posterior": (
         lambda page: _on_recordings(page, posterior=False), lambda page: [page.help_button],
         lambda page: [page.modes.stops()[0]], lambda page: _the_inference_fold(page, recordings=True),

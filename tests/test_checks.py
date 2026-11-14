@@ -2377,6 +2377,7 @@ def test_a_checks_run_hands_its_plan_and_no_settings(tmp_path, monkeypatch):
     one calibration record, and keeps the plan in use and the check's key and sizes, and no settings."""
     import random
     from core import orchestrator
+    from core.gui import plans
     from core.gui.run.controller import RunController
     seen = {}
     monkeypatch.setattr(RunController, "dispatch", lambda held, fn, *args, **kwargs: seen.update(
@@ -2384,7 +2385,7 @@ def test_a_checks_run_hands_its_plan_and_no_settings(tmp_path, monkeypatch):
     drawn = iter((1840273, 77))
     monkeypatch.setattr(random, "randrange", lambda top: next(drawn) if top == 2 ** 31 else 0)
     with _checks_page(tmp_path) as (_window, screen, page, _store):
-        screen.plan_source = SimpleNamespace(kind="prior", ident=PRIOR, name="retrain_prior")
+        screen.plan_source = plans.PlanSource("record", "retrain_prior", None, "", None, {}, ident=PRIOR)
         page.open_check("calibration")
         page.form.rows["n_cal"].widget.setText("2500")
         page._main_clicked()
@@ -2395,7 +2396,7 @@ def test_a_checks_run_hands_its_plan_and_no_settings(tmp_path, monkeypatch):
         assert seen["kwargs"]["seed"] == 1840273 and seen["kwargs"]["provide_fig_sink"] is True
         assert (spec.word, spec.place, spec.name, spec.stop_button, spec.kinds) == (
             "Check", ("inference", "checks"), "Calibration", "Stop the calibration…", ("calibration",))
-        assert spec.plan == {"kind": "prior", "id": PRIOR, "name": "retrain_prior"} == screen.plan_entry()
+        assert spec.plan == {"kind": "record", "id": PRIOR, "name": "retrain_prior"} == screen.plan_entry()
         assert spec.settings is None
         assert spec.check == {"key": "calibration", "sizes": {"n_cal": 2500, "cal_n_scales": 200,
                                                               "num_posterior_samples": 1000}}
@@ -3689,7 +3690,7 @@ def test_a_checks_own_configuration_that_fails_is_told_as_what_failed(raised, to
 def test_before_you_start_stands_in_its_order_on_a_checks_page(tmp_path):
     """A check's "Before you start" in its order: what the run does, its time, the memory lines, that nothing else can
     run meanwhile and what it writes; the earlier steps' changes not applied; the name's and the note's facts; the
-    greyed reasons; then a setting in error."""
+    greyed reasons; then a setting in error; and last what it says of the plan in use."""
     from core.gui.widgets.form import NAME_SHAPE_TEXT
     with _checks_page(tmp_path, posterior=False) as (_window, screen, page, _store):
         page.open_check("calibration")
@@ -3701,7 +3702,7 @@ def test_before_you_start_stands_in_its_order_on_a_checks_page(tmp_path):
         page.form.rows["n_cal"].widget.setText("0")
         page.redraw()
         facts = page.facts_from_form()
-        assert [fact.kind for fact in facts] == ["info"] * 4 + ["warn", "err", "lock", "err"], facts
+        assert [fact.kind for fact in facts] == ["info"] * 4 + ["warn", "err", "lock", "err", "info"], facts
         assert (facts[0].sentence, facts[2].sentence, facts[3].sentence) == (
             "Not timed on this computer yet.", "Nothing else can run until it ends.", "One record, under Records.")
         assert facts[1].sentence.endswith("No run on this computer has been recorded yet."), facts[1].sentence
@@ -3709,6 +3710,7 @@ def test_before_you_start_stands_in_its_order_on_a_checks_page(tmp_path):
         assert (facts[5].sentence, facts[6].sentence, facts[7].sentence) == (
             NAME_SHAPE_TEXT, "Needs a posterior: train one in step 3, or load a saved one.",
             "Test datasets must be at least 1.")
+        assert facts[8].sentence.startswith("No plan."), facts[8].sentence
 
 
 def test_before_the_history_is_read_no_time_is_said(tmp_path):

@@ -13,7 +13,7 @@ read, its buttons greyed by its own gate. ``refresh_gates`` runs every step's ow
 step, then works out where each of the six steps stands, which the rail and Home show, and says so through
 ``states_changed``.
 
-The screen also keeps the plan in use: where the forms of steps 1 to 3 were last filled from, which outlives the session
+The screen also keeps the plan in use: where the forms of the steps were last filled from, which outlives the session
 that step 1 replaces as it is applied, and what the steps' last reading found of that plan's file.
 
 And it runs a chain of loads: step 1 applied with a model and its options, then each later step's own "Load this …" of
@@ -229,9 +229,10 @@ class InferenceScreen(QWidget):
                 self.validate_panel, self.infer_panel, self.tsnpe_panel]
 
     def step_pages(self) -> tuple:
-        """The steps a plan fills, in their order: Model and options, Prior and Training; while the screen is being
+        """The steps a plan fills, in their order: all six, Checks by the calibration's form; while the screen is being
         built, those built so far."""
-        return tuple(getattr(self, name) for name in ("config_panel", "prior_panel", "posterior_panel")
+        return tuple(getattr(self, name) for name in ("config_panel", "prior_panel", "posterior_panel",
+                                                      "validate_panel", "infer_panel", "tsnpe_panel")
                      if hasattr(self, name))
 
     def set_small(self, on: bool) -> None:

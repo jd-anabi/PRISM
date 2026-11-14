@@ -1,5 +1,5 @@
 """The plan reader: a hand-edited file of settings, read whole or refused with every problem named; and the window's
-side of plans: the list on step 1, the fill of steps 1 to 3, where each value came from, the save and the run's
+side of plans: the list on step 1, the fill of every step, where each value came from, the save and the run's
 history.
 
 Nothing at the top of the file reaches torch or builds a widget: ``core/plans.py`` is standard library on purpose,
@@ -770,11 +770,11 @@ learning_rate = 0.0005         # Learning rate
 # Narrowing round
 num_transforms = 10            # Network depth
 """
-#: What RETRAIN fills, by the step and the field; every other row of the three steps takes its usual value.
+#: What RETRAIN fills, by the step and the field; every other row of the six steps takes its usual value.
 FILLED = {("model", "chi_mode"): True, ("model", "chi_n_freqs"): 5, ("prior", "bounds"): "master_tier1.txt",
           ("prior", "num_iterations"): 40, ("training", "num_runs"): 10000, ("training", "hidden_features"): 256,
-          ("training", "learning_rate"): 0.0005}
-#: A value of every row of the three steps that is neither its usual one nor RETRAIN's (the kind of observation, which
+          ("training", "learning_rate"): 0.0005, ("narrowing", "num_transforms"): 10}
+#: A value of every row of the six steps that is neither its usual one nor RETRAIN's (the kind of observation, which
 #: has two, takes the one RETRAIN does not hold), each as its field takes it.
 ELSEWHERE = {("model", "chi_mode"): False, ("model", "chi_n_freqs"): 7, ("model", "chi_k_pad"): 14,
              ("model", "chi_max_cycles"): 25.0, ("model", "reparam_rotate"): False, ("model", "units"): "kHz ms nm pN",
@@ -785,15 +785,34 @@ ELSEWHERE = {("model", "chi_mode"): False, ("model", "chi_n_freqs"): 7, ("model"
              ("training", "num_transforms"): 6, ("training", "learning_rate"): 0.002,
              ("training", "stop_after_epochs"): 30, ("training", "max_num_epochs"): 300,
              ("training", "expected_epochs"): 40, ("training", "checkpoint_every"): 25, ("training", "fisher_m"): 32,
-             ("training", "fisher_dz"): 0.2, ("training", "fisher_points"): 6}
+             ("training", "fisher_dz"): 0.2, ("training", "fisher_points"): 6,
+             ("checks", "n_cal"): 500, ("checks", "cal_n_scales"): 150, ("checks", "num_posterior_samples"): 800,
+             ("infer", "n_samples"): 1500,
+             ("narrowing", "hpd_level"): 0.99, ("narrowing", "n_directions"): 3, ("narrowing", "num_runs"): 4000,
+             ("narrowing", "run_size_cap"): 1024, ("narrowing", "hidden_features"): 96,
+             ("narrowing", "num_transforms"): 4, ("narrowing", "learning_rate"): 0.003,
+             ("narrowing", "stop_after_epochs"): 15, ("narrowing", "max_num_epochs"): 200,
+             ("narrowing", "checkpoint_every"): 10}
 #: The places a line of the window may break at, which a sentence read back leaves out.
 BREAK = "​"
 
 
 def _usual() -> dict:
-    """The usual value of every row of the three steps but the bounds file, which has none: core/config.py's."""
+    """The usual value of every row of the six steps but the bounds file, which has none: core/config.py's, the
+    calibration's least number of samples that counts, the inference's own number of draws and the region's."""
     from core import config
-    return {("model", "chi_mode"): False, ("model", "chi_n_freqs"): config.CHI_N_FREQS,
+    from core.gui import check_readings
+    from core.SBI import truncate
+    fit = {"num_runs": config.TRAINING_NUM_RUNS, "run_size_cap": config.TRAINING_RUN_SIZE,
+           "hidden_features": config.NSF_HIDDEN_FEATURES, "num_transforms": config.NSF_NUM_TRANSFORMS,
+           "learning_rate": config.TRAINING_LEARNING_RATE, "stop_after_epochs": config.TRAINING_STOP_AFTER_EPOCHS,
+           "max_num_epochs": None, "checkpoint_every": config.TRAINING_CHECKPOINT_EVERY}
+    later = {("checks", "n_cal"): config.SBC_N_CAL, ("checks", "cal_n_scales"): config.CAL_N_SCALES,
+             ("checks", "num_posterior_samples"): check_readings.CALIBRATION_LEAST_SAMPLES,
+             ("infer", "n_samples"): 1000, ("narrowing", "hpd_level"): truncate.DEFAULT_HPD,
+             ("narrowing", "n_directions"): truncate.DEFAULT_N_DIRECTIONS,
+             **{("narrowing", name): value for name, value in fit.items()}}
+    return {**later, ("model", "chi_mode"): False, ("model", "chi_n_freqs"): config.CHI_N_FREQS,
             ("model", "chi_k_pad"): config.CHI_K_PAD, ("model", "chi_max_cycles"): config.CHI_MAX_CYCLES,
             ("model", "reparam_rotate"): bool(config.REPARAM_ROTATE), ("model", "units"): None,
             ("prior", "num_iterations"): config.PRIOR_SWEEP_ITERATIONS, ("prior", "sweep_batch"): 0,
@@ -869,7 +888,7 @@ def _choose(page, name) -> None:
 
 
 def _pages(screen) -> dict:
-    """The three steps a plan fills, by their step."""
+    """The six steps a plan fills, by their step."""
     return {page.step: page for page in screen.step_pages()}
 
 
@@ -880,9 +899,11 @@ def _values(screen) -> dict:
 
 
 def _origins(screen) -> dict:
-    """Where every row a plan fills says its value came from, by its step and its field."""
-    return {(step, key): page.form.rows[key].origin.text().replace(BREAK, "") for step, page in _pages(screen).items()
-            for key in page.plan_fields()}
+    """Where every row a plan fills says its value came from, by its step and its field: read off the row the page
+    hands, which on Checks stands on the calibration's form, whichever check is open; or, for a field the page hands
+    in place of its row (the units), off the row of the page's form that holds it."""
+    return {(step, key): (row if hasattr(row, "origin") else page.form.rows[key]).origin.text().replace(BREAK, "")
+            for step, page in _pages(screen).items() for key, row in page.plan_fields().items()}
 
 
 def _set(screen, values) -> None:
@@ -1148,31 +1169,41 @@ def test_the_picker_opens_on_no_plan_and_says_what_was_last_used(tmp_path, monke
     assert page.form.rows["plan"].origin.text().replace(BREAK, "") == "Last used: zz_hopf (the file is no longer there)"
 
 
-def test_one_press_fills_steps_one_to_three(tmp_path, monkeypatch, store):
-    """Every row of steps 1 to 3 that a plan fills takes the plan's value, else its usual one, from wherever each stood:
-    off its usual value and off the plan's, or put back from last time. The bounds file is selected in the model
-    applied, its limits no longer typed. Nothing is said to be kept any longer, and the plan line under each heading
-    names the plan, and once step 1 is applied, no change from it."""
+def test_one_press_fills_every_step(tmp_path, monkeypatch, store):
+    """Every row of the six steps that a plan fills takes the plan's value, else its usual one, from wherever each
+    stood: off its usual value and off the plan's, or put back from last time. The bounds file is selected in the model
+    applied, its limits no longer typed. Nothing is said to be kept any longer, and the plan line under each heading,
+    in the steps' order, names the plan, and once step 1 is applied, no change from it. On Checks the fill reaches the
+    calibration's three rows, whichever check is open: another check's form, which holds settings of the same names,
+    keeps every value it held."""
     from core.gui import plans as window_plans
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     page.foot.main_button.click()
+    assert [one.step for one in screen.step_pages()] == ["model", "prior", "training", "checks", "infer", "narrowing"]
     _set(screen, ELSEWHERE)
-    prior, training = screen.prior_panel, screen.posterior_panel
+    prior, training, checks = screen.prior_panel, screen.posterior_panel, screen.validate_panel
     prior.typed_tick.setChecked(True)
     training.form.rows["num_runs"].kept = True
+    screen.tsnpe_panel.form.rows["run_size_cap"].kept = True
+    checks.open_check("fixed_number")
+    other = checks.check_pages["fixed_number"].form.rows
+    for key, value in (("n_cal", 300), ("cal_n_scales", 120), ("num_posterior_samples", 600), ("repeats", 4)):
+        other[key].set_value(value)
+    held = {key: row.value() for key, row in other.items()}
     assert _values(screen) == {**ELSEWHERE, ("prior", "bounds"): window_plans.TYPED}
     _press_fill(page, monkeypatch, answer="Fill the forms")
     usual = _usual()
     wanted = {pair: FILLED.get(pair, usual.get(pair)) for pair in ELSEWHERE}
     assert _values(screen) == wanted
     assert [pair for pair in ELSEWHERE if wanted[pair] == ELSEWHERE[pair]] == [], "a row was not moved by the fill"
+    assert {key: row.value() for key, row in other.items()} == held, "the fill reached another check's form"
     assert not prior.typed_tick.isChecked() and prior.bounds_picker.key() == "master_tier1.txt"
     assert not any(row.kept for one in screen.step_pages() for row in one.plan_fields().values())
     assert (screen.plan_source.kind, screen.plan_source.name) == ("plan", "retrain")
     assert [_said(one.plan_line) for one in screen.step_pages()] == [
-        "Plan: retrain", "Plan: retrain, 1 change", "Plan: retrain, 1 change"], "step 1 holds what it held"
+        "Plan: retrain", *["Plan: retrain, 1 change"] * 5], "step 1 holds what it held"
     page.foot.main_button.click()
-    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: retrain"] * 3
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: retrain"] * 6
 
 
 def test_a_fill_starts_nothing_applies_nothing_and_replaces_no_session(tmp_path, monkeypatch, store):
@@ -1244,7 +1275,7 @@ def test_a_fill_that_would_replace_a_typed_value_asks_first(tmp_path, monkeypatc
     question = asked[0]
     assert (question.title, question.sentence) == (
         "Fill the forms from plan retrain?",
-        "Filling from plan retrain sets every setting a plan can hold: 7 from the plan, the rest to their usual "
+        "Filling from plan retrain sets every setting a plan can hold: 8 from the plan, the rest to their usual "
         "values.")
     assert question.items == ("Units: kHz ms becomes the model's units file", "Bounds file: master.txt becomes "
                               "master_tier1.txt", "Batches: 9,500 becomes 10,000", "Simulations per batch: 512 becomes "
@@ -1287,33 +1318,35 @@ def test_keep_what_is_there_keeps_looking_for_the_gone_plan(tmp_path, monkeypatc
     assert page.plan_choice.currentData() == "retrain", page.plan_choice.currentText()
 
 
-def test_return_to_the_usual_values_resets_steps_one_to_three(tmp_path, monkeypatch, store):
-    """With "No plan" shown the button returns every row of steps 1 to 3 to its usual value, asking first with its own
-    words when it would replace what was typed; the bounds file is left as it is, and no plan is in use after it."""
+def test_return_to_the_usual_values_resets_every_step(tmp_path, monkeypatch, store):
+    """With "No plan" shown the button returns every row of the six steps to its usual value, asking first with its own
+    words when it would replace what was typed, on a later step too; the bounds file is left as it is, and no plan is in
+    use after it."""
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     page.foot.main_button.click()
     _press_fill(page, monkeypatch, answer="Fill the forms")
-    screen.posterior_panel.form.rows["num_runs"].set_value(9500)
+    _set(screen, {("training", "num_runs"): 9500, ("checks", "n_cal"): 500, ("infer", "n_samples"): 1500})
     assert page.fill_button.text() == "Fill the forms from this plan"
     _choose(page, None)
     assert page.fill_button.text() == "Return the forms to the usual values"
     asked = _press_fill(page, monkeypatch, None, answer="Return to the usual values")
     assert [(one.title, one.sentence, one.items, one.answers, one.default) for one in asked] == [(
         "Return the forms to the usual values?", "This sets every setting a plan can hold to its usual value.",
-        ("Batches: 9,500 becomes 5,000",), ("Return to the usual values", "Keep what is there"),
-        "Keep what is there")]
+        ("Batches: 9,500 becomes 5,000", "Test datasets: 500 becomes 2,000", "Posterior draws: 1,500 becomes 1,000"),
+        ("Return to the usual values", "Keep what is there"), "Keep what is there")]
     usual = _usual()
     assert _values(screen) == {**usual, ("prior", "bounds"): "master_tier1.txt"}
-    assert screen.plan_source is None and [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 3
+    assert screen.plan_source is None and [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 6
     assert _said(page.plan_in_use) == "In use: no plan."
     assert _press_fill(page, monkeypatch, None) == [], "the forms at their usual values asked again"
 
 
-def test_the_later_headings_are_shown_not_applied_yet_and_counted(tmp_path, monkeypatch, store):
+def test_the_later_headings_fill_their_pages_and_are_counted(tmp_path, monkeypatch, store):
     """What the plan holds is shown, folded, as a table of four columns, a row a setting in the file's order: its step,
-    its label with its name in the file, its value in the plan and its usual value; a setting of a step that is not
-    filled yet says "not applied yet". The count beside the plan's description counts every setting and every step;
-    the fill's question counts the settings it fills, and the facts and the fill leave the later ones alone."""
+    its label with its name in the file, its value in the plan and its usual value, a setting of a later step as any
+    other. The count beside the plan's description counts every setting and every step; the fill's question counts the
+    settings it fills, a later step's among them, and the fill sets the narrowing round's network depth, which says it
+    came from the plan."""
     from core import config
     window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
     _choose(page, "retrain")
@@ -1333,13 +1366,56 @@ def test_the_later_headings_are_shown_not_applied_yet_and_counted(tmp_path, monk
         ["Training", "Batches (num_runs)", "10,000", f"{config.TRAINING_NUM_RUNS:,}"],
         ["Training", "Network width (hidden_features)", "256", f"{config.NSF_HIDDEN_FEATURES}"],
         ["Training", "Learning rate (learning_rate)", "0.0005", f"{config.TRAINING_LEARNING_RATE}"],
-        ["Narrowing round", "Network depth (num_transforms)", "10", "not applied yet"]], rows
+        ["Narrowing round", "Network depth (num_transforms)", "10", f"{config.NSF_NUM_TRANSFORMS}"]], rows
     assert _said(page.plan_about) == f"{ABOUT_RETRAIN} 8 settings in 4 steps."
+    screen.posterior_panel.form.rows["num_runs"].set_value(9500)
     asked = _press_fill(page, monkeypatch, answer="Fill the forms")
-    assert asked == [] or asked[0].sentence.startswith("Filling from plan retrain sets every setting a plan can hold: "
-                                                       "7 from the plan")
+    assert [one.sentence for one in asked] == [
+        "Filling from plan retrain sets every setting a plan can hold: 8 from the plan, the rest to their usual "
+        "values."], asked
     assert screen.posterior_panel.form.rows["num_transforms"].value() == config.NSF_NUM_TRANSFORMS
-    assert ("Narrowing round", "num_transforms") not in screen.plan_source.values
+    depth = screen.tsnpe_panel.form.rows["num_transforms"]
+    assert depth.value() == 10 and _said(depth.origin) == "from plan retrain"
+    assert screen.plan_source.values[("Narrowing round", "num_transforms")] == 10
+
+
+def test_each_step_counts_the_departures_of_what_its_run_reads(tmp_path, monkeypatch, store):
+    """Each step's run reads its own form and what the earlier steps it follows hold, never another step's form: a
+    check, an inference and a narrowing round read the model and its options and the prior as their steps hold them,
+    then their own form, and none reads Training's. A change on Training's form is a departure of a training alone, and
+    one on a later step's form a departure of that step alone, in its plan line and in "Before you start" (on Checks, a
+    check's own, with the check open)."""
+    from core.gui import plans as window_plans
+    assert window_plans.HEADING_OF == {"model": "Model and options", "prior": "Prior", "training": "Training",
+                                       "checks": "Calibration", "infer": "Inference", "narrowing": "Narrowing round"}
+    assert window_plans.FILLED == tuple(window_plans.HEADING_OF.values())
+    assert window_plans.READS == {
+        "model": ("Model and options",), "prior": ("Model and options", "Prior"),
+        "training": ("Model and options", "Prior", "Training"),
+        "checks": ("Model and options", "Prior", "Calibration"), "infer": ("Model and options", "Prior", "Inference"),
+        "narrowing": ("Model and options", "Prior", "Narrowing round")}
+    assert {step: window_plans.headings_to(step) for step in window_plans.READS} == window_plans.READS
+    assert window_plans.headings_to("home") == ()
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
+    page.foot.main_button.click()
+    screen.validate_panel.open_check("calibration")
+    screen.take_plan(window_plans.PlanSource("plan", "retrain", None, "", None, {}))
+    _set(screen, {("training", "num_runs"): 9500})
+    screen.refresh_gates()
+    usual = "Information. Plan retrain. This step reads none of its settings."
+    assert {one.step: (_said(one.plan_line), _plan_fact(one)) for one in screen.step_pages()} == {
+        "model": ("Plan: retrain", usual), "prior": ("Plan: retrain", usual),
+        "training": ("Plan: retrain, 1 change",
+                     "Information. Plan retrain, with 1 change: Batches 9,500 (usual 5,000)."),
+        "checks": ("Plan: retrain", usual), "infer": ("Plan: retrain", usual), "narrowing": ("Plan: retrain", usual)}
+    _set(screen, {("training", "num_runs"): 5000, ("checks", "n_cal"): 500, ("infer", "n_samples"): 1500,
+                  ("narrowing", "num_runs"): 4000})
+    screen.refresh_gates()
+    assert {one.step: _plan_fact(one) for one in screen.step_pages()} == {
+        "model": usual, "prior": usual, "training": usual,
+        "checks": "Information. Plan retrain, with 1 change: Test datasets 500 (usual 2,000).",
+        "infer": "Information. Plan retrain, with 1 change: Posterior draws 1,500 (usual 1,000).",
+        "narrowing": "Information. Plan retrain, with 1 change: Batches 4,000 (usual 5,000)."}
 
 
 def test_the_plan_facts_come_from_values_not_widgets(tmp_path, monkeypatch, store):
@@ -1386,6 +1462,66 @@ def test_the_plan_facts_come_from_values_not_widgets(tmp_path, monkeypatch, stor
     plain = (type(None), bool, int, float, str)
     assert all(isinstance(value, plain) for value in (*read_.values(), *usual_.values())), (read_, usual_)
     assert all(isinstance(label, str) for label in labels_.values())
+
+
+def test_a_fill_that_would_replace_a_later_steps_kept_value_asks_first(tmp_path, monkeypatch, store):
+    """A fill that would replace a value typed on a later step, or put back there from last time, asks first as it does
+    for the first three steps, each value in full in the steps' order; "Keep what is there" leaves every step as it was
+    and fills nothing, and the other answer fills them."""
+    from tests._dialogs import choose
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _set(screen, {("checks", "n_cal"): 500, ("infer", "n_samples"): 1500, ("narrowing", "num_transforms"): 4})
+    kept = screen.tsnpe_panel.form.rows["num_runs"]
+    kept.set_value(4000)
+    kept.kept = True
+    before = _values(screen)
+    asked = _press_fill(page, monkeypatch)
+    assert [(one.title, one.items) for one in asked] == [(
+        "Fill the forms from plan retrain?", ("Test datasets: 500 becomes 2,000", "Posterior draws: 1,500 becomes "
+                                              "1,000", "Batches: 4,000 becomes 5,000", "Network depth: 4 becomes 10"))]
+    assert _values(screen) == before and screen.plan_source is None
+    choose(monkeypatch, other=True)
+    page.fill_button.click()
+    values = _values(screen)
+    assert [values[pair] for pair in (("checks", "n_cal"), ("infer", "n_samples"), ("narrowing", "num_runs"),
+                                      ("narrowing", "num_transforms"))] == [2000, 1000, 5000, 10]
+    assert not kept.kept and screen.plan_source.name == "retrain"
+
+
+def test_saving_writes_the_later_headings_departures(tmp_path, monkeypatch, store):
+    """With only a later step's settings off their usual values the save is not greyed, and it writes them under their
+    own headings in the file's order, the round's batches under the narrowing round, never under Training; the plan
+    saved is then in use on every step."""
+    from tests._dialogs import answer_in_turn
+    window, screen, page, folder, _clock = _the_window(tmp_path, monkeypatch)
+    _set(screen, {("narrowing", "num_runs"): 4000, ("infer", "n_samples"): 1500,
+                  ("checks", "num_posterior_samples"): 800})
+    _shown_again(window)
+    assert page.save_button.isEnabled(), page.save_reason.text()
+    answer_in_turn(monkeypatch, ("Save", "zz_later"))
+    page.save_button.click()
+    written = (folder / "zz_later.txt").read_bytes().decode("utf-8")
+    assert [line.split(" # ", 1)[0].strip() for line in written.splitlines() if line.strip()] == [
+        "# Calibration", "num_posterior_samples = 800", "# Inference", "n_samples = 1500", "# Narrowing round",
+        "num_runs = 4000"], written
+    assert read_plan(folder / "zz_later.txt").values == {
+        ("Calibration", "num_posterior_samples"): 800, ("Inference", "n_samples"): 1500,
+        ("Narrowing round", "num_runs"): 4000}
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: zz_later"] * 6
+
+
+def test_a_plan_chosen_and_not_filled_says_so_on_every_step(tmp_path, monkeypatch, store):
+    """A plan chosen in the list and not filled is in use on no step: step 1's row says it is not filled yet and that no
+    plan is in use, and every step, the three later ones among them, says under its heading and in "Before you start"
+    that no plan is in use (on Checks, a check's own, with the check open)."""
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    screen.validate_panel.open_check("calibration")
+    _choose(page, "retrain")
+    assert page.form.rows["plan"].line.words == "Not filled yet. In use: no plan."
+    screen.refresh_gates()
+    for one in screen.panels():
+        assert one.plan_line.isVisibleTo(one) and _said(one.plan_line) == "No plan", one.step
+        assert _plan_fact(one) == "Information. No plan. Every setting is at its usual value.", one.step
 
 
 def test_a_plans_bounds_file_waits_until_its_model_is_applied(tmp_path, monkeypatch, store):
@@ -1659,7 +1795,7 @@ def test_step_one_applied_with_another_model_lets_the_plan_and_its_waiting_file_
     page.foot.main_button.click()
     assert screen.session.draft.model == "HOPF"
     assert (screen.plan_source, screen.plan_entry(), prior.waiting_file()) == (None, None, None)
-    assert [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 3
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["No plan"] * 6
     page.model_combo.setCurrentText("NADROWSKI")
     _press_fill(page, monkeypatch, answer="Fill the forms")
     assert prior.waiting_file() == "master_tier1.txt"
@@ -1883,6 +2019,33 @@ def test_the_run_history_records_the_plan(tmp_path, monkeypatch, store):
         "kind": "record", "id": "20261008T120400", "name": "retrain_posterior"}
     qs.sync()
     assert qs.value(LAST_USED_KEY.format("nadrowski")) == "", "a record was remembered as the plan last used"
+
+
+def test_a_later_steps_run_keeps_the_plan_in_use(tmp_path, monkeypatch, store):
+    """A check's run, an inference and a narrowing round each hand their history the plan in use as the run starts, as
+    a training does; the round's settings keep, for each of the fit's settings, where its value came from and the
+    plan's value where the plan holds it. Read off each page's spec as its press would make it."""
+    from core import orchestrator
+    from core.gui.panels.inference import check_forms
+    from tests._fixtures import _nad_cfg
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch, {"retrain": RETRAIN})
+    _press_fill(page, monkeypatch, answer="Fill the forms")
+    screen.tsnpe_panel.form.rows["num_runs"].set_value(4000)
+    entry = screen.plan_entry()
+    assert entry["kind"] == "plan" and entry["name"] == "retrain"
+    cfg = _nad_cfg()
+    checks = screen.validate_panel
+    assert checks.run_spec(orchestrator.validate_calibration, cfg, None, None,
+                           **check_forms.call_arguments("calibration", checks.check_pages["calibration"].form)
+                           ).plan == entry
+    assert screen.infer_panel.run_spec(orchestrator.simulated_inference, cfg, None, 1.0).plan == entry
+    spec = screen.tsnpe_panel.run_spec(orchestrator.tsnpe_round, cfg, None, None, None, num_runs=4000)
+    assert spec.plan == entry
+    rows = {row["name"]: row for row in spec.settings["rows"]}
+    assert {key: (rows[key]["value"], rows[key]["origin"], rows[key]["plan"]) for key in
+            ("num_runs", "num_transforms", "hidden_features")} == {
+        "num_runs": (4000, "changed from the usual", None), "num_transforms": (10, "from plan retrain", 10),
+        "hidden_features": (128, "usual", None)}
 
 
 def test_the_last_used_keys_follow_what_was_applied_or_started(tmp_path, monkeypatch, store):
@@ -2167,6 +2330,12 @@ def _a_changed_row(screen) -> None:
     page.kind_choice.setCurrentIndex(page.kind_choice.findData(True))
 
 
+def _the_later_steps(screen) -> None:
+    _set(screen, {("training", "num_runs"): 7000, ("checks", "n_cal"): 500, ("checks", "cal_n_scales"): 150,
+                  ("infer", "n_samples"): 1500, ("narrowing", "hpd_level"): 0.99, ("narrowing", "num_runs"): 4000,
+                  ("narrowing", "num_transforms"): 10})
+
+
 SAVED = [
     ("spontaneous", _spontaneous, {("Model and options", "reparam_rotate"): False, ("Prior", "bounds"): "master.txt",
                                    ("Training", "num_runs"): 7000},
@@ -2183,6 +2352,13 @@ SAVED = [
     ("a changed row", _a_changed_row, {("Model and options", "chi_mode"): True},
      ["Kind of observation (chi_mode): frequency response"],
      "Saved as the forms show them, though not applied: Kind of observation."),
+    ("the later steps", _the_later_steps, {
+        ("Training", "num_runs"): 7000, ("Calibration", "n_cal"): 500, ("Calibration", "cal_n_scales"): 150,
+        ("Inference", "n_samples"): 1500, ("Narrowing round", "hpd_level"): 0.99,
+        ("Narrowing round", "num_runs"): 4000, ("Narrowing round", "num_transforms"): 10},
+     ["Batches (num_runs): 7,000", "Test datasets (n_cal): 500", "Operating points (cal_n_scales): 150",
+      "Posterior draws (n_samples): 1,500", "Region level (hpd_level): 0.99", "Batches (num_runs): 4,000",
+      "Network depth (num_transforms): 10"], ""),
 ]
 
 
@@ -2190,7 +2366,7 @@ SAVED = [
                          ids=[case[0] for case in SAVED])
 def test_saving_writes_only_what_differs_and_every_file_it_can_write_reads_back(set_up, values, items, beneath,
                                                                                 tmp_path, monkeypatch, store):
-    """"Save as a plan…" writes every setting of steps 1 to 3 that differs from its usual value, each with its label as
+    """"Save as a plan…" writes every setting of the six steps that differs from its usual value, each with its label as
     its remark and the words the form shows where the file's differ, and the bounds file when one is selected, never
     limits typed by hand; the driven recordings' three only with the frequency response. Its dialog lists what it will
     write, and says when the bounds were typed and which settings it writes as the forms show them though not applied.
@@ -2351,7 +2527,7 @@ def test_the_save_says_to_commit_the_file(tmp_path, monkeypatch, store):
     assert page.in_use.said.sentence.plain_text() == (
         "Information. Saved as plan zz_saved. Commit this file before a long run, or the run's records are marked as "
         "made from a changed tree.")
-    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: zz_saved"] * 3
+    assert [_said(one.plan_line) for one in screen.step_pages()] == ["Plan: zz_saved"] * 6
     assert screen.posterior_panel.form.rows["num_runs"].origin.text() == "from plan zz_saved"
 
 
