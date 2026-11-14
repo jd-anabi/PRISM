@@ -1482,6 +1482,23 @@ def test_the_pages_walked_here_are_every_page_built_on_the_step_page():
     assert sorted(step for _file, step in pages.values()) == sorted(WALKED), pages
 
 
+def test_every_step_of_parameter_inference_is_built_on_the_step_page():
+    """STANDING. No class under core/gui/panels/inference/ is built on the old frame, BasePanel, or on a class built on
+    it, and the six steps' pages are pages of the look: Parameter inference is built on the step page whole."""
+    import ast
+    from pathlib import Path
+    from core.gui.panels.inference.step_page import StepPage
+    from tests._fixtures import build_inference
+    folder = Path(__file__).resolve().parents[1] / "core" / "gui" / "panels" / "inference"
+    old = [f"{path.name}: {node.name}" for path in sorted(folder.glob("*.py"))
+           for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))) if isinstance(node, ast.ClassDef)
+           and {getattr(base, "id", getattr(base, "attr", None)) for base in node.bases} & {"BasePanel", "_StagePanel"}]
+    assert old == [], old
+    qt_app()
+    pages = build_inference().panels()
+    assert len(pages) == 6 and all(isinstance(page, StepPage) for page in pages), [type(page).__name__ for page in pages]
+
+
 # ── when a page reads ──
 @pytest.mark.parametrize("page_class", list(PAGES.values()), ids=list(PAGES))
 def test_a_page_is_built_with_no_reading_and_no_running_timer(page_class, tmp_path, monkeypatch):

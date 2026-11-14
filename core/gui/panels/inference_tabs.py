@@ -1,26 +1,21 @@
-"""Parameter Inference, split into six tabs over ONE shared SbiSession owned by the InferenceScreen.
+"""Parameter inference, in six steps over ONE shared SbiSession owned by the InferenceScreen.
 
-    Config -> Prior -> Posterior -> Validate -> Infer -> TSNPE
+    Model and options -> Prior -> Training -> Checks -> Inference -> Narrowing round
 
-Config records the MODEL-level choices as a ConfigDraft; the PRIOR tab picks the bounds file and turns
-that draft into the SimConfig, because the bounds file declares the inferred parameter set (and hence the
-observation mode), so a config cannot exist before it.
+The first step records the model-level choices as a ConfigDraft; the Prior step picks the bounds file and turns that
+draft into the SimConfig, because the bounds file declares the inferred parameter set (and hence the observation mode),
+so a configuration cannot exist before it.
 
-Each tab is its own BasePanel (its own FigureStack/ProgressPane/LogPane), so dispatch()/cancel/the
-figure-sink/progress plumbing are reused verbatim; the run controller lets one run go at a time in the
-process, so the tabs can never run concurrently. The screen owns the SbiSession and holds the tabs as
-pages, none disabled; every tab
-reads/writes the session through ``self._screen`` and calls ``self._screen.refresh_gates()`` after a
-stage completes.
+Each step is a page of the look (``StepPage``), so a run's dispatch, its stop, its figures and its page are the shared
+run machinery; the run controller lets one run go at a time in the process. The screen owns the SbiSession and holds
+the steps as pages, none disabled; every step reads and writes the session through its screen.
 """
 # THE IMPORT SURFACE, kept deliberately: help_screen reads this module's HELP and docstring BY
-# STRING PATH ("core.gui.panels.inference_tabs"), inference_screen imports the six panels from here,
-# and the test suites reach _nvidia_smi_free_gib through it. The GUI runners are
-# gone: each tab dispatches an orchestrator composition directly.
-# The implementations live in the inference/ package, one module per tab plus the shared matter.
+# STRING PATH ("core.gui.panels.inference_tabs"), inference_screen imports the six pages from here,
+# and the test suites reach _nvidia_smi_free_gib through it. Each step dispatches an orchestrator
+# composition directly. The pages live in the inference/ package, one module per step plus the shared matter.
 from .inference.help_text import HELP  # noqa: F401
-from .inference.base import (_StagePanel, _TrainingBudgetMixin,  # noqa: F401
-                             _hw_batch, _nvidia_smi_free_gib)
+from .inference.base import _hw_batch, _nvidia_smi_free_gib  # noqa: F401
 from .inference.config_tab import ConfigPanel  # noqa: F401
 from .inference.prior_tab import PriorPanel  # noqa: F401
 from .inference.posterior_tab import PosteriorPanel  # noqa: F401

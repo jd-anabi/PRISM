@@ -3564,8 +3564,8 @@ def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(mon
 def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
     """Sentences in base_panel.py once counted the panels and the inference tabs, and went stale each
     time one was added, as a count does: the panels go one by one now, as their pages are rebuilt, so no
-    count of them stands in that file at all, of nine or of ten. inference/base.py still names the six
-    tabs, which are the six steps.
+    count of them stands in that file at all, of nine or of ten. inference/base.py names no tab: the six
+    steps are pages of the look, and the frame those words were written for has no page left.
 
     Phrases, not a subclass count: the suites own throwaway BasePanel subclasses persist for the life
     of the process, so counting __subclasses__() would assert on test order.
@@ -3585,7 +3585,7 @@ def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
         assert phrase not in bp_src, f"base_panel.py still says {phrase!r}"
     assert "the five inference tabs" not in inf_src
     assert "the five inference tabs" not in bp_src
-    assert "the six inference tabs" in inf_src
+    assert "the six inference tabs" not in inf_src and "Infer tab" not in inf_src, "the old frame's words stayed"
 
 
 def test_the_main_window_takes_its_opening_and_smallest_size_from_the_look(monkeypatch):
