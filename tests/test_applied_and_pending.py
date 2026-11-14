@@ -5771,3 +5771,123 @@ def test_the_round_reads_the_model_in_use_alone(tmp_path, monkeypatch):
         screen.refresh_gates()
         page.read_facts()
         assert {page.obs_picker.combo.itemData(at) for at in range(page.obs_picker.combo.count())} == set(made.values())
+
+
+def test_the_rounds_run_hands_its_history_plain_settings(tmp_path, monkeypatch):
+    """The round's run hands its history what it was started with as names and numbers alone: the model and its options,
+    the bounds file, the prior, the posterior it is drawn from and the observation by their ids, the region's level and
+    directions, the name, the note and each fit's setting."""
+    import json
+    from core.gui.run.controller import controller
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, run, made):
+        _ready_round(page, made)
+        page._main_clicked()
+        assert run.started.wait(5), page.foot.reason.text()
+        held = controller().model.spec.settings
+        json.dumps(held)
+        assert {key: held[key] for key in ("prior", "parent_posterior", "observation", "level", "directions", "name")} == {
+            "prior": screen.session.inf_prior.id, "parent_posterior": "20261003T031200", "observation": made["cell_a"],
+            "level": 0.999, "directions": 5, "name": "retrain_round1"}, held
+        assert [row["name"] for row in held["rows"]] == ["num_runs", "run_size_cap", "hidden_features",
+                                                          "num_transforms", "learning_rate", "stop_after_epochs",
+                                                          "max_num_epochs", "checkpoint_every"]
+        _round_ends(run)
+
+
+def test_the_round_rereads_its_lists_at_run_ended_and_never_while_live(tmp_path, monkeypatch):
+    """While a run is live the round reads nothing: neither the observations' digests nor anything a run may write; at
+    its end, in sight, it reads once."""
+    from core.gui.panels.inference import tsnpe_tab
+    from tests._fixtures import readings_of_a_run
+    from tests._runs import StandIn, start_run
+    with _sixth_step(tmp_path, monkeypatch, narrowed=True) as (_window, screen, page, _run, _made):
+        read = []
+        real = tsnpe_tab.observation_digests
+        monkeypatch.setattr(tsnpe_tab, "observation_digests", lambda store: (read.append(1), real(store))[1])
+        stand_in = StandIn(word="Other run")
+        start_run(screen.prior_panel, stand_in)
+        calls = readings_of_a_run(monkeypatch)
+        page.read_facts()
+        page.foot.check_again.click()
+        page.redraw()
+        screen.refresh_gates()
+        assert (read, calls) == ([], []), (read, calls)
+        _round_ends(stand_in, payload=object())
+        assert len(read) == 1, read
+
+
+def test_the_controller_publishes_the_idle_state_before_the_run_ends(tmp_path, monkeypatch):
+    """STANDING. As a run ends the controller says first that no run is live, then that the run has ended: a page's
+    reading at the run's end, as the round's is, finds no run live. ``status_changed`` with a status not live comes
+    before ``run_ended``, and a listener of ``run_ended`` reads ``is_live()`` False."""
+    from core.gui.run.controller import controller
+    from tests._runs import StandIn, start_run
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, _page, _run, _made):
+        heard = []
+        held = controller()
+        held.status_changed.connect(lambda status: heard.append(("status", status.live)))
+        held.run_ended.connect(lambda _status: heard.append(("ended", held.is_live())))
+        stand_in = StandIn(word="Other run")
+        start_run(screen.prior_panel, stand_in)
+        _round_ends(stand_in, payload=object())
+        ended = heard.index(("ended", False))
+        assert heard[ended - 1] == ("status", False), heard
+
+
+def test_the_round_says_its_result_and_offers_check_this_posterior(tmp_path, monkeypatch):
+    """Once its run has ended the round says its posterior is in use from step 3 on, narrowed around its observation,
+    and how much of the prior's draws its region kept; that the posterior it came from stays in Records; and offers to
+    check the new posterior or run an inference on the same observation. The round's posterior is in use."""
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, run, made):
+        _ready_round(page, made)
+        page._main_clicked()
+        assert run.started.wait(5), page.foot.reason.text()
+        result = _round_posterior(acceptance=0.12)
+        _round_ends(run, result)
+        assert [(fact.kind, fact.sentence) for fact in page.result.sentences()] == [
+            ("info", "In use from step 3 on: retrain_round1, narrowed around cell_a. The region kept 12 % of the "
+                     "prior's draws."),
+            ("info", "The posterior it came from, retrain_posterior, stays in Records; load it in step 3 to go back.")]
+        assert [(step.words, step.step) for step in page.result.next_steps()] == [
+            ("Check this posterior", "checks"), ("Run inference on the same observation", "infer")]
+        assert screen.session.posterior is result
+
+
+def test_the_training_steps_list_moves_to_the_rounds_posterior_after_the_round_ends(tmp_path, monkeypatch):
+    """The posterior a round returns is what step 3 holds once the round's run has ended: the Training page, not in sight,
+    reads nothing while the run is live nor at its end, and at its next show reads once, its list of saved posteriors
+    standing on the round's posterior."""
+    from core.artifacts import default_store
+    from core.gui.run.controller import controller
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+    with _sixth_step(tmp_path, monkeypatch) as (window, screen, page, run, made):
+        training = screen.posterior_panel
+        saved = _posterior_artifact(default_store(), _nad_cfg(), name="round_saved").id
+        read = []
+        real = training.read_disk
+        monkeypatch.setattr(training, "read_disk", lambda: (read.append(controller().is_live()), real())[1])
+        _ready_round(page, made)
+        page._main_clicked()
+        assert run.started.wait(5), page.foot.reason.text()
+        _round_ends(run, _round_posterior(ident=saved))
+        assert read == [], read
+        window.go_to("inference", "training")
+        assert read == [False] and training.post_picker.key() == saved, (read, training.post_picker.key())
+
+
+def test_a_rounds_expected_epochs_are_said_as_the_last_narrowing_round_of_its_kind(tmp_path):
+    """The epochs a round is expected to take come from the newest finished narrowing round of its kind, and its words
+    say so, never "the last training"."""
+    import json
+    from core.artifacts.store import MANIFEST, Summary
+    from core.gui.run import controller as controller_module
+    path = tmp_path / "Artifacts" / "posteriors" / "retrain_round1__x"
+    path.mkdir(parents=True)
+    (path / MANIFEST).write_text(json.dumps({"config": {"model": "NADROWSKI"}, "body": {
+        "mode": "chi", "training": {"epochs_trained": 40}}}), encoding="utf-8")
+    listed = [Summary("posterior", "retrain_round1", "retrain_round1", "2026-11-05T10:00:00+00:00", "", path, True,
+                      None, mode="chi", amortized=False)]
+    store = SimpleNamespace(list=lambda kind: listed if kind == "posterior" else [])
+    assert controller_module._expected(store, {"model": "NADROWSKI", "observation": "chi", "narrowed": True}) == (
+        40, "about 40 epochs: the last narrowing round of this kind, retrain_round1, ran 40")
+    assert controller_module._expected(store, {"model": "NADROWSKI", "observation": "chi", "narrowed": False}) is None

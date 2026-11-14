@@ -165,7 +165,8 @@ def _expected(store, facts: dict) -> tuple[int, str] | None:
             continue
         made = _made(summary.created)
         label = record_words.record_label("posterior", summary.name, None if made is None else made.astimezone())
-        return epochs, f"about {epochs} epochs: the last training of this kind, {label}, ran {epochs}"
+        kind = "narrowing round" if facts.get("narrowed") else "training"
+        return epochs, f"about {epochs} epochs: the last {kind} of this kind, {label}, ran {epochs}"
     return None
 
 
