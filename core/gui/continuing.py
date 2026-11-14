@@ -37,6 +37,8 @@ FINISHED_TEXT = "Its fit is finished; resuming writes the posterior without trai
 GONE_PRIOR = "a prior no longer in Records"
 GONE_OBSERVATION = "an observation no longer in Records"
 GONE_POSTERIOR = "a posterior no longer in Records"
+#: What a kept narrowing round's row says its Resume loads.
+LOADS_TEXT = "Resume loads {}, its {} and {}, and puts them in use."
 #: How a history's training ended, as an offer's sentence says it.
 HOW = {"failed": "failed", "not seen to end": "was not seen to end", "stopped": "stopped"}
 
@@ -49,7 +51,10 @@ class Offer:
     training holds; ``sentence`` what Home and the Training step say of it; ``why_not`` why a kept training cannot be
     resumed now, "" when it can; ``label`` its name, or a kept training's label; ``how`` how it stopped, in words;
     ``at`` the moment it is ordered by; ``named`` whether a kept training has a name of its own; ``step`` the step whose
-    page takes it, "training", or "narrowing" for a narrowing round's."""
+    page takes it, "training", or "narrowing" for a narrowing round's; for a kept narrowing round, ``loads`` what its
+    Resume loads and puts in use, in a sentence ("" while one of them is no longer in Records), and ``match`` what a
+    new round's form is matched against: its prior, its parent posterior and its observation by their ids, its region's
+    level, its batches, simulations per batch and network."""
     kind: str
     run: "str | None"
     kept: "str | None"
@@ -62,6 +67,8 @@ class Offer:
     at: "datetime | None" = None
     named: bool = True
     step: str = "training"
+    loads: str = ""
+    match: tuple = ()
 
     @property
     def button(self) -> str:
@@ -191,9 +198,17 @@ def _kept_offer(kept, runs: dict, prior_label, label) -> Offer:
         return reader(kind, ref) if isinstance(ref, str) and ref else None
 
     prior = named("prior", "prior", lambda _kind, ref: prior_label(ref))
+    loads, match = "", ()
     if region is not None:
-        sentence = resume_sentence(kept, prior, around=named("observation", "observation", label),
-                                   narrowed_from=named("posterior", "parent_posterior", label))
+        around, narrowed_from = named("observation", "observation", label), named("posterior", "parent_posterior", label)
+        sentence = resume_sentence(kept, prior, around=around, narrowed_from=narrowed_from)
+        if around and narrowed_from and prior:
+            loads = LOADS_TEXT.format(narrowed_from, prior[4:] if prior.startswith("the ") else prior, around)
+        record = getattr(kept, "config", None) or {}
+        record = record if isinstance(record, dict) else {}
+        level = region.get("level") if isinstance(region, dict) else None
+        match = (parents.get("prior"), parents.get("parent_posterior"), parents.get("observation"), level,
+                 *(record.get(key) for key in ("num_runs", "run_size_cap", "hidden_features", "num_transforms")))
     else:
         sentence = resume_sentence(kept, prior)
     how = stopped_words(getattr(kept, "state", None), getattr(kept, "stopped_on_purpose", None),
@@ -202,7 +217,8 @@ def _kept_offer(kept, runs: dict, prior_label, label) -> Offer:
     name = getattr(kept, "posterior_name", "")
     return Offer("round" if region is not None else "resume", runs.get(ident), ident, None, sentence, why,
                  epoch=_whole(getattr(kept, "passes", None)), label=kept_label(kept), how=how, at=at,
-                 named=isinstance(name, str) and bool(name), step="narrowing" if region is not None else "training")
+                 named=isinstance(name, str) and bool(name), step="narrowing" if region is not None else "training",
+                 loads=loads, match=match)
 
 
 def _history_offer(record: dict, kept_on: set, set_batches) -> "Offer | None":

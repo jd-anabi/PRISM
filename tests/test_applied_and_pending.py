@@ -6075,3 +6075,123 @@ def test_the_training_steps_list_holds_no_round(tmp_path, monkeypatch):
         assert [offer.kept for offer, _parts in screen.posterior_panel._kept_rows] == [ordinary]
         assert "narrowing" not in screen.step_states()[2].detail.lower()
         assert fields.CONTROL["resume_fit"] == "Look at the kept trainings in step 3, Training."
+
+
+def _a_round_page_with_a_kept_round(store, tmp_path, monkeypatch):
+    """The window of a launch after one that left a kept narrowing round that can be resumed, the Narrowing round step
+    shown: (window, its Parameter inference, the round's page, the round's id)."""
+    from tests.test_shell import _a_kept_round_left, _home_of_last_time
+    _held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "narrowing")
+    inference = window.part("inference")
+    return window, inference, inference.tsnpe_panel, kept
+
+
+def test_the_kept_rounds_list_reads_once_and_never_while_a_run_is_live(store, tmp_path, monkeypatch):
+    """The round page's list of kept rounds is read with the page's reading, once, by the screen's one reading of what
+    is offered; drawing it again reads nothing; and while a run is live the page's reading reads none of it, the list
+    showing what was read last."""
+    from core.SBI import fit_state
+    from tests._runs import running
+    _window, inference, page, kept = _a_round_page_with_a_kept_round(store, tmp_path, monkeypatch)
+    read, real = [], fit_state.kept_fits
+    monkeypatch.setattr(fit_state, "kept_fits", lambda *args, **kwargs: read.append(1) or real(*args, **kwargs))
+    page.read_facts()
+    assert len(read) == 1, read
+    page.redraw()
+    inference.refresh_gates()
+    assert len(read) == 1, "drawing the list read the kept trainings"
+    with running(page):
+        page.read_facts()
+        inference.read_offers()
+        assert len(read) == 1, "the kept trainings were read while a run was live"
+        assert [offer.kept for offer, _parts in page._kept_rows] == [kept]
+
+
+def test_a_resume_refusal_is_said_on_the_row_that_was_pressed(store, tmp_path, monkeypatch):
+    """A Resume the round refuses for its kept round (a race, a torn record, a process training it) is said on the row
+    that was pressed, in place of its "Resume", beside its "Delete", once the list is read again; the box says it too."""
+    from core.refusals import Refusal
+    from tests._dialogs import forget_asked
+    _window, _inference, page, kept = _a_round_page_with_a_kept_round(store, tmp_path, monkeypatch)
+    (_offer, parts), = page._kept_rows
+    page._resumed_row = kept
+    forget_asked()
+    said = "The kept training is being trained by another process."
+    page._refusal(Refusal(said, field="resume_fit"))
+    (_offer, parts), = page._kept_rows
+    assert page.said_on_row(kept) == said and parts["why"].text() == said
+    assert not parts["resume"].isVisibleTo(page.kept_block) and parts["delete"].isVisibleTo(page.kept_block)
+    assert [one.sentence for one in all_asked()] == [said]
+
+
+def test_a_new_round_over_a_matching_kept_round_asks_first(tmp_path, monkeypatch):
+    """A narrowing round started with the settings of a kept one, its prior, the posterior it narrows, its
+    observation, its region's level, its budget and its network, asks first, naming the kept round and the epoch it was
+    kept after, "Cancel" preselected: "Cancel" starts nothing; "Start a new round" starts it. A round whose settings
+    differ asks nothing."""
+    from core.artifacts import ArtifactStore
+    from core.gui.continuing import Offer
+    from tests._dialogs import choose, forget_asked
+    from tests._fixtures import build_window
+    from tests._runs import Clock, at, controller_on
+    from tests.test_pages import _a_round_to_start
+    controller_on(tmp_path, Clock(at(8, 12, 4)))
+    window = build_window()
+    window.go_to("inference", "narrowing")
+    screen = window.part("inference")
+    page = screen.tsnpe_panel
+    _a_round_to_start(page)
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+        kind="observation", id=ref, name="cell_a", manifest=None))
+    started = []
+    monkeypatch.setattr(page, "dispatch", lambda fn, *args, **kwargs: started.append(fn) or False)
+    knobs = page._read_knobs()
+    _cfg, prior, posterior = page._held()
+    match = (prior.id, posterior.id, page.obs_picker.key(), knobs["level"], knobs["num_runs"], knobs["run_size_cap"],
+             knobs["hidden_features"], knobs["num_transforms"])
+    kept = Offer("round", None, "20261003T130500", None, "", "", epoch=2, label="retrain_round1", step="narrowing",
+                 match=match)
+    # The press itself, past the reading that counts: the records the round was set up on stood in a store of their own.
+    screen.seed_offers((kept,))
+    forget_asked()
+    page.main_pressed()
+    asked, = all_asked()
+    assert (asked.title, asked.sentence, asked.answers, asked.default) == (
+        "Start a new narrowing round beside a kept one?",
+        "The narrowing round retrain_round1 was kept after epoch 2 with these settings. Resume it from the list on this "
+        "page to train on from there. A new round starts its fit from the first epoch, leaves the kept one as it is, "
+        "and takes its name.", ("Start a new round", "Cancel"), "Cancel")
+    assert started == []
+    choose(monkeypatch, other=True)
+    page.main_pressed()
+    assert len(started) == 1
+    screen.seed_offers((Offer("round", None, "20261003T130500", None, "", "", epoch=2, label="retrain_round1",
+                              step="narrowing", match=(*match[:4], knobs["num_runs"] + 1, *match[5:])),))
+    forget_asked()
+    page.main_pressed()
+    assert all_asked() == [] and len(started) == 2
+
+
+def test_the_rails_step_six_opens_the_kept_rounds_row(store, tmp_path, monkeypatch):
+    """With a kept narrowing round offered, the rail's step 6 reads "Unfinished: epoch 41", and opening it from the rail
+    shows the round's page with the kept round's row in sight and the keyboard on its "Resume", resuming nothing."""
+    from PySide6.QtWidgets import QApplication
+    from core.gui.run.controller import controller
+    from tests._window_helpers import in_front
+    from tests.test_shell import _a_kept_round_left, _home_of_last_time
+    _held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
+    window, _home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    inference.read_offers()
+    assert inference.step_states()[5].rail_words == "Unfinished: epoch 41"
+    with in_front(window):
+        window.shell.rail.opened.emit("inference", "narrowing")
+        for _ in range(5):
+            QApplication.processEvents()
+        page = inference.tsnpe_panel
+        (offer, parts), = page._kept_rows
+        assert inference.current_step() == "narrowing" and offer.kept == kept
+        assert QApplication.focusWidget() is parts["resume"], QApplication.focusWidget()
+    assert not controller().is_live() and inference.session.draft is None

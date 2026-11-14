@@ -1096,6 +1096,18 @@ CHECK_THIS_WORDS = "Check this posterior"
 SAME_OBSERVATION_WORDS = "Run inference on the same observation"
 NEW_SET_ROUND_TITLE = "Start the narrowing round beside a saved simulation set?"
 NEW_SET_ROUND_TEXT = "Starting now simulates this round from zero and leaves that set as it is."
+#: The question before a new narrowing round with the settings of a kept one: the kept one, then what each answer does.
+NEW_ROUND_TITLE = "Start a new narrowing round beside a kept one?"
+KEPT_ROUND_TEXT = "The narrowing round {} was kept after epoch {} with these settings."
+NEW_ROUND_TEXT = ("Resume it from the list on this page to train on from there. A new round starts its fit from the "
+                  "first epoch, leaves the kept one as it is, and takes its name.")
+NEW_ROUND_OTHER = "Start a new round"
+
+
+def new_round_question(sentence: str) -> tuple[str, str, str, str]:
+    """The question before a narrowing round started with the settings of a kept one, ``sentence`` naming it: its
+    title, its text, the safe answer, preselected, and the other."""
+    return NEW_ROUND_TITLE, f"{sentence} {NEW_ROUND_TEXT}", CANCEL, NEW_ROUND_OTHER
 
 
 def round_uses(posterior: str, prior: str, observation: str, body) -> str:

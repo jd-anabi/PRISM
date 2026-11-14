@@ -1300,15 +1300,14 @@ class RunController(QObject):
         what its page shows, as ``show_failure`` takes it: the failure's block, which begins with when (the page's own
         sentence says the run failed), the error's message (a refusal's with where to fix it, as the window says a
         refusal), its kind and traceback, whether a stop had been asked for before it, whether the run keeps a file
-        that holds them, and the command line the page sets off beneath its sentence ("" for none)."""
+        that holds them."""
         exc, trace, noted = failure
         is_oom = _out_of_memory()
         sentence, _button = retry.failure_words(last, self._model, exc, is_oom=is_oom)
         boxed, _button = retry.failure_words(last, self._model, exc, is_oom=is_oom, boxed=True)
         said = retry.message(exc)
         quoted = self._refusal_words(exc, run) if isinstance(exc, Refusal) else said
-        return sentence, (boxed, quoted, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None,
-                          retry.reopen_command(last, self._model))
+        return sentence, (boxed, quoted, trace or f"{type(exc).__name__}: {said}", bool(noted), run.text is not None)
 
     def _set_holds(self, run: _Run) -> tuple[int, bool]:
         """The batches the run's simulation set holds, and whether it is complete, read from the set itself, in the

@@ -617,6 +617,7 @@ class InferenceScreen(QWidget):
         self._offers = resuming.read_offers(default_store(), controller().folder())
         self.recompute_states()
         self.posterior_panel.redraw()
+        self.tsnpe_panel.redraw()
 
     def _lets_go(self, title: str, other: str) -> bool:
         """Whether what the session holds may be let go for a Continue or a Resume: asked first, "Keep this session"

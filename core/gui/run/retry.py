@@ -16,8 +16,7 @@ starts the count again. A try is the run's own call: the simulation set continue
 the run kept a training, that training resumed. A failure of the graphics card that is no lack of memory is never
 tried again, its first time included: the card is then usually lost to this copy of PRISM, and only reopening PRISM
 can help, which the page says, naming that cause, as it names the tries that did not help after the card ran out of
-memory; the command line that resumes a kept training outside the window stands on its own beneath the page's
-sentence (``reopen_command``), to be copied whole. Any other failure is said at once.
+memory, and what the reopened window will offer. Any other failure is said at once.
 
 "Continue from batch N" and "Resume the training" repeat the run's own call, made with the configuration and the
 prior its page's session held then: only into that session (``made_in``).
@@ -62,6 +61,8 @@ NOTED_TEXT = "A stop was asked for before the run failed."
 #: The buttons that continue a run from the batches its simulation set holds, and resume the training it kept.
 CONTINUE_TEXT = "Continue from batch {}"
 RESUME_TEXT = "Resume the training"
+#: The button a kept narrowing round's row offers after a reopening.
+RESUME_WORDS = "Resume"
 #: The cause, when the graphics card ran out of memory; and the error's message, when it gives none.
 OUT_OF_MEMORY = "the graphics card ran out of memory"
 NO_MESSAGE = "the error gave no message"
@@ -227,64 +228,6 @@ def _failing(batches: int, model) -> int:
     return max(batches, model.batches_done() or 0) + 1
 
 
-def reopen_command(status, model) -> str:
-    """The command line that the page of a narrowing round only reopening PRISM can help sets off on its own beneath its
-    sentence, in the fixed-width face, so that it is copied whole with nothing of the sentence: the round it kept
-    resumed outside the window (``resume_command``), until the round's page offers it. "" for every other page: a
-    training's kept training is offered by Home and the Training step after the reopening."""
-    spec = model.spec
-    if (not status.reopen or status.kept_fit is None or spec.word != "Narrowing round"
-            or model.stage_kind() not in ("fit", "saving")):
-        return ""
-    return resume_command(spec, status.kept_fit.id)
-
-
-def resume_command(spec, kept: str) -> str:
-    """The command line that resumes the kept training ``kept`` outside the window, built from the run's own call
-    (``spec``'s): the tool's command for the run (``train`` for a training, ``tsnpe`` for a narrowing round), the kept
-    training named, then the flags the training was started with, read off the call (``_flags``). Where the call does
-    not tell one of them (bounds typed in by hand, a call with no arguments), the command names the kept training
-    alone, and ``untold`` names the flags to give as they were."""
-    narrowing = spec.word == "Narrowing round"
-    command = f"python -m core {'tsnpe' if narrowing else 'train'} --resume-fit {kept}"
-    flags = _flags(spec)
-    return command if flags is None else " ".join([command] + flags)
-
-
-def untold(spec) -> str:
-    """The flags of the run's command line that its own call does not tell, as the page names them for a person to
-    give as they were ("--bounds, --prior and --chi"); "" when the call tells them all."""
-    if _flags(spec) is not None:
-        return ""
-    return ("--bounds, --posterior, --observation and --chi" if spec.word == "Narrowing round"
-            else "--bounds, --prior and --chi")
-
-
-def _flags(spec) -> list[str] | None:
-    """The flags a training was started with, read off the run's own call: its bounds file, its prior (a narrowing
-    round's parent posterior and observation, and the acceptance of a parent that is itself narrowed), its kind of
-    observation, and the device when it was the processor, which the tool does not pick by itself where a graphics
-    card is. None when the call does not tell one of them."""
-    narrowing = spec.word == "Narrowing round"
-    args = tuple(spec.args)
-    cfg = args[0] if args else None
-    bounds = (getattr(cfg, "sources", None) or {}).get("bounds")
-    chi = getattr(cfg, "chi_mode", None)
-    device = getattr(getattr(getattr(cfg, "hw", None), "device", None), "type", None)
-    named = ((("--posterior", 1), ("--observation", 3)) if narrowing else (("--prior", 1),))
-    refs = [(flag, _ref(args[at] if len(args) > at else None)) for flag, at in named]
-    if bounds is None or not isinstance(chi, bool) or any(ref is None for _flag, ref in refs):
-        return None
-    flags = [f"--bounds {_quoted(str(bounds))}"] + [f"{flag} {_quoted(ref)}" for flag, ref in refs]
-    flags.append("--chi" if chi else "--no-chi")
-    parent = getattr(args[1], "posterior", None) if narrowing else None
-    if getattr(parent, "truncation", None) is not None:
-        flags.append("--accept-truncated")
-    if device == "cpu":
-        flags.append("--device cpu")
-    return flags
-
-
 def made_in(spec, session) -> bool:
     """Whether ``session``, the session of the page that offers to continue or resume a run, still holds what the
     run's own call was made with: its configuration (the call's first argument) and its prior (a training's second
@@ -297,36 +240,24 @@ def made_in(spec, session) -> bool:
     return args[0] is getattr(session, "cfg", None) and args[at] is getattr(session, "inf_prior", None)
 
 
-def _ref(record) -> str | None:
-    """A record the run's call holds, as the tool names one: by its name, else by its id; None for none."""
-    if record is None:
-        return None
-    return getattr(record, "name", None) or getattr(record, "id", None) or None
-
-
-def _quoted(word: str) -> str:
-    """A word of a command line, in quotes when it holds a space."""
-    return f'"{word}"' if " " in word else word
-
-
 def _reopening(spec, kind, note, batches: int, opening: str) -> str:
     """The page of a training that only reopening PRISM can help: ``opening``, which says why, then that PRISM is
     closed and opened again, and how the training goes on after it: a training's kept training resumed from Home or
-    the Training step, a narrowing round's from the command line, with the command the page sets off beneath the
-    sentence (``reopen_command``), until its page offers it; a training's saved simulations continued from Home, when
-    its settings name the bounds file Home fills the forms from; or the same run started again."""
+    the Training step, a narrowing round's from its own step, to which Home leads; the saved simulations continued
+    from Home, when the run's settings name what Home fills the forms from and loads; or the same run started
+    again."""
     word = spec.word
     if note is not None and kind in ("fit", "saving"):
         if word == "Training":
             return (f"{opening} {AGAIN_TEXT}; Home and the Training step will offer to resume the training, kept up "
                     f"to epoch {number_text(note.passes)}.")
-        given = untold(spec)
-        tail = f", given the same {given} it was trained with" if given else ""
-        return (f"{opening} {AGAIN_TEXT}. The training is kept up to epoch {number_text(note.passes)}; until the "
-                f"{word} page offers to resume it, it is resumed from the command line with the command below{tail}.")
+        return f"{opening} {AGAIN_TEXT}; the {word} step will offer '{RESUME_WORDS}', and Home will lead there."
     settings = spec.settings if isinstance(spec.settings, dict) else {}
-    if batches and word == "Training" and isinstance(settings.get("bounds"), str) and settings["bounds"]:
-        # Home offers to continue only a training whose settings name a bounds file, the one its forms fill from.
+    named = isinstance(settings.get("bounds"), str) and bool(settings["bounds"]) and (
+        word == "Training" or all(isinstance(settings.get(key), str) and settings[key]
+                                  for key in ("parent_posterior", "observation")))
+    if batches and word in TRAINING_WORDS and named:
+        # Home offers to continue only a run whose settings name what its forms fill from and its chain loads.
         return f"{opening} {AGAIN_TEXT}; Home will offer '{CONTINUE_TEXT.format(number_text(batches))}'."
     if batches:
         return (f"{opening} {AGAIN_TEXT}, then start the same {word.lower()}: it continues the saved simulations from "

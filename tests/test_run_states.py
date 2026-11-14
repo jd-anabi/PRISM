@@ -5204,8 +5204,8 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
     end firm; in its fit, with the fit's range named after a training of a long name, the health and the loss curve;
     stopping, with three buttons on one row at the ordinary text size; asking whether to keep the training its stop
     kept; failed in its fit, its own name longer than the head's row, cut at its end with "…" and drawn so, then with
-    the error's kind and traceback shown; a narrowing round failed so that only reopening PRISM can help, its command
-    naming a long path; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close,
+    the error's kind and traceback shown; a narrowing round failed so that only reopening PRISM can help, made from a
+    bounds file of a long path, which names no command; waiting to try again, with "Stop trying"; saving its posterior while the window waits to close,
     with "Keep PRISM open"; and finished, its page brought back. A short name is whole in each. With the full text shown
     and its find field opened at the least size, each of its tools is at least as wide as it asks and stands inside the
     column, at once and after the window was made larger, where the field and its buttons stand on one row again, and
@@ -5419,7 +5419,8 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         reopening.fail(torch.AcceleratorError("CUDA error: an illegal memory access was encountered\nCUDA kernel "
                                               "errors might be asynchronously reported at some other API call."))
         turn_until(app, lambda: not held.is_live(), 20)
-        assert _LONG_BOUNDS in view.command_line.text() and view.command_line.isVisibleTo(view)
+        assert view.command_line.text() == "" and not view.command_line.isVisibleTo(view), "a command was shown"
+        assert "Narrowing round step will offer 'Resume'" in view.failure_row.sentence.plain_text()
         at(least, "only reopening can help")
         view.back_button.click()
 

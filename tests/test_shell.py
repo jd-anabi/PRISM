@@ -9888,7 +9888,87 @@ def test_the_rail_keeps_a_kept_training_when_parameter_inference_opens_at_anothe
     assert window.shell.rail.row("training").accessibleName() == said
 
 
-# ── Home's presses, the kept round's command, the load view's order ──
+def _a_kept_round_left(store, tmp_path, monkeypatch, *, name="retrain_round1", passes=41, saved_at=None):
+    """What a launch before this one left, a kept narrowing round of its prior among it, narrowed from its posterior
+    around the observation cell_b of the test's store, that can be resumed: (the launch's records, the round's id)."""
+    from tests._fixtures import _nad_cfg, region_dict, write_observation
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    kept = _a_kept_training(store, held, name=name, passes=passes, region=region_dict(), saved_at=saved_at,
+                            parents={"parent_posterior": held.posterior, "observation": observed})
+    return held, kept
+
+
+def test_a_kept_rounds_row_on_its_page_offers_resume_and_delete(store, tmp_path, monkeypatch):
+    """After a reopening the Narrowing round step lists a kept round under what is in use: its label and how it
+    stopped, what it says, what a Resume loads and puts in use, then "Resume" and "Delete", stops of the Tab key after
+    the heading's buttons and before the form, and no command line. "Delete" asks first, "Keep it" preselected, and on
+    the other answer deletes the kept round and reads the list again."""
+    from tests._dialogs import all_asked, choose, forget_asked
+    held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "narrowing")
+    page = window.part("inference").tsnpe_panel
+    (offer, parts), = page._kept_rows
+    assert offer.kept == kept and page.kept_block.isVisibleTo(page)
+    assert parts["label"].text().startswith("retrain_round1: ")
+    assert parts["loads"].text() == ("Resume loads the posterior zz_trained, its prior retrain_prior and the "
+                                     "observation cell_b, and puts them in use.")
+    said = " ".join(part.text() for part in (parts["label"], parts["sentence"], parts["loads"]))
+    assert "python -m core" not in said and "around the observation cell_b" in said, said
+    assert parts["resume"].isVisibleTo(page.kept_block) and parts["delete"].isVisibleTo(page.kept_block)
+    assert page.region_stops() == [parts["resume"], parts["delete"]]
+    start = page.head.findChildren(QPushButton)[-1]
+    at, chain = start.nextInFocusChain(), []
+    while at is not start and len(chain) < 500:
+        chain.append(at)
+        at = at.nextInFocusChain()
+    first = page.form.first_control()
+    assert chain.index(parts["resume"]) < chain.index(parts["delete"]) < chain.index(first)
+    forget_asked()
+    parts["delete"].click()
+    asked, = all_asked()
+    assert (asked.title, asked.sentence, asked.answers, asked.default) == (
+        "Delete this kept narrowing round?", "The 41 epochs kept are deleted; the next narrowing round with these "
+        "settings starts its fit from the first epoch.", ("Delete it", "Keep it"), "Keep it")
+    assert [row.id for row in store.list("fit")] == [kept]
+    choose(monkeypatch, other=True)
+    parts["delete"].click()
+    assert store.list("fit") == [] and page._kept_rows == [] and not page.kept_block.isVisibleTo(page)
+
+
+def test_home_leads_to_a_kept_round_on_its_page(store, tmp_path, monkeypatch):
+    """A kept narrowing round after a reopening: Home names it and offers "Open Narrowing round", which opens the
+    Narrowing round step with the round's row in sight and the keyboard on its "Resume", and resumes nothing: no run
+    starts and nothing is loaded. A kept training still resumes from Home."""
+    from datetime import datetime, timedelta, timezone
+    from core.gui.run.controller import RunController
+    from tests._window_helpers import in_front
+    held, kept = _a_kept_round_left(store, tmp_path, monkeypatch,
+                                    saved_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+    training = _a_kept_training(store, held, name="retrain_3")
+    started = []
+    monkeypatch.setattr(RunController, "dispatch", lambda self, *args, **kwargs: started.append(args) or False)
+    window, home = _home_of_last_time(tmp_path)
+    assert (home.next_heading.label.text(), home.next_button.text(), home.next.action) == (
+        "Next: resume the narrowing round retrain_round1", "&Open Narrowing round", "open_round")
+    with in_front(window):
+        home.next_button.click()
+        for _ in range(5):
+            QApplication.processEvents()
+        inference = window.part("inference")
+        page = inference.tsnpe_panel
+        (offer, parts), = page._kept_rows
+        assert inference.current_step() == "narrowing" and offer.kept == kept
+        assert QApplication.focusWidget() is parts["resume"], QApplication.focusWidget()
+    assert started == [] and not controller().is_live() and inference.session.draft is None
+    store.delete("fit", kept, force=True)
+    inference.read_offers()
+    window.go_to("home")
+    assert (home.next.action, home.next.offer.kept, home.next_button.text()) == ("resume", training, "&Resume")
+
+
+# ── Home's presses, the load view's order ──
 def test_the_load_view_lists_the_saved_posteriors_before_the_kept_trainings(store, tmp_path, monkeypatch):
     """The kept trainings stand under what the step holds while a training is set up, beside the choice to start one;
     in the load view, which is for the saved posteriors, they stand after them, on the page and in the Tab key's

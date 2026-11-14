@@ -637,6 +637,9 @@ class MainWindow(QMainWindow):
         if controller().is_live() or offer is None:
             return
         self.go_to("inference", "narrowing")
+        inference = self._built.get("inference")
+        if isinstance(inference, InferenceScreen) and getattr(offer, "kept", None):
+            inference.tsnpe_panel.show_kept(offer.kept)
 
     def offer_pressed(self, offer, where: str = "training") -> None:
         """An offer taken, from Home's button (``where`` "home") or a past view's, which stands on the offer's own step.
@@ -647,7 +650,7 @@ class MainWindow(QMainWindow):
         Training, or the Narrowing round for a round's. A past view says only what its own press set: what an earlier
         press left there goes. Nothing while a run is live, or for no offer."""
         if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
-                                                                                          "resume"):
+                                                                                          "resume", "round"):
             return
         held = controller()
         if getattr(offer, "run", None) and held.offered(offer.run):
@@ -663,7 +666,9 @@ class MainWindow(QMainWindow):
         if not isinstance(inference, InferenceScreen):
             return
         if getattr(offer, "step", "training") == "narrowing":
-            if offer.kind != "resume":
+            if offer.kind == "round":
+                inference.resume_round(offer.kept)
+            else:
                 inference.continue_round(offer, where="home" if where == "home" else "narrowing")
             return
         if offer.kind == "resume":
@@ -770,7 +775,7 @@ class MainWindow(QMainWindow):
             inference = self._built.get("inference")
             offers = () if held.is_live() else inference.offers() if inference is not None else self._offers
             past.offer_past(next((offer for offer in offers if offer.run == run and not offer.why_not
-                                  and offer.kind in ("continue", "fit_again", "resume")), None))
+                                  and offer.kind in ("continue", "fit_again", "resume", "round")), None))
         if shown and ended:
             held.acknowledge(run)
 
@@ -860,6 +865,7 @@ class MainWindow(QMainWindow):
         rail = self.shell.rail
         if rail.opened_by_key():
             self._move(part, step, keyboard=Qt.ShortcutFocusReason)
+            self._to_a_kept_round(part, step)
             return
         held = self.focusWidget()
         if held is not None and self.shell.stack.currentWidget().isAncestorOf(held):
@@ -870,6 +876,17 @@ class MainWindow(QMainWindow):
             # the row the move marked: the step's, or the part's own while Parameter inference shows no step (its
             # error page)
             rail.row(shown if now == "inference" and shown else now).setFocus(Qt.OtherFocusReason)
+        self._to_a_kept_round(part, step)
+
+    def _to_a_kept_round(self, part: str, step) -> None:
+        """Step 6 opened from the rail while a kept narrowing round is offered: its row in sight, the keyboard on its
+        Resume, as Home's "Open Narrowing round" opens it; nothing is resumed."""
+        inference = self._built.get("inference")
+        if (part, step) != ("inference", "narrowing") or not isinstance(inference, InferenceScreen):
+            return
+        offer = continuing.for_the_round(inference.offers())
+        if offer is not None and offer.kind == "round":
+            inference.tsnpe_panel.show_kept(offer.kept)
 
     def _rail_left(self) -> None:
         """Escape in the rail: the page in sight takes the keyboard."""

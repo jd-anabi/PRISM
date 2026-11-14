@@ -13,13 +13,18 @@ in use that was narrowed around one observation, those it cannot be used on are 
 inference makes is chosen in the list once that run has ended, the line under it saying what it replaced. Nothing is
 read while a run is live: the observations' records, the run history and the kept sets are read by the page's reading
 alone. The observation chosen and the budget are remembered once a round has started with them.
+
+A kept narrowing round, after a reopening, is listed under what is in use, as the screen last read what is offered:
+what it says, what a Resume loads, "Resume" and "Delete"; Resume goes through the screen's own Resume of a round, and
+a round started with a kept one's settings asks first.
 """
 import json
 import math
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from core import config, orchestrator
 from core.artifacts import ArtifactStore, default_store
@@ -27,18 +32,20 @@ from core.artifacts.store import MANIFEST
 from core.refusals import Refusal, require_at_least, require_between
 from core.SBI import truncate
 
-from ... import check_lineage, plans, record_words, settings
+from ... import check_lineage, design, fonts, plans, record_words, settings, style, texts
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import OBSERVATION_KEY, put_many
 from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import RunSpec
+from ...run.view import WrappedWords
 from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, CARRIED_TEXT, CHANGED_TO_TEXT,
                            CHECK_THIS_WORDS,
                            DIRECTIONS_TEXT, FIT_RULES, NETWORK_DIFFERS_TEXT, NETWORK_HELD_TEXT, NEW_SET_ROUND_TEXT,
                            NEW_SET_ROUND_TITLE, NO_OBSERVATION_WORDS, NO_PRIOR_WORDS, REGION_TEXT, REGION_WARN_BELOW,
                            ROTATION_REUSED_TEXT, ROUND_CAME_FROM_TEXT, ROUND_IN_USE_TEXT, ROUND_KEPT_TEXT,
-                           ROUND_START_WORDS, SAME_OBSERVATION_WORDS, Fact, fit_row_problem, pressed_reading,
+                           ROUND_START_WORDS, SAME_OBSERVATION_WORDS, KEPT_ROUND_TEXT, Fact, fit_row_problem,
+                           new_round_question, pressed_reading,
                            round_facts, round_how_long, round_uses)
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.ask import ask
@@ -72,6 +79,20 @@ _FIT = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learni
         "max_num_epochs", "checkpoint_every")
 #: The rows a plan fills, in the form's order.
 PLAN_ROWS = ("hpd_level", "n_directions", *_FIT)
+#: The list of kept narrowing rounds: its heading, its two buttons and Delete's question.
+KEPT_HEAD = "Kept narrowing rounds"
+RESUME_WORDS = "Resume"
+DELETE_WORDS = "Delete"
+DELETE_TITLE = "Delete this kept narrowing round?"
+DELETE_TEXT = ("The {} epochs kept are deleted; the next narrowing round with these settings starts its fit from the "
+               "first epoch.")
+DELETE_ONE_TEXT = ("The 1 epoch kept is deleted; the next narrowing round with these settings starts its fit from the "
+                   "first epoch.")
+DELETE_UNCOUNTED_TEXT = ("The epochs kept are deleted; the next narrowing round with these settings starts its fit "
+                         "from the first epoch.")
+KEEP_IT, DELETE_IT = "Keep it", "Delete it"
+#: How near a region's level a form's must be to be the kept round's.
+LEVEL_TOLERANCE = 1e-9
 # Where the window shows this step's runs: Parameter inference, its step Narrowing round.
 _PLACE = ("inference", "narrowing")
 # A list's row as it can be chosen, and the role under which the list's items keep their flags.
@@ -173,6 +194,16 @@ class TSNPEPanel(StepPage):
         form.add("checkpoint_every", TickedField(IntField(config.TRAINING_CHECKPOINT_EVERY, grouped=True), "Never", 0),
                  usual=config.TRAINING_CHECKPOINT_EVERY, folded=True)
         self.rotation_row = form.add_text("rotation", ROTATION_REUSED_TEXT, "")
+        self._kept_rows: list = []           # the list's rows as drawn: (offer, its widgets)
+        self.kept_block = QWidget()
+        self._kept_lines = QVBoxLayout(self.kept_block)
+        self._kept_lines.setContentsMargins(0, 0, 0, 0)
+        self._kept_lines.setSpacing(design.scaled(design.GAP["head_table"]))
+        self.kept_head = style.set_class(QLabel(KEPT_HEAD), cls="head")
+        self.kept_head.setFont(fonts.inter("head"))
+        self._kept_lines.addWidget(self.kept_head)
+        self.kept_block.setVisible(False)
+        self._body.insertWidget(self._body.indexOf(self.in_use) + 1, self.kept_block)
         self._names = NameAndNote("posterior", required=True)
         self.use_names(self._names)
         self.restore_settings(settings.settings())
@@ -285,6 +316,145 @@ class TSNPEPanel(StepPage):
         """What a narrowing round reads of this step: its form as it holds it, the epoch limit's blank among it; the
         step holds nothing a later run reads."""
         return {} if applied else {key: row.value() for key, row in self.plan_fields().items()}
+
+    # ── the kept narrowing rounds ──
+    def kept_offers(self) -> tuple:
+        """The kept narrowing rounds the list shows, as the screen last read them, newest first."""
+        return tuple(offer for offer in (getattr(self._screen, "offers", tuple)() or ()) if offer.kind == "round")
+
+    def redraw(self) -> None:
+        """What every page draws, then the list of kept narrowing rounds as last read."""
+        super().redraw()
+        self._draw_the_kept()
+
+    def _draw_the_kept(self) -> None:
+        """One row for each kept narrowing round: its label and how it stopped, what it says, what a Resume loads, why
+        it cannot be resumed or what stopped its Resume, then "Resume" and "Delete"; the round a live run of this window
+        trains offers neither. Reads nothing; rows made again only when the list's rounds change, the row of the last
+        Resume pressed forgotten with them, and the Tab key's order then with them."""
+        offers, live = self.kept_offers(), controller().is_live()
+        training = (getattr(getattr(controller().model, "spec", None), "kwargs", None) or {}).get("resume_fit") \
+            if live else None
+        if [offer for offer, _parts in self._kept_rows] != list(offers):
+            for _offer, parts in self._kept_rows:
+                parts["row"].hide()
+                self._kept_lines.removeWidget(parts["row"])
+                parts["row"].deleteLater()
+            self._kept_rows = [(offer, self._kept_row(offer)) for offer in offers]
+            for _offer, parts in self._kept_rows:
+                self._kept_lines.addWidget(parts["row"])
+            self._resumed_row = None if not live else self._resumed_row
+            self._a_stop_joined()
+        for offer, parts in self._kept_rows:
+            running = offer.kept == training
+            said = self._said_on_row.get(offer.kept, "")
+            parts["why"].setText(said or offer.why_not)
+            parts["why"].setVisible(bool(said or offer.why_not) and not running)
+            parts["resume"].setVisible(not offer.why_not and not running and not said)
+            parts["resume"].setEnabled(not live)
+            parts["delete"].setVisible(not running)
+            parts["delete"].setEnabled(not live)
+        self.kept_block.setVisible(bool(self._kept_rows))
+
+    def _kept_row(self, offer) -> dict:
+        """The widgets of one row of the list, each line wrapping within the column."""
+        row = QWidget()
+        lines = QVBoxLayout(row)
+        lines.setContentsMargins(0, 0, 0, 0)
+        lines.setSpacing(design.scaled(design.GAP["field_message"]))
+        label, sentence = WrappedWords(), WrappedWords()
+        loads, why = style.set_class(WrappedWords(), cls="quiet"), style.set_class(WrappedWords(), cls="quiet")
+        label.setText(f"{offer.label}: {offer.how}")
+        sentence.setText(offer.sentence)
+        loads.setText(offer.loads if not offer.why_not else "")
+        loads.setVisible(bool(loads.text()))
+        parts = {"row": row, "label": label, "sentence": sentence, "loads": loads, "why": why}
+        for part in (label, sentence, loads, why):
+            lines.addWidget(part)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        parts["resume"] = QPushButton(RESUME_WORDS)
+        parts["resume"].clicked.connect(lambda _checked=False, ident=offer.kept: self.resume_pressed(ident))
+        parts["delete"] = QPushButton(DELETE_WORDS)
+        parts["delete"].clicked.connect(lambda _checked=False, ident=offer.kept: self.delete_pressed(ident))
+        buttons.addWidget(parts["resume"])
+        buttons.addWidget(parts["delete"])
+        buttons.addStretch(1)
+        lines.addLayout(buttons)
+        return parts
+
+    def region_stops(self) -> list:
+        """The list's own stops, in its order: each row's two buttons."""
+        stops = []
+        for _offer, parts in self._kept_rows:
+            stops += [parts["resume"], parts["delete"]]
+        return stops
+
+    def resume_pressed(self, ident: str) -> None:
+        """"Resume" on a kept round's row: the screen's Resume of a round, the same as a past view's."""
+        self._screen.resume_round(ident)
+
+    def delete_pressed(self, ident: str) -> None:
+        """"Delete" on a kept round's row: asked first, "Keep it" preselected; deleted from Records and the list read
+        again, the keyboard on the row now in its place, else the step's heading. A Delete the store refuses is said on
+        the row. Nothing while a run is live."""
+        if controller().is_live():
+            return
+        offer = next((offer for offer in self.kept_offers() if offer.kept == ident), None)
+        epochs = getattr(offer, "epoch", None)
+        sentence = (DELETE_UNCOUNTED_TEXT if not isinstance(epochs, int) or epochs <= 0 else
+                    DELETE_ONE_TEXT if epochs == 1 else DELETE_TEXT.format(texts.number_text(epochs)))
+        if not ask(self, DELETE_TITLE, sentence, KEEP_IT, DELETE_IT, loses_work=True):
+            return
+        at = next((index for index, (row, _parts) in enumerate(self._kept_rows) if row.kept == ident), 0)
+        self._said_on_row.pop(ident, None)
+        try:
+            default_store().delete("fit", ident)
+        except Exception as error:           # noqa: BLE001 -- said on the row, as any refusal of the store is
+            self._said_on_row[ident] = str(getattr(error, "message", None) or error)
+        self._screen.read_offers()
+        if ident not in self._said_on_row:
+            QTimer.singleShot(0, self, lambda: self._keyboard_after_delete(at))
+
+    def _keyboard_after_delete(self, at: int) -> None:
+        for index in (at, at - 1):
+            if 0 <= index < len(self._kept_rows):
+                parts = self._kept_rows[index][1]
+                for button in (parts["resume"], parts["delete"]):
+                    if not button.isHidden() and button.isEnabled():
+                        button.setFocus(Qt.OtherFocusReason)
+                        return
+        self.help_button.setFocus(Qt.OtherFocusReason)
+
+    def show_kept(self, kept_id: str) -> None:
+        """The kept round ``kept_id``'s row in sight, the keyboard on its Resume, or on its Delete where it offers no
+        Resume; nothing is resumed. A round the list does not hold changes nothing."""
+        self.to_the_form()
+        self._draw_the_kept()
+        parts = next((parts for offer, parts in self._kept_rows if offer.kept == kept_id), None)
+        if parts is None:
+            return
+        target = parts["resume"] if not parts["resume"].isHidden() else parts["delete"]
+        target.setFocus(Qt.OtherFocusReason)
+        self.scroller.bring_into_view(parts["row"])
+
+    def _matching_kept(self, knobs: dict):
+        """The kept narrowing round the form's round would leave behind and take the name of: its prior, its parent
+        posterior and its observation those in use, its region's level, its batches, simulations per batch and network
+        the form's; None for none."""
+        _cfg, prior, posterior = self._held()
+        form = (getattr(prior, "id", None), getattr(posterior, "id", None), self.obs_picker.key(), knobs.get("level"),
+                knobs.get("num_runs"), knobs.get("run_size_cap"), knobs.get("hidden_features"),
+                knobs.get("num_transforms"))
+        for offer in self.kept_offers():
+            held = offer.match
+            if len(held) != len(form) or offer.why_not:
+                continue
+            level_same = (isinstance(held[3], (int, float)) and isinstance(form[3], (int, float))
+                          and abs(held[3] - form[3]) <= LEVEL_TOLERANCE)
+            if level_same and held[:3] == form[:3] and held[4:] == form[4:]:
+                return offer
+        return None
 
     # ── what a page answers ──
     def main_words(self) -> str:
@@ -438,6 +608,8 @@ class TSNPEPanel(StepPage):
             screen.read_checks()
         cfg, prior, posterior = self._held()
         store = default_store()
+        if screen is not None and hasattr(screen, "read_offers"):
+            screen.read_offers()             # the kept rounds the list shows, read once at each reading
         self.obs_picker.refresh()
         self._digests_read = self._narrowed_digest() is not None
         self._digests = observation_digests(store) if self._digests_read else {}
@@ -528,6 +700,10 @@ class TSNPEPanel(StepPage):
             knobs = self._read_knobs()
         except Refusal as refused:
             self._refusal(refused)
+            return
+        kept = self._matching_kept(knobs) if self._continuing is None else None
+        if kept is not None and not ask(self, *new_round_question(KEPT_ROUND_TEXT.format(
+                kept.label, texts.number_text(kept.epoch or 0)))):
             return
         rows = self._pre_run_rows()
         failed = None if rows is None else check_lineage.pre_run_question(rows, start=self.main_words())

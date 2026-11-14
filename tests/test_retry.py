@@ -138,22 +138,6 @@ def _said_alone(view) -> str:
     return next((words[words.index("python -m core "):] for words in said if "python -m core " in words), "")
 
 
-def _parsed(command):
-    """The command-line tool's own parser's reading of ``command``, the words before its subcommand left out; and
-    what the parser said when it refused it ("" when it took it)."""
-    import contextlib
-    import io
-    import shlex
-    from core.tool import build_parser
-    heard = io.StringIO()
-    try:
-        with contextlib.redirect_stderr(heard):
-            return build_parser().parse_args(shlex.split(command)[3:]), ""
-    except SystemExit:
-        return None, heard.getvalue()
-
-
-# ── the failure page ──
 def test_a_failure_is_a_state_of_the_run_page_and_no_box(tmp_path):
     """A run that fails says so on its page, never in a box, and says it once: the page's sentence says the run
     failed, and beside the error's marker the failure's block says when and where, what was saved and what was lost,
@@ -698,152 +682,6 @@ def _menu_of(label) -> tuple:
     return entries, kind, bool(looped), kept, bool(label.findChildren(QMenu))
 
 
-def test_a_long_command_and_a_long_message_wrap_within_a_narrow_page_and_the_command_is_copied_whole(tmp_path,
-                                                                                                    store, monkeypatch):
-    """On a run page 326 px wide, as at the window's least size, the command that resumes a narrowing round only
-    reopening PRISM can help (a training's is offered by Home and the Training step instead), naming its bounds file by
-    a long path, takes as many lines as it needs, broken inside the path
-    where it must: its label is as tall as those lines. A person selects it with the mouse, pressing at its first
-    character and letting go at the end of its last line: the press gives it the keyboard, and the keyboard's copy,
-    sent where the keyboard is, copies the command exactly, one line with nothing added. Neither the move of the drag
-    nor a repaint lays its words out again. Its right button's menu is the toolkit's own for a selectable label, entry
-    for entry: "Copy", a line, "Select All", each pressable as the toolkit's is, with a selection and without one, and
-    for no words; a popup, not modal and running no loop of its own, deleted once it closes, while which the selection
-    stays. The selection ends when the keyboard goes to another control; a double click selects the command whole. A
-    failure's own message beneath, a long path among its words and in it a character outside the Basic Multilingual
-    Plane, wraps the same way; a drag across that character copies exactly what is highlighted, and a double click
-    highlights it to its end. The clipboard is put back as it was."""
-    from PySide6.QtCore import QPoint
-    from PySide6.QtGui import QTextLayout
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication
-    from core.gui.run import view as view_module
-    from tests._look_helpers import _settle
-    from tests._window_helpers import in_front, shown_off_screen
-    app = qt_app()
-    clock = Clock(_at(3, 3, 2, 11))
-    held, host = _controller_on(tmp_path, clock), build_run_host()
-    text, view = RunText(held), host.run_view
-    view.setFixedWidth(326)
-    shown_off_screen(host, 1300, 1000)
-    bounds = (r"C:\Users\J\OneDrive - Hair Bundle Lab\PRISM inputs\Bounds\nadrowski"
-              r"\master_tier1_spontaneous_and_driven_wide_box_october_retrain.txt")
-    cfg = SimpleNamespace(sources={"bounds": bounds}, chi_mode=True,
-                          hw=SimpleNamespace(device=SimpleNamespace(type="cuda")))
-    prior = SimpleNamespace(kind="prior", id="20261001T150211", name="retrain_prior")
-    parent = SimpleNamespace(kind="posterior", id="20261002T120000", name="retrain",
-                             posterior=SimpleNamespace(truncation=None))
-    observation = SimpleNamespace(kind="observation", id="20261002T130000", name="cell_a")
-    kept = build_fit_record(store, passes=2)
-    in_the_fit = StandIn(word="Narrowing round")
-    in_the_fit.kept_fit = _note(kept, 2)
-    _start_with(host, in_the_fit, _training("Narrowing round", place=("inference", "narrowing")), cfg, parent, prior,
-                observation, name="retrain_3")
-    _to_the_fit(app, in_the_fit, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
-    in_the_fit.fail(_device_failure(in_the_simulation=False))
-    _ended(app, held)
-    _settle()
-    line = view.command_line
-    command = (f'python -m core tsnpe --resume-fit {kept} --bounds "{bounds}" --posterior retrain --observation cell_a '
-               f'--chi')
-    lines, needed = _lines_needed(line)
-    assert (line.text(), line.isVisibleTo(view)) == (command, True), line.text()
-    assert lines > 1 and line.width() <= view.width() and line.height() >= needed - 1, (
-        "the command is not wrapped within the page", lines, line.height(), needed, line.width())
-    clipboard = QApplication.clipboard()
-    was = clipboard.text()
-    toolkit = QLabel(host)                                   # the toolkit's own selectable label, for its menu
-    toolkit.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    toolkit.show()
-    try:
-        with in_front(host):
-            layout = _laid_out(line)
-            first = QPoint(1, round(layout.lineAt(0).height() / 2))
-            last, end = _at_the_end_of(layout, layout.lineCount() - 1)
-            QTest.mousePress(line, Qt.LeftButton, Qt.NoModifier, first)
-            assert QApplication.focusWidget() is line, ("a press does not give the command the keyboard",
-                                                        QApplication.focusWidget())
-            laid = []
-
-            class Counted(QTextLayout):
-                def __init__(self, *told):
-                    laid.append(told[0] if told else "")
-                    super().__init__(*told)
-
-            with monkeypatch.context() as patch:
-                patch.setattr(view_module, "QTextLayout", Counted)
-                QTest.mouseMove(line, last)
-                line.grab()
-                line.grab()
-            QTest.mouseRelease(line, Qt.LeftButton, Qt.NoModifier, last)
-            assert laid == [], ("the command's words were laid out again", len(laid))
-            clipboard.clear()
-            QTest.keyClick(QApplication.focusWidget(), Qt.Key_C, Qt.ControlModifier)
-            assert (end, clipboard.text()) == (len(command), command), (
-                "the command dragged over and copied with the keyboard is not the command", end, repr(clipboard.text()))
-            toolkit.setText(command)
-            toolkit.setSelection(0, len(command))
-            ours, reference = _menu_of(line), _menu_of(toolkit)
-            assert ours == reference and reference[1:] == ([(True, False, True)], False, True, False), (
-                "the right button's menu is not the toolkit's", ours, reference)
-            view.back_button.setFocus(Qt.TabFocusReason)
-            assert not line.hasSelectedText(), ("the command keeps its selection after the keyboard left it",
-                                                line.selectedText())
-            toolkit.setSelection(0, 0)
-            assert _menu_of(line)[:3] == _menu_of(toolkit)[:3], "the menu with no selection"
-            QTest.mouseDClick(line, Qt.LeftButton, Qt.NoModifier, first)
-            assert (QApplication.focusWidget(), line.selectedText()) == (line, command), (
-                "a double click does not select the command whole", QApplication.focusWidget(), line.selectedText())
-            with warnings.catch_warnings():                  # the toolkit marks the call as old, and keeps it
-                warnings.simplefilter("ignore", DeprecationWarning)
-                QApplication.setActiveWindow(None)           # the window loses the keyboard, to another program
-                away = line.selectedText()
-                QApplication.setActiveWindow(host)           # and is brought back
-            assert away == command, ("the command lost its selection as the window lost the keyboard", away)
-        view.back_button.click()
-        path = (f"C:/Users/J/PRISM/Artifacts/simulations/_unnamed__20261003T030211/{chr(0x1F4C1)}"
-                f"{'very_long_batch_name_' * 3}6150.pt")
-        unwritten = StandIn()
-        start_run(host, unwritten, spec=_training())
-        _to_the_simulation(app, unwritten, text, held, _set(tmp_path, 236), 236)
-        unwritten.fail(RuntimeError(f"the batch could not be written to its file\n{path}"))    # the path adds to it
-        _ended(app, held)
-        _settle()
-        message = view.failure_message
-        lines, needed = _lines_needed(message)
-        assert path in message.text() and lines > 1 and message.width() <= view.width(), (lines, message.text())
-        assert message.height() >= needed - 1, ("the message is not wrapped within the page", lines, message.height(),
-                                                needed)
-        words = message.text().encode("utf-16-le")
-        units = words.find(chr(0x1F4C1).encode("utf-16-le")) // 2                       # where the character is
-        layout = _laid_out(message)
-        holds = next(index for index in range(layout.lineCount())
-                     if layout.lineAt(index).textStart() + layout.lineAt(index).textLength() > units)
-        last, end = _at_the_end_of(layout, holds + 1)               # the end of the line after the character's
-        assert units + 2 <= end < len(words) // 2, ("the drag does not cross the character, or takes it all", units,
-                                                     end, len(words) // 2)
-        with in_front(host):
-            QTest.mousePress(message, Qt.LeftButton, Qt.NoModifier, QPoint(1, round(layout.lineAt(0).height() / 2)))
-            QTest.mouseMove(message, last)
-            QTest.mouseRelease(message, Qt.LeftButton, Qt.NoModifier, last)
-            marked = [(shown.start, shown.length) for shown in message._marked()]
-            clipboard.clear()
-            QTest.keyClick(QApplication.focusWidget(), Qt.Key_C, Qt.ControlModifier)
-            highlighted = words[:2 * end].decode("utf-16-le")
-            assert (marked, clipboard.text()) == ([(0, end)], highlighted), (
-                "the copy is not what is highlighted", marked, end, repr(clipboard.text()), repr(highlighted))
-            QTest.mouseDClick(message, Qt.LeftButton, Qt.NoModifier, last)
-            marked = [(shown.start, shown.length) for shown in message._marked()]
-            assert marked == [(0, len(words) // 2)], ("the whole message is not highlighted", marked, len(words) // 2)
-        message.setText("")
-        toolkit.setText("")
-        assert _menu_of(message)[:3] == _menu_of(toolkit)[:3], "the menu for no words"
-    finally:
-        clipboard.setText(was)
-        toolkit.deleteLater()
-
-
-# ── continuing and resuming from the run's page ──
 def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_policy(tmp_path, monkeypatch):
     """"Continue from batch N" stands on the page of a training that failed, and of one that was stopped, while its
     simulation set is unfinished and holds a batch, N the batches the set holds as read from it once the run has
@@ -1230,11 +1068,9 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     resumes the kept training from its kept epoch: an epoch an earlier try recorded past it, whose save did not
     hold, leaves the curve, and the best epoch is counted again from the kept one. A try that keeps more epochs and
     then runs out of memory again starts a new count; a try that fails before it names the kept training keeps the
-    one named before; when three tries in a row keep none, the page says only reopening PRISM helps, and that the
-    kept training is resumed from the command line until its page offers it: the tool's command for the run,
-    ``train`` for a training, ``tsnpe`` for a narrowing round, with the flags of what the run's own call trained
-    from, or, where the call does not tell them, words that say to give them as they were. The command stands on its
-    own beneath the sentence, so that copied off the page it is one the command-line tool takes."""
+    one named before; when three tries in a row keep none, the page says only reopening PRISM helps, and how the run
+    goes on after it: a training's kept training offered by Home and the Training step, a narrowing round's by the
+    Narrowing round step, to which Home leads. No command line is shown."""
     from core.gui.run import history
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
@@ -1306,22 +1142,9 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     narrowing.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
     assert (_failure(view), _said_alone(view)) == (
-        f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again. The training is kept up to "
-        f"epoch 2; until the Narrowing round page offers to resume it, it is resumed from the command line with the "
-        f"command below, given the same --bounds, --posterior, --observation and --chi it was trained with.",
-        f"python -m core tsnpe --resume-fit {kept}"), _failure(view)
-    chosen = SimpleNamespace(sources={"bounds": r"C:\PRISM files\master.txt"}, chi_mode=False,
-                             hw=SimpleNamespace(device=SimpleNamespace(type="cpu")))
-    narrowed_parent = SimpleNamespace(name="", id="p2", posterior=SimpleNamespace(truncation=object()))
-    spec = _training("Narrowing round").with_call(len, (chosen, narrowed_parent, prior, observation), {})
-    assert retry.resume_command(spec, "k1") == (
-        'python -m core tsnpe --resume-fit k1 --bounds "C:\\PRISM files\\master.txt" --posterior p2 --observation o1 '
-        '--no-chi --accept-truncated --device cpu'), "the command names a flag that is not the call's"
-    args, said = _parsed(retry.resume_command(spec, "k1"))
-    assert args is not None and (args.cmd, args.resume_fit, args.bounds, args.posterior, args.observation,
-                                 args.chi_mode, args.accept_truncated, args.device) == (
-        "tsnpe", "k1", r"C:\PRISM files\master.txt", "p2", "o1", False, True, "cpu"), (
-        "the narrowing round's command is not one the command-line tool takes", said)
+        f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again; the Narrowing round step will "
+        f"offer 'Resume', and Home will lead there.", ""), _failure(view)
+    assert not hasattr(retry, "resume_command") and not hasattr(retry, "reopen_command")
 
 
 def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it(tmp_path):
@@ -1776,9 +1599,9 @@ def test_a_kept_training_is_rebuilt_as_its_set_was_made(case, store, monkeypatch
 
 
 def test_the_reopening_page_says_what_home_will_offer(tmp_path, store):
-    """A narrowing round that only reopening PRISM can help sets off the command that resumes it beneath its sentence,
-    and the command and the failure's own message are each a stop of the Tab key on the run's page, taking the keyboard
-    from the keys as a person reads and copies them; a training's page sets off no command."""
+    """A narrowing round that only reopening PRISM can help says what the reopened window will offer, its own step's
+    "Resume" and Home leading there, and shows no command line: its run's page holds no command and no stop of the Tab
+    key for one, the failure's own message still a stop of its own."""
     app = qt_app()
     clock = Clock(_at(3, 3, 2, 11))
     held, host = _controller_on(tmp_path, clock), build_run_host()
@@ -1794,11 +1617,12 @@ def test_the_reopening_page_says_what_home_will_offer(tmp_path, store):
     _to_the_fit(app, narrowing, text, clock, _set(tmp_path, 10_000, complete=True), [(1, 0), (2, 1)])
     narrowing.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
+    assert _failure(view) == (f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again; the "
+                              "Narrowing round step will offer 'Resume', and Home will lead there."), _failure(view)
     stops = view.stops()
-    for label in (view.command_line, view.failure_message):
-        assert label.isVisibleTo(view) and label in stops and bool(label.focusPolicy() & Qt.TabFocus), label.text()
-    assert view.command_line.text() == f"python -m core tsnpe --resume-fit {kept}"
-    assert stops.index(view.command_line) < stops.index(view.failure_message) < stops.index(view.full_error_button)
+    assert view.command_line.text() == "" and not view.command_line.isVisibleTo(view), "a command stands on the page"
+    assert "--resume-fit" not in _failure(view)
+    assert view.failure_message.isVisibleTo(view) and view.failure_message in stops
 
 
 def test_home_and_the_steps_take_the_newest_offer_each_can_say():

@@ -158,7 +158,6 @@ def look(run):
                               kept_fit=run.kept_fit, trying=2, try_at=run.now() + timedelta(minutes=3))
     said += (retry.failure_words(waiting, run, None), questions.close_question(waiting, run),
              retry.failure_words(replace(failed, reopen=True), run, RuntimeError("x")),
-             retry.reopen_command(replace(failed, reopen=True), run), retry.untold(run.spec),
              retry.made_in(run.spec, held(cfg=None, inf_prior=None)))
     moment[0] += timedelta(seconds=50)
     return said
