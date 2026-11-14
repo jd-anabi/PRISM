@@ -564,3 +564,14 @@ From Task 6-7's fix round (the forms and runs of every check):
     either way.", the command line's own reading of the card test (`docs/guide/command-line.md`); nothing compares
     against it, so it decides no state, but it is a science number living outside the engine. Cure if wanted: the
     engine's card test says the band its size can read.
+
+17. **What the old frame of the inference pages left behind (Task 10-11's fix round, J9).** With the narrowing round
+    rebuilt on the step page, `core/gui/panels/base_panel.py`'s `BasePanel` has no subclass under `core/gui/` (only the
+    tests' bare run host builds one); `core/gui/main_window.py`'s `_OWN_INSET["inference"]` and its loop that gives
+    each old panel of Parameter inference the place's margin find no panel; `core/gui/panels/inference/base.py`'s
+    `_hw_batch` is re-exported by `inference_tabs.py` and read by nothing; `tests/_fixtures.py`'s `budget_cfg` has no
+    caller. `core/gui/panels/inference/validate_tab.py:163` greys a row through `model.item(at, column)`: reader two's
+    script showed it is not the hazard the round's list had (those rows are made in Python, so the binding is told when
+    the list deletes them; the round's list's rows are made by the toolkit itself, and a handle on one outlived it), but
+    it is the one such handle left. Cure if wanted: remove the four leftovers with `BasePanel`'s last reader; set the
+    Checks list's flags through the model's data, as the round now does.
