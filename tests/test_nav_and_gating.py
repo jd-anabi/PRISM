@@ -1099,6 +1099,7 @@ def test_the_round_loads_its_observation_at_the_press_and_asks_at_a_new_run_refu
 
     sentence = "A saved simulation set one setting away exists: n_runs is 5000 there and 3 here; pass new_run=True."
     for answer, more in ((None, 0), ("Start the narrowing round", 1)):
+        panel.main_pressed()                         # a refusal answers a start of its own: its question lets it go
         forget_asked()
         choose(monkeypatch, **({} if answer is None else {"words": answer}))
         before = len(sent)
