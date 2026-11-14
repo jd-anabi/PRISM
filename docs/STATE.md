@@ -1,5 +1,39 @@
 # PRISM — state
 
+**Last updated:** 2026-11-13, night (23:55 by the clock; the weekly bar 93 %, resetting on 15 November at 04:00 UTC,
+extra usage switched on): STAGE 5'S TASK 12-13 IS BUILT AND REVIEWED; ITS FIX ROUND IS OWED. The chat that began on 12
+November at 14:59 hands over here by the usage rule, at a clean state. The hand-off prompt for the next chat is
+`docs/superpowers/prompts/2026-11-13-window-redesign-stage-5-from-task-12-13-fix-round.md`.
+
+- **The build** (one Opus builder from `stage-5/briefs/task-12-13-builder-dispatch.md`, R1 to R11, a checkpoint after
+  Task 12's part): Task 12 `e17631d`, `6650f8c` (every step's run reads its own headings; one press fills every step);
+  Task 13 `0647131`, `1595719`, `f11f6da`, `7f8bd7d` (an observation loaded as a chain's link; a kept round offered on
+  its page, resumed through the narrowing round on its own record, listed with Resume and Delete; a round's history with
+  Continue from batch N; no command line anywhere); `9fc11de` (the guide says a plan fills every step). Every change
+  under `core/gui/`; the engine closed; the gpu test (a tiny round resumed on the card) run by the builder alone, red then
+  green.
+- **The gate on `9fc11de`:** RED, 1 failed, 4130 passed, 14 skipped, 3 deselected, 47 min 41 s (4148 collected):
+  `tests/test_look.py::test_console_text_alone_is_set_in_the_fixed_width_face`, a stale pin (`FIXED_FACE_CALLERS` still
+  lists `posterior_tab.py` and `home_screen.py`, which lost their command lines). The real-screen run 14 passed;
+  `Artifacts/` 428 entries, the listing identical; `PRISM.ini` unchanged.
+- **Its review, written, waiting for the fix round:** reader one (sonnet) 1 Important, 4 Minor
+  (`stage-5/reviews/task-12-13-reader-one.md`); reader two (opus, READ-ONLY at the stop) 7 Important, 9 Minor, twenty
+  faults listed and not run (`task-12-13-reader-two.md`). The Important: Home's "Resume" for an unseen round only opens
+  the page; the round page reads its kept trainings at every typing pause; a row's refusal never clears; the round page's
+  fix sentences point at step 3; Continue's mode sticks after its world changes; the remembered observation checked by
+  mode only; no test of a typed name reaching the round.
+- **Measured:** Task 12-13's build and review about 2 points (91 % to 93 %).
+- **For the owner:** `CLAUDE.md`'s plan rule (about `:144`, "fills the forms of steps 1 to 3") and its kept-round rule
+  are now stale: their new words at the exit, for a yes on exact words.
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: in a new chat from the prompt above, after the reset: Task 12-13's fix round (a fresh Opus builder; reader two's
+listed faults run where a finding rests on one), its re-read, a fresh gate and the real-screen run; the carried-over
+rows; then the stage's last review (three readers) with one fix wave; Task 14 (the exit, with the owner); the code audit;
+the retrain from the window; one last stage.
+
+What follows is the head as the evening of 13 November left it:
+
 **Last updated:** 2026-11-13, evening (20:46 by the clock; the weekly bar 91 %, resetting on 15 November at 04:00 UTC):
 STAGE 5'S TASK 10-11, INFERENCE AND THE NARROWING ROUND ON THE STEP PAGE, IS COMPLETE. "Parameter inference" is final:
 no page of the old frame is left (`BasePanel` has no subclass, kept for the code audit).
