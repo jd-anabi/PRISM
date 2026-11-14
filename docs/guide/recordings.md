@@ -177,10 +177,10 @@ hidden_features = 256          # Network width
 - **The headings** are About this plan, Model and options, Prior, Training, Calibration, Inference
   and Narrowing round, and each setting stands under its own: a name under another heading is a
   problem. Each name is a setting's key in the refusal registry (`core.refusals.FIELDS`), the same key
-  that names the setting in a refusal. The window fills the first three headings into steps 1 to 3;
-  it reads the other three and shows them as "not applied yet", but fills nothing from them.
-  **Save as a plan…** writes only steps 1 to 3's settings, with no description, so saving over a
-  plan that holds the rest drops it, after asking.
+  that names the setting in a refusal. The window fills each heading into its own step: Calibration
+  into the calibration's form on Checks, Inference into its posterior draws, Narrowing round into the
+  round's form. **Save as a plan…** writes the settings of every step, with no description, so saving
+  over a plan that holds one drops it, after asking.
 - **Values.** A setting the file does not hold means the built-in value. `chi_mode` and
   `reparam_rotate` take `on` or `off`; `bounds` is the name of a file in the model's bounds folder (a
   sub-folder is written with a forward slash); `units` is the units' words; a whole-number setting is
@@ -199,8 +199,8 @@ hidden_features = 256          # Network width
 
 In the window, step 1's **Plan** row lists the model's plans, opens on "No plan" at every launch
 (the plan last used with the model, and when, is remembered only as a hint beside the list), shows a plan's description and what it
-holds, and **Fill the forms from this plan** fills steps 1 to 3, asking first what it would replace;
-**Save as a plan…** writes every setting of steps 1 to 3 that differs from its usual value, the
+holds, and **Fill the forms from this plan** fills every step's form, asking first what it would replace;
+**Save as a plan…** writes every setting of every step that differs from its usual value, the
 bounds file chosen in the list (never limits typed by hand), each with a remark naming its label.
 Under each setting a small word says where its value came from (usual, changed from the usual, kept
 from last time, "from plan NAME", or changed from the plan), and each step's "Before you start" says the plan in use and each

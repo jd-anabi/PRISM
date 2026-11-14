@@ -283,7 +283,7 @@ when it holds nothing but a docstring.
   refused as the fact is made.
 - `plans.py`: plans in the window: a model's plans listed, one read with the two checks its reader
   cannot make (the bounds file is in the model's folder, the units resolve), one saved, the forms of
-  steps 1 to 3 filled from one, and the origin of each field's value. The folder is handed in, so a
+  every step filled from one, and the origin of each field's value. The folder is handed in, so a
   test never lists or writes the real one.
 - `remembered.py`: where the rebuilt steps and Settings' This computer write what they remember (each write reaches
   the settings file at once), and the picks Home offers to continue with, each left out when it can
@@ -769,7 +769,7 @@ stage without freezing, shows its output and stops it.
   form that differs from what the step holds is said "Changed, not applied" and tells the rail
   (`pending`). A refusal the engine gives at a press is shown on its row and blocks the start until the
   facts are next read, since what cures it may be on another page.
-- **Plans, Home's continuing and the offers.** A plan fills steps 1 to 3 only when asked: the plan
+- **Plans, Home's continuing and the offers.** A plan fills the steps' forms only when asked: the plan
   row's fill, Home's "Continue with these" when a plan was in use last time, or a Continue from batch
   N, which fills the settings that run was started with from its history; no plan is applied at launch
   and only the name and time of the plan last used with each model are remembered. "Continue with these" and the offers after a
