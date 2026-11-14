@@ -191,7 +191,7 @@ def test_every_step_opens_and_its_state_follows_the_session(store):
 
     qt_app()
     inf = build_inference()
-    assert not inf.tsnpe_panel.obs_picker.has_entries()
+    assert not inf.tsnpe_panel.observation_on_offer()
 
     def opened():
         shown = []
@@ -220,14 +220,15 @@ def test_every_step_opens_and_its_state_follows_the_session(store):
                                                       checks=inf.checks_summary()), held
         assert [state.can_start for state in inf.step_states()] == can_start, held
 
-def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
-    """The narrowing round (the TSNPE panel) needs a posterior, its prior AND an observation on disk -- and its
-    round must go through orchestrator.build_posterior with a TRUNCATION, never by fitting the posterior.
+def test_the_narrowing_rounds_button_is_greyed_with_its_reason():
+    """The narrowing round needs a posterior, its prior AND an observation on disk, and its start is greyed with the
+    first of what it needs said beside it -- and its round must go through orchestrator.build_posterior with a
+    TRUNCATION, never by fitting the posterior.
 
     The second half is the one worth a test: proposing from the posterior instead of the truncated
     prior is TEMPERING, it contracts credible intervals with no new information, and SBC comes out
-    flat anyway because it validates the flow against the proposal it was trained on. Nothing on the
-    Validate tab would catch it, so the wiring is pinned here and the maths in
+    flat anyway because it validates the flow against the proposal it was trained on. No check of
+    step 4 would catch it, so the wiring is pinned here and the maths in
     tests/test_conditioning_repair.py.
     """
     from core.gui.session import SbiSession
@@ -243,18 +244,18 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     assert inf.step_states()[5].rail_words in ("Needs an observation", "To come"), (
         "once a posterior and its prior exist the narrowing round waits for an observation alone")
 
-    # The observation gate, driven through the picker's own accessor rather than through the store's
-    # `observations/` listing. Clearing the combo does NOT work: refresh_local_gates calls
-    # obs_picker.refresh(), which repopulates it from the store -- so the assertion passed only while
-    # no observation had been recorded, and any suite run that had exercised infer_and_visualize left
-    # one behind and flipped it. A gate test must not depend on what an earlier test wrote.
+    # The observation gate, driven through the list's own accessor rather than through the store's listing: a gate
+    # test must not depend on what an earlier test wrote.
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: ""                    # nothing recorded yet
     panel.refresh_local_gates()
-    assert not panel.btn_round.isEnabled(), "a round must be impossible without an observation"
+    assert not panel.foot.main_button.isEnabled() and panel.foot.reason.text().startswith(
+        "Cannot start yet: needs an observation"), panel.foot.reason.text()
     panel.obs_picker.key = lambda: "20260910T120000"
+    panel.names.name.setText("retrain_round1")
+    panel.names.check_now()
     panel.refresh_local_gates()
-    assert panel.btn_round.isEnabled(), "with a posterior, its prior and an observation, a round is allowed"
+    assert panel.foot.main_button.isEnabled(), panel.foot.reason.text()
 
     # The contract, checked against the CODE with docstrings stripped -- those docstrings necessarily
     # contain the word "proposal" while explaining what must not happen, and a naive text search on the
@@ -272,11 +273,11 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
             f"tsnpe_round's CODE references '{banned}' -- it must sample the truncated PRIOR, never the "
             f"posterior; that is tempering, and SBC cannot detect it")
 
-    tab = code_only(TSNPEPanel._round)
-    assert "orchestrator.tsnpe_round" in tab, "the tab must dispatch the stage, not reimplement a round"
+    tab = code_only(TSNPEPanel._start) + code_only(TSNPEPanel.main_pressed)
+    assert "orchestrator.tsnpe_round" in tab, "the page must dispatch the stage, not reimplement a round"
     for banned in ("build_posterior", "build_truncation_region", "set_default_x", "proposal"):
         assert banned not in tab, (
-            f"TSNPEPanel._round's CODE references '{banned}' -- the round's science lives in "
+            f"the round page's CODE references '{banned}' -- the round's science lives in "
             f"orchestrator.tsnpe_round, and a second copy in the GUI is how the two drift apart")
 
 def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
@@ -1056,79 +1057,79 @@ def test_the_inference_page_calls_the_compositions_and_hands_its_prior_only_when
     assert cap["kwargs"]["observation_name"] == "cell_a" and cap["kwargs"]["if_name_taken"] == "unnamed"
 
 
-def test_the_tsnpe_tab_dispatches_a_loaded_observation(monkeypatch):
-    """The tab loads the observation ITSELF, on the GUI thread, and hands the wrapper to the stage.
-
-    Loading is what re-hashes the file and checks its mode and conditioning width against the session's
-    config, so a mismatch is a dialog within milliseconds instead of an exception hours into a round.
-    No stage loads by reference any more, and no GUI dispatch names a store (build_app installs the
-    default once).
-
-    A load REFUSAL reaches _on_error as the exception itself -- no wrapper, no re-typing, no "Could not
-    load observation '<key>':" prefix (every store refusal already names the observation, store.py's
-    load_observation labels each sentence) -- so a Refusal opens the yellow box. The old prefix turned
-    it into a string the yellow box could never be opened for.
-    """
+def test_the_round_loads_its_observation_at_the_press_and_asks_at_a_new_run_refusal(monkeypatch):
+    """The round loads the observation ITSELF, at the press, on the window's thread, and hands the wrapper to the stage,
+    with the network it shows, always: loading is what re-hashes the file and checks its kind and width against the
+    configuration, so a mismatch is said within milliseconds. A load REFUSAL is said as any refusal is, the exception
+    itself, and nothing is dispatched. The stage's refusal of a new simulation set beside a saved one a setting away
+    is a question, its own sentence in it: "Cancel" dispatches nothing, "Start the narrowing round" dispatches the
+    same call again with the consent and the same observation, no box ticked."""
     import types
     from core import orchestrator
     from core.gui.panels.inference import tsnpe_tab as tt
     from core.gui.session import SbiSession
     from core.refusals import Refusal
-    from tests._fixtures import qt_app
+    from tests._dialogs import choose
+    from tests._fixtures import all_asked, forget_asked, qt_app
 
     qt_app()
     inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
                                              posterior=_posterior_stub()))
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: "20260910T120000"
-
     sentinel = types.SimpleNamespace(id="20260910T120000", name="obs")
-    cap = {}
-    panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
-    errors = []
-    panel._on_error = lambda exc, tb: errors.append(exc)
+    sent = []
+    panel.dispatch = lambda fn, *a, **k: (sent.append((fn, a, k)), True)[1]
     monkeypatch.setattr(tt, "default_store",
                         lambda: types.SimpleNamespace(load_observation=lambda cfg, ref: sentinel))
-    panel.n_dirs.setText("2")
-    panel.hpd.setText("0.999")
-    panel.num_runs.setText("3")
-    panel.run_size_cap.setText("8")
-    panel._round()
-    assert cap["fn"] is orchestrator.tsnpe_round, cap["fn"]
-    assert cap["args"][3] is sentinel, "the tab must pass the LOADED observation, not its key"
-    assert cap["kwargs"]["n_directions"] == 2 and cap["kwargs"]["level"] == 0.999
-    assert cap["kwargs"]["num_runs"] == 3 and cap["kwargs"]["run_size_cap"] == 8
-    assert cap["kwargs"]["new_run"] is False and cap["kwargs"]["provide_fig_sink"] is True
-    assert "store" not in cap["kwargs"], "the GUI names no store; build_app installs the default"
-    # a name another posterior takes during the round is dropped, not refused: the window asks so
-    assert cap["kwargs"]["if_name_taken"] == "unnamed", cap["kwargs"]
+    rows = panel.form.rows
+    rows["n_directions"].widget.setText("2")
+    rows["hpd_level"].widget.setText("0.999")
+    rows["num_runs"].widget.setText("3")
+    rows["run_size_cap"].widget.set_value(8)
+    panel.names.name.setText("retrain_round1")
+    panel.main_pressed()
+    fn, args, kwargs = sent[-1]
+    assert fn is orchestrator.tsnpe_round and args[3] is sentinel, "the page must pass the LOADED observation"
+    assert (kwargs["n_directions"], kwargs["level"], kwargs["num_runs"], kwargs["run_size_cap"]) == (2, 0.999, 3, 8)
+    assert (kwargs["hidden_features"], kwargs["num_transforms"]) == (128, 8), "the network shown was not handed"
+    assert kwargs["new_run"] is False and kwargs["provide_fig_sink"] is True and kwargs["resume"] == "auto"
+    assert "store" not in kwargs, "the GUI names no store; build_app installs the default"
+    assert kwargs["if_name_taken"] == "unnamed", kwargs
 
-    # ticked: the consent travels, and the box clears itself so it cannot silently persist
-    cap.clear()
-    panel.new_run.setChecked(True)
-    panel._round()
-    assert cap["kwargs"]["new_run"] is True
-    assert panel.new_run.isChecked() is False, "the box must clear after each dispatch"
+    sentence = "A saved simulation set one setting away exists: n_runs is 5000 there and 3 here; pass new_run=True."
+    for answer, more in ((None, 0), ("Start the narrowing round", 1)):
+        forget_asked()
+        choose(monkeypatch, **({} if answer is None else {"words": answer}))
+        before = len(sent)
+        panel._refusal(Refusal(sentence, field="new_run"))
+        said = all_asked()[-1]
+        assert (said.title, said.sentence) == (
+            "Start the narrowing round beside a saved simulation set?",
+            f"{sentence} Starting now simulates this round from zero and leaves that set as it is."), said
+        assert said.default == "Cancel" and len(sent) == before + more, (answer, len(sent))
+    _fn, args, kwargs = sent[-1]
+    assert kwargs["new_run"] is True and args[3] is sentinel
 
-    # a load refusal dispatches NOTHING and reaches _on_error as the Refusal it is
-    cap.clear()
+    # a load refusal dispatches NOTHING and is said as the Refusal it is
+    refused = []
+    panel._refusal = lambda exc: refused.append(exc)
 
     def _boom(cfg, ref):
         raise Refusal("Observation '20260910T120000' has conditioning width 61, but this config's "
                       "is 50.", field="observation")
 
     monkeypatch.setattr(tt, "default_store", lambda: types.SimpleNamespace(load_observation=_boom))
-    panel._round()
-    assert cap == {}, "a round was dispatched with an observation that would not load"
-    assert errors and isinstance(errors[-1], Refusal), errors
-    assert errors[-1].field == "observation"
-    assert "20260910T120000" in str(errors[-1]) and "width 61" in str(errors[-1]), errors
+    before = len(sent)
+    panel.main_pressed()
+    assert len(sent) == before, "a round was dispatched with an observation that would not load"
+    assert refused and refused[-1].field == "observation" and "width 61" in str(refused[-1]), refused
 
 
 def test_the_tsnpe_tab_passes_a_load_bug_to_on_error_unwrapped(monkeypatch):
     """The other half of the routing: a BUG in the load (not a refusal) reaches _on_error as the bare
-    exception with its traceback, so it opens the RED box. The tab must not decide the kind itself --
-    it passes what it caught, and BasePanel._on_error decides by isinstance."""
+    exception with its traceback, so it is told as a fault. The page must not decide the kind itself --
+    it passes what it caught, and the page's _on_error decides by isinstance."""
     import types
     from core.gui.panels.inference import tsnpe_tab as tt
     from core.gui.session import SbiSession
@@ -1148,23 +1149,12 @@ def test_the_tsnpe_tab_passes_a_load_bug_to_on_error_unwrapped(monkeypatch):
         raise RuntimeError("observation.pt is not a tensor")
 
     monkeypatch.setattr(tt, "default_store", lambda: types.SimpleNamespace(load_observation=_bug))
-    panel._round()
+    panel.main_pressed()
     assert cap == {}, "a round was dispatched with an observation that would not load"
     exc, tb = errors[-1]
     assert isinstance(exc, RuntimeError) and not isinstance(exc, Refusal)
     assert str(exc) == "observation.pt is not a tensor", "the tab must not re-phrase the exception"
     assert "Traceback" in tb and "RuntimeError: observation.pt is not a tensor" in tb
-
-
-def test_the_tsnpe_new_run_box_is_not_persisted():
-    """The near-miss consent is per-run. Persisting it would silence the near-miss refusal for every
-    future round in every future session -- exactly the accident the refusal exists to catch."""
-    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
-
-    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TSNPEPanel.save_settings))))
-    assert "new_run" not in src, "save_settings must not persist the near-miss consent"
-    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TSNPEPanel.restore_settings))))
-    assert "new_run" not in src, "restore_settings must not restore the near-miss consent"
 
 
 def test_a_narrowed_posterior_asks_at_every_run_and_cancel_starts_nothing(tmp_path, monkeypatch):
@@ -1343,10 +1333,10 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         # the consents and the dialogs quote their controls' own text (tsnpe_tab.py:102,
         # posterior_tab.py:232, infer_tab.py:150)
         "new_run": ("Answer 'Start training on a new simulation set' in the question 'Start training' asks in step 3, "
-                    "Training, or tick 'Start a new simulation even if a cache one setting away exists' in step 6, "
-                    "Narrowing round."),
-        "n_directions": "Set it in the 'Directions truncated' box in step 6, Narrowing round.",
-        "hpd_level": "Set it in the 'HPD level' box in step 6, Narrowing round.",
+                    "Training, or 'Start the narrowing round' in the question that 'Start the narrowing round' asks "
+                    "in step 6, Narrowing round."),
+        "n_directions": "Set it in the 'Directions narrowed' box in step 6, Narrowing round.",
+        "hpd_level": "Set it in the 'Region level' box in step 6, Narrowing round.",
         "observation": "Set it in the 'Observation' box in step 6, Narrowing round.",
         "n_cal": "Set it in the 'Test datasets' box in step 4, Checks.",
         "cal_n_scales": "Set it in the 'Operating points' box in step 4, Checks.",
@@ -1379,10 +1369,16 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "stability_units": "Set it in the 'Stability test length' box in step 2, Prior.",
         "min_cluster_size": "Set it in the 'Smallest cluster' box in step 2, Prior.",
         "min_samples": "Set it in the 'Cluster density' box in step 2, Prior.",
-        "hidden_features": "Set it in the 'Network width' box in step 3, Training, or step 4, Checks.",
-        "num_transforms": "Set it in the 'Network depth' box in step 3, Training, or step 4, Checks.",
-        "learning_rate": "Set it in the 'Learning rate' box in step 3, Training.",
-        "stop_after_epochs": "Set it in the 'End the fit after … epochs without improvement' box in step 3, Training.",
+        "hidden_features": ("Set it in the 'Network width' box in step 3, Training, or step 4, Checks, or step 6, "
+                            "Narrowing round."),
+        "num_transforms": ("Set it in the 'Network depth' box in step 3, Training, or step 4, Checks, or step 6, "
+                           "Narrowing round."),
+        "learning_rate": "Set it in the 'Learning rate' box in step 3, Training, or step 6, Narrowing round.",
+        "stop_after_epochs": ("Set it in the 'End the fit after … epochs without improvement' box in step 3, Training, "
+                              "or step 6, Narrowing round."),
+        "max_num_epochs": "Set it in the 'Epoch limit' box in step 3, Training, or step 6, Narrowing round.",
+        "checkpoint_every": ("Set it in the 'Save the simulations every … batches' box in step 3, Training, or step 6, "
+                             "Narrowing round."),
         "fisher_m": "Set it in the 'Rotation: simulations per perturbation' box in step 3, Training.",
         "fisher_dz": "Set it in the 'Rotation: step' box in step 3, Training.",
         "fisher_points": "Set it in the 'Rotation: parameter sets averaged' box in step 3, Training.",
@@ -1438,7 +1434,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.CONTROL["num_runs"] == (("training", "checks", "narrowing"), "Batches")
 
     # (d) no window control: the settings the window does not expose, and the tool-only set
-    assert gui_fields.ON_TRAINING_ALONE == {"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"}
+    assert gui_fields.ON_TRAINING_ALONE == {"resume", "expected_epochs"}
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
         "device",
         # the checks' settings no form offers: what decides a check's verdict
@@ -2207,17 +2203,12 @@ def test_a_blank_or_bad_calibration_size_is_said_under_its_field_and_blocks():
     assert type(seed) is int and 0 <= seed < 2 ** 31
 
 
-def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(monkeypatch):
-    """On the TSNPE tab, offscreen, the refusals a user reads on the real screen. A blank HPD box used
-    to reach the stage as 0.0 (FloatField.value()) and a blank direction box as 0, and the stage
-    refused each with a sentence naming neither the box nor the default; the batch count was clamped
-    to 1 and a blank rows-per-batch became a 0 nobody typed. Now the click reads every box through
-    the shared rules BEFORE the observation is re-hashed (a refused box must cost nothing), shows a
-    refusal as the yellow box (stubbed here as _refusal) naming the box, its place (step 6, Narrowing
-    round) and the default, and dispatches nothing. A TYPED 0 in the rows-per-batch box still means automatic. The
-    latent-width ceiling on the direction count stays the STAGE's -- the click has no posterior to
-    measure it against -- so an oversized count is dispatched, and tsnpe_round refuses it with the
-    width and the default in the sentence."""
+def test_too_many_directions_are_refused_as_they_are_typed(monkeypatch):
+    """The round's rows are judged as they are typed, in the window's words under each field, by the engine's own rules,
+    and greys the start: directions more than the model's parameters ("At most 13: the model has 13 parameters."), and
+    fewer than 1; a region level outside (0, 1); a blank budget. At the press each is refused with the stage's own
+    sentence, naming its default, before the observation is loaded, and nothing is dispatched. A TYPED 0 in the
+    simulations per batch is automatic."""
     import types
     from core import config, orchestrator
     from core.gui import fields as gui_fields
@@ -2228,10 +2219,12 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
     from tests._fixtures import qt_app
 
     qt_app()
-    inf = build_inference(session=SbiSession(cfg=object(), inf_prior=_prior_stub(),
-                                             posterior=_posterior_stub()))
+    cfg = types.SimpleNamespace(params_dict={f"p{at}": None for at in range(10)},
+                                rescale_params={f"s{at}": None for at in range(3)})
+    inf = build_inference(session=SbiSession(cfg=cfg, inf_prior=_prior_stub(), posterior=_posterior_stub()))
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: "20260910T120000"
+    panel.names.name.setText("retrain_round1")
 
     def _never(cfg, ref):
         raise AssertionError("the observation was loaded before the boxes were read")
@@ -2240,68 +2233,81 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
     sent, refused = {}, []
     panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
     panel._refusal = lambda exc: refused.append(exc)
-    panel._on_error = lambda exc, tb: pytest.fail(f"a refused box reached _on_error: {exc!r}")
+    rows = panel.form.rows
 
-    def click(**boxes):
-        panel.n_dirs.setText(str(_tr.DEFAULT_N_DIRECTIONS))
-        panel.hpd.setText(str(_tr.DEFAULT_HPD))
-        panel.num_runs.setText("3")
-        panel.run_size_cap.setText("8")
+    def typed(**boxes):
+        rows["n_directions"].widget.setText(str(_tr.DEFAULT_N_DIRECTIONS))
+        rows["hpd_level"].widget.setText(str(_tr.DEFAULT_HPD))
+        rows["num_runs"].widget.setText("3")
+        rows["run_size_cap"].widget.set_value(8)
         for name, text in boxes.items():
-            getattr(panel, name).setText(text)
+            rows[name].widget.setText(text) if name != "run_size_cap" else rows[name].widget.field.setText(text)
+        panel.redraw()
+
+    typed(n_directions="14")
+    line = rows["n_directions"].line
+    assert (line.kind, line.words) == ("err", "At most 13: the model has 13 parameters."), (line.kind, line.words)
+    assert panel.foot.reason.text() == "Cannot start yet: a setting cannot be used."
+    typed(n_directions="13")
+    assert not rows["n_directions"].line.says() and panel.foot.main_button.isEnabled(), panel.foot.reason.text()
+    for boxes, field, under, rule, default in (
+            ({"num_runs": "0"}, "num_runs", "Batches must be at least 1.", "must be at least 1; got 0",
+             config.TRAINING_NUM_RUNS),
+            ({"num_runs": ""}, "num_runs", "Batches is blank.", "is blank", config.TRAINING_NUM_RUNS),
+            ({"run_size_cap": ""}, "run_size_cap", "Simulations per batch is blank.", "is blank",
+             config.TRAINING_RUN_SIZE),
+            ({"hpd_level": ""}, "hpd_level", "Region level is blank.", "is blank", _tr.DEFAULT_HPD),
+            ({"hpd_level": "1"}, "hpd_level", "Region level must be greater than 0 and less than 1.",
+             "between 0 and 1", _tr.DEFAULT_HPD),
+            ({"n_directions": ""}, "n_directions", "Directions narrowed is blank.", "is blank",
+             _tr.DEFAULT_N_DIRECTIONS),
+            ({"n_directions": "0"}, "n_directions", "Directions narrowed must be at least 1.",
+             "must be at least 1; got 0", _tr.DEFAULT_N_DIRECTIONS)):
+        typed(**boxes)
+        line = rows[field].line
+        assert (line.kind, line.words) == ("err", under), (boxes, line.kind, line.words)
+        assert not panel.foot.main_button.isEnabled(), boxes
         sent.clear()
         refused.clear()
-        panel._round()
-
-    for boxes, field, rule, default in (
-            ({"num_runs": "0"}, "num_runs", "must be at least 1; got 0", config.TRAINING_NUM_RUNS),
-            ({"num_runs": ""}, "num_runs", "is blank", config.TRAINING_NUM_RUNS),
-            ({"run_size_cap": ""}, "run_size_cap", "is blank", config.TRAINING_RUN_SIZE),
-            ({"hpd": ""}, "hpd_level", "is blank", _tr.DEFAULT_HPD),
-            ({"hpd": "1"}, "hpd_level", "between 0 and 1", _tr.DEFAULT_HPD),
-            ({"n_dirs": ""}, "n_directions", "is blank", _tr.DEFAULT_N_DIRECTIONS),
-            ({"n_dirs": "0"}, "n_directions", "must be at least 1; got 0", _tr.DEFAULT_N_DIRECTIONS)):
-        click(**boxes)
+        panel.main_pressed()
         assert sent == {}, f"a round was dispatched with {boxes}: {sent}"
         assert len(refused) == 1 and isinstance(refused[0], Refusal), (boxes, refused)
         e = refused[0]
         assert e.field == field and rule in str(e), (boxes, e.field, str(e))
         assert f"(default {default})" in str(e), str(e)
-        fix = gui_fields.fix_sentence(e.field)
-        assert gui_fields.label(field) in fix and "step 6, Narrowing round" in fix, fix
+        assert gui_fields.label(field) in gui_fields.fix_sentence(e.field, here="narrowing")
 
-    # in rule: the loaded observation and the read values travel; a typed 0 cap is automatic; the
-    # direction count is NOT checked against a width the tab cannot know
+    # in rule: the loaded observation and the read values travel; a typed 0 cap is automatic
     sentinel = types.SimpleNamespace(id="20260910T120000", name="obs")
     monkeypatch.setattr(tt, "default_store",
                         lambda: types.SimpleNamespace(load_observation=lambda cfg, ref: sentinel))
-    click(run_size_cap="0", n_dirs="99")
+    typed(run_size_cap="0")
+    sent.clear()
+    refused.clear()
+    panel.main_pressed()
     assert refused == [] and sent["fn"] is orchestrator.tsnpe_round, (refused, sent)
     k = sent["kwargs"]
     assert k["run_size_cap"] == 0, "a TYPED 0 is automatic; only a blank is refused"
-    assert k["n_directions"] == 99, "the latent-width ceiling is the stage's; the click must not guess P"
     assert k["level"] == _tr.DEFAULT_HPD and k["num_runs"] == 3 and sent["args"][3] is sentinel, sent
 
 
 def test_the_narrowing_rounds_rows_are_named_from_the_control_table():
-    """The rows' names are the CONTROL table's, through label(key), so the refusal's "Set it in the
-    '<label>' box in <its places>" and the row on screen can never disagree: renaming a control is
-    one edit in core/gui/fields.py, and the control table's read-back pins the rendered text. A
-    literal here would be a second copy of the name -- the kind that goes stale the day the first one
-    moves. The calibration's rows are a check's form's, named by their keys, and read back on its page."""
+    """The rows' names are the CONTROL table's, through their field keys, so the refusal's "Set it in
+    '<label>' <its places>" and the row on screen can never disagree: renaming a control is one edit in
+    core/gui/fields.py, and the control table's read-back pins the rendered text. A literal here would be a second
+    copy of the name -- the kind that goes stale the day the first one moves."""
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
     from tests._fixtures import code_only
 
-    for panel, keys in ((TSNPEPanel, ("observation", "hpd_level", "n_directions", "num_runs",
-                                      "run_size_cap")),):
-        src = code_only(panel.__init__)
-        for key in keys:
-            assert f"label({key!r})" in src, (
-                f"{panel.__name__}.__init__ does not build its {key!r} row from label({key!r})")
-            assert repr(gui_fields.label(key)) not in src, (
-                f"{panel.__name__}.__init__ still names its {key!r} row by the literal "
-                f"{gui_fields.label(key)!r}")
+    qt_app()
+    page = build_inference().tsnpe_panel
+    src = code_only(TSNPEPanel.__init__)
+    for key in ("observation", "hpd_level", "n_directions", "num_runs", "run_size_cap", "hidden_features",
+                "num_transforms", "learning_rate", "stop_after_epochs", "max_num_epochs", "checkpoint_every"):
+        assert page.form.rows[key].label_text() == gui_fields.label(key), key
+        assert repr(gui_fields.label(key)) not in src, (
+            f"TSNPEPanel.__init__ still names its {key!r} row by the literal {gui_fields.label(key)!r}")
 
 
 def test_the_window_says_recording_length_and_operating_points():
@@ -2758,7 +2764,7 @@ def test_the_differences_read_by_their_on_screen_names(fields, lines):
 
 
 #: Words of the old pages that a page of the look never shows: the old tabs by their names, and "tab" itself.
-OLD_PLACES = re.compile(r"\b(TSNPE|Validate|Infer)\b|\b(Config|Prior|Posterior) tab\b|\btabs?\b")
+OLD_PLACES = re.compile(r"(?<!estimation, )\bTSNPE\b|\b(Validate|Infer)\b|\b(Config|Prior|Posterior) tab\b|\btabs?\b")
 
 
 def _on_screen(page) -> list:
@@ -2839,7 +2845,7 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
         screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior)
         screen.refresh_gates()
         pages = (screen.config_panel, screen.prior_panel, screen.posterior_panel, screen.validate_panel,
-                 screen.infer_panel)
+                 screen.infer_panel, screen.tsnpe_panel)
         window.go_to("inference", "training")
         screen.posterior_panel.show_view("load")
         screen.posterior_panel.read_facts()             # no posterior saved yet: what the load view says then
@@ -2887,6 +2893,9 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
             screen.infer_panel.modes.set_value(mode)
             screen.infer_panel.read_facts()
             seen += _on_screen(screen.infer_panel)
+        window.go_to("inference", "narrowing")
+        screen.tsnpe_panel.read_facts()
+        seen += _on_screen(screen.tsnpe_panel)
         seen += [gui_fields.fix_sentence(key, here=page.step) for page in pages for key in FIELDS]
         seen = [words for words in seen if words]
         named = [words for words in seen if OLD_PLACES.search(words)]
@@ -2894,17 +2903,19 @@ def test_no_string_of_a_rebuilt_page_names_an_old_tab(tmp_path, monkeypatch):
         assert "round1  —  from a narrowing round" in seen and NARROWED_HELD in " ".join(seen)
         assert OLD_PLACES.search("the Infer tab") and OLD_PLACES.search("narrowed (TSNPE)") and not OLD_PLACES.search(
             "Step 2, Prior, has changes"), "the scan's pattern finds nothing it must"
+        assert not OLD_PLACES.search("(truncated sequential neural posterior estimation, TSNPE)"), (
+            "the method's name after its words is no old place")
         assert _re.search(r"Load a posterior from a narrowing round", " ".join(seen))
     from core.gui import check_catalogue, check_lineage, check_readings, step_facts
     from core.gui.panels.inference import (check_forms, check_page, check_results, config_tab, infer_tab,
-                                           posterior_tab, prior_tab, step_page, validate_tab)
+                                           posterior_tab, prior_tab, step_page, tsnpe_tab, validate_tab)
     held = []
     from tests._fixtures import step_pages
     assert sorted(f"{page.__name__.rpartition('.')[2]}.py" for page in (config_tab, prior_tab, posterior_tab,
-                                                                         validate_tab, infer_tab)) == (
+                                                                         validate_tab, infer_tab, tsnpe_tab)) == (
         sorted(file for file, _step in step_pages().values())), step_pages()
-    for module in (config_tab, prior_tab, posterior_tab, validate_tab, infer_tab, step_facts, step_page, check_page,
-                   check_results, check_forms, check_catalogue, check_readings, check_lineage):
+    for module in (config_tab, prior_tab, posterior_tab, validate_tab, infer_tab, tsnpe_tab, step_facts, step_page,
+                   check_page, check_results, check_forms, check_catalogue, check_readings, check_lineage):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 held.append((module.__name__, node.value))
@@ -2952,7 +2963,7 @@ def _refusal_keys(*names) -> set:
 
 
 def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
-    """STANDING. Every refusal key a stage started from the four rebuilt pages can give, read off the engine's own
+    """STANDING. Every refusal key a stage started from the five pages that start one can give, read off the engine's own
     text, has a row or a sentence on the page that started it: what a refusal says under its message there is never
     empty, but for the device, which the window never exposes, and the checks' settings no form offers, which a check
     hands its stage at the stage's own usual value, never refused. The key set read is held to the keys each stage is
@@ -2977,12 +2988,17 @@ def test_a_rebuilt_page_names_every_refusal_key_it_can_receive():
         sorted(inferred))
     unanswered = {"device"}
     from tests._fixtures import step_pages
-    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training", "checks", "infer"}, (
-        "a page whose stage is not read here")
+    narrowed = _refusal_keys("tsnpe_round")
+    assert {"n_directions", "hpd_level", "num_runs", "run_size_cap", "hidden_features", "num_transforms",
+            "learning_rate", "stop_after_epochs", "max_num_epochs", "checkpoint_every", "name", "observation",
+            "new_run", "posterior", "prior"} <= narrowed, sorted(narrowed)
+    assert {step for _file, step in step_pages().values()} == {"model", "prior", "training", "checks", "infer",
+                                                               "narrowing"}, "a page whose stage is not read here"
     # The checks' settings no form offers, each at the stage's own usual value, which the stage never refuses.
     unoffered = {"cv_max", "snr_min", "sup_min", "phase_max", "band_peak_window", "probe_multipliers", "probe_drives",
                  "probe_cycle_caps", "min_valid", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
-    for step, keys_ in (("prior", built), ("training", trained), ("checks", checked), ("infer", inferred)):
+    for step, keys_ in (("prior", built), ("training", trained), ("checks", checked), ("infer", inferred),
+                        ("narrowing", narrowed)):
         assert keys_ <= set(FIELDS), sorted(keys_ - set(FIELDS))
         silent = sorted(key for key in keys_ - unanswered - (unoffered if step == "checks" else set())
                         if not gui_fields.fix_sentence(key, here=step))
@@ -3085,15 +3101,13 @@ def test_the_gui_control_table_matches_the_tabs_labels():
         for name in (place if isinstance(place, tuple) else (place,)):   # the budget boxes name two steps
             if name not in seen:
                 seen[name] = read(name)
-            # the Narrowing round's row of the simulations per batch says what its 0 means after the label
-            shown_as = text + " (0 = automatic)" if (key, name) == ("run_size_cap", "narrowing") else text
-            if labels.pretty_gui(shown_as) not in seen[name]:
+            if labels.pretty_gui(text) not in seen[name]:
                 missing.append((key, name, text))
     assert not missing, f"CONTROL names labels no place shows: {missing}\nshown: {seen}"
     # the labels, as the window shows them today
     labels_today = {
         "t_obs": "Recording length", "num_runs": "Batches", "run_size_cap": "Simulations per batch",
-        "n_directions": "Directions truncated", "hpd_level": "HPD level", "observation": "Observation",
+        "n_directions": "Directions narrowed", "hpd_level": "Region level", "observation": "Observation",
         "n_cal": "Test datasets", "cal_n_scales": "Operating points",
         "num_iterations": "Sweep rounds", "sweep_batch": "Candidates per round",
         "max_sets": "Stable sets to collect", "walk_step": "Random-walk step",
@@ -3131,7 +3145,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     # every control a sentence entry quotes, at each place its sentence names
     quoted = (
         ("accept_other_observation", "infer", "Run inference"),
-        ("new_run", "narrowing", "Start a new simulation even if a cache one setting away exists"),
+        ("new_run", "narrowing", "Start the narrowing round"),
         ("name", "prior", "Name"), ("name", "training", "Name"), ("name", "infer", "Name of the inference"),
         ("note", "infer", "Note"),
     )
@@ -3477,9 +3491,10 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     prior_picker = inf.prior_panel.prior_picker
     prior_picker.combo.setCurrentIndex(0)
     assert prior_picker.selection_summary() == "2026-09-14T10:00:00"
-    obs_picker = inf.tsnpe_panel.obs_picker        # allow_new=False: index 0 IS the observation
+    obs_picker = inf.tsnpe_panel.obs_picker        # a list that keeps its selection: none until one is chosen
+    obs_picker.combo.setCurrentIndex(0)
     assert obs_picker.selection_summary() == "spontaneous · width 50 · 2026-09-16T12:00:00"
-    assert inf.tsnpe_panel.obs_line.text() == "spontaneous · width 50 · 2026-09-16T12:00:00"
+    assert obs_picker.combo.currentText() == "obs1", "the round's list does not name the record by its label"
 
     # (e) a refresh(), not only a click: drop the narrowed posterior and rescan
     combo.setCurrentIndex(1)

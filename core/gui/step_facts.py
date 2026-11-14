@@ -14,6 +14,8 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from core.refusals import Refusal, default_clause, require_at_least, require_positive
+
 from .chain import model_label
 
 #: The lead word of each marker, as a fact is shown.
@@ -1016,6 +1018,146 @@ def narrowed_question_words(*, observation_words: str, simulated: bool) -> tuple
     beneath = f"{SIMULATED_NEVER_TEXT if simulated else SAME_RECORDINGS_TEXT} {EXTRAPOLATION_TEXT}"
     return (INFER_NARROWED_TITLE, INFER_QUESTION_TEXT.format(observation_words or NO_OBSERVATION_WORDS), beneath,
             RUN_ANYWAY)
+
+
+# ── the rules of a fit's settings, which a training and a narrowing round share ──
+#: The settings a training reads, in the order the stage checks them, each with its rule's floor: an int for
+#: require_at_least, None for require_positive. A narrowing round reads eight of them, under the same rules. ONE table,
+#: read by the line under each field as it is typed and at the press, so the two can never name different limits.
+FIT_RULES: dict = {"num_runs": 1, "run_size_cap": 0, "hidden_features": 1, "num_transforms": 1, "learning_rate": None,
+                   "stop_after_epochs": 1, "max_num_epochs": 1, "expected_epochs": 1, "checkpoint_every": 0,
+                   "fisher_m": 1, "fisher_dz": None, "fisher_points": 1}
+
+
+def _shown_value(value) -> str:
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def pressed_reading(key: str, reading: str) -> str:
+    """What a press says of the setting ``key`` whose field reads ``reading``: a blank with the setting's usual value, as
+    the stage's own refusal of a blank names it; any other reading as it stands."""
+    return f"{reading[:-1]}{default_clause(key)}." if reading.endswith(" is blank.") else reading
+
+
+def fit_row_problem(key: str, value, *, label: str, reading: "str | None" = None) -> "tuple[str, str] | None":
+    """The rule a fit's setting ``key`` breaks, as the line under its field says it in its row's ``label`` and as a
+    press says it, with the value found and the usual one; None when it passes. ``reading`` is what the field says of
+    what it holds when that is no number, or blank, which comes first. The rule is the engine's own: require_at_least
+    with the setting's floor, or require_positive."""
+    floor = FIT_RULES[key]
+    if reading is not None:
+        return reading, pressed_reading(key, reading)
+    if value is None:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        line = f"{label} must be a finite number."
+    else:
+        try:
+            require_positive(key, value) if floor is None else require_at_least(key, value, floor)
+            return None
+        except Refusal:
+            line = f"{label} must be {'greater than 0' if floor is None else f'at least {floor}'}."
+    return line, f"{line[:-1]}; got {_shown_value(value)}{default_clause(key)}."
+
+
+# ── the sixth step, the narrowing round ──
+ROUND_START_WORDS = "Start the narrowing round"
+#: Below this region level a round warns before the run, as the engine warns at its entry (its default, 0.999, less
+#: 0.009): narrowing a region that tight removes part of the prior for good.
+REGION_WARN_BELOW = 0.99
+REGION_TEXT = "Tighter than {:g}. Narrowing removes part of the prior for good; no later round gets it back."
+DIRECTIONS_TEXT = "At most {0}: the model has {0} parameters."
+NETWORK_HELD_TEXT = "The posterior in use was trained at {} by {}."
+NETWORK_DIFFERS_TEXT = "The posterior in use was trained at {} by {}; this round trains {} by {}."
+ROTATION_REUSED_TEXT = "Rotation: the posterior's own is reused."
+CHANGED_TO_TEXT = "Changed to the observation just made, {}. Before: {}."
+CANNOT_BE_USED_TEXT = "Cannot be used: this posterior was narrowed around another observation"
+CANNOT_BE_USED_BLOCKS = "the observation cannot be used"
+ROUND_USES_TEXT = "Posterior {} and its prior {}; observation {}{}."
+ROUND_SOURCE_WORDS = {"simulated": ", a simulated cell, {} s", "experimental": ", your own recordings, {} s"}
+NEEDS_AN_OBSERVATION = "Needs an observation: run an inference in step 5, or choose a saved one."
+NEEDS_AN_OBSERVATION_BLOCKS = "needs an observation"
+OWN_PRIOR_TEXT = "This posterior was trained with the prior in use, {}."
+NOT_OWN_PRIOR_TEXT = "This posterior was trained with {}; the prior in use is {}. Load {} in step 2."
+ROUND_SIMULATIONS_TEXT = ("Simulates {:,} simulations in the round's own simulation set. A round never continues a "
+                          "training's simulations; if this same round was run before with the same settings, its saved "
+                          "simulations are continued.")
+ROUND_CONTINUES_TEXT = "Continues this round's simulation set from batch {:,}."
+ROUND_RESULT_TEXT = ("The posterior made here replaces the one in use in steps 3 to 5 and is valid only near this "
+                     "observation.")
+NO_EARLIER_ROUND_TEXT = "There is no earlier narrowing round to estimate the fit's length from."
+ROUND_FIT_TEXT = "Fit: about {} epochs{}: {}."
+ROUND_IN_USE_TEXT = "In use from step 3 on: {}, narrowed around {}."
+ROUND_KEPT_TEXT = "The region kept {} % of the prior's draws."
+ROUND_CAME_FROM_TEXT = "The posterior it came from, {}, stays in Records; load it in step 3 to go back."
+CHECK_THIS_WORDS = "Check this posterior"
+SAME_OBSERVATION_WORDS = "Run inference on the same observation"
+NEW_SET_ROUND_TITLE = "Start the narrowing round beside a saved simulation set?"
+NEW_SET_ROUND_TEXT = "Starting now simulates this round from zero and leaves that set as it is."
+
+
+def round_uses(posterior: str, prior: str, observation: str, body) -> str:
+    """What "Before you start" says the round uses: the posterior in use, its prior and the observation, by their
+    labels, and where the observation came from and its length, from its record's body."""
+    source = body.get("source") if isinstance(body, dict) else None
+    source = source if isinstance(source, dict) else {}
+    said = ROUND_SOURCE_WORDS.get(source.get("kind"), "")
+    try:
+        seconds = float(source.get("T_obs_s"))
+    except (TypeError, ValueError):
+        seconds = None
+    tail = said.format(f"{seconds:g}") if said and seconds is not None and math.isfinite(seconds) else ""
+    return ROUND_USES_TEXT.format(posterior, prior, observation, tail)
+
+
+def round_how_long(expected, per_epoch=None) -> str:
+    """How long the round's fit should take, from the epochs the last narrowing round of this kind ran (``expected``,
+    its number and the words that say where it comes from, as the run's controller gives them) and the pace of an
+    epoch at this size (``per_epoch``, the run history's); with no earlier round, that there is none."""
+    try:
+        epochs, words = expected
+        epochs = int(epochs)
+    except (TypeError, ValueError):
+        return NO_EARLIER_ROUND_TEXT
+    source = str(words).split(": ", 1)[-1]
+    pace = _pace(per_epoch)
+    return ROUND_FIT_TEXT.format(epochs, f" of {about_words(pace[0])}" if pace else "", source)
+
+
+def round_facts(*, needs: Sequence[str] = (), uses: str = "", prior_own=None, simulations=None, continuing_from=None,
+                result: bool = True, checks: Sequence[Fact] = (), fit: str = "saved", how_long: str = "",
+                memory: str = "", others_pending: Sequence[str] = (), name_facts: Sequence[Fact] = (),
+                field_facts: Sequence[Fact] = (), plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+    """The facts of the sixth step, in the order of its table, those that block first. ``needs``: what is missing of
+    "posterior", "prior" and "observation", each blocking until a load or a run brings it. ``uses``: what the round
+    uses. ``prior_own``: the prior in use by its label when it is the posterior's own, ``(the prior it was trained
+    with, the prior in use)`` by their labels when it is not, which blocks; None when nothing can be said. ``simulations``: the
+    simulations the round makes, or with ``continuing_from`` the batch its own set is continued from. ``result``: that
+    the posterior made replaces the one in use. ``checks``: the two checks' line for the prior in use. ``fit``: "saved"
+    or "never", how a stop of the fit ends. Then how long, the memory, the other steps' changes not applied, the names',
+    the fields' and the plan's facts. Reads nothing."""
+    blocks = {"posterior": (NEEDS_A_POSTERIOR, NEEDS_A_POSTERIOR_BLOCKS), "prior": (NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS),
+              "observation": (NEEDS_AN_OBSERVATION, NEEDS_AN_OBSERVATION_BLOCKS)}
+    facts = [Fact("lock", *blocks[need]) for need in needs if need in blocks]
+    if uses:
+        facts.append(Fact("info", uses))
+    if isinstance(prior_own, str) and prior_own:
+        facts.append(Fact("fine", OWN_PRIOR_TEXT.format(prior_own)))
+    elif isinstance(prior_own, tuple):
+        trained_with, in_use = prior_own
+        facts.append(Fact("err", NOT_OWN_PRIOR_TEXT.format(trained_with, in_use, trained_with), OTHER_PRIOR_BLOCKS))
+    if continuing_from is not None and _whole(continuing_from) is not None:
+        facts.append(Fact("info", ROUND_CONTINUES_TEXT.format(continuing_from)))
+    elif _whole(simulations) is not None:
+        facts.append(Fact("info", ROUND_SIMULATIONS_TEXT.format(simulations)))
+    if result:
+        facts.append(Fact("warn", ROUND_RESULT_TEXT))
+    facts += list(checks)
+    facts += [Fact("warn", FIT_LOST_TEXT)] if fit == "never" else [Fact("info", FIT_SAVED_TEXT),
+                                                                    Fact("info", READ_BACK_TEXT)]
+    facts += [Fact("info", said) for said in (how_long, memory) if said]
+    facts += [Fact("warn", said) for said in others_pending if said]
+    return ordered((*facts, *name_facts, *field_facts, *plan_lines))
 
 
 # ── the choice of a kept training that matches ──

@@ -813,7 +813,8 @@ YET = ("a setting cannot be used", "the limits typed cannot be used", "the last 
        "the cell does not fit", "too many driven recordings", "the values cannot be used", "the drive is not complete",
        "a driven recording cannot be used", "no cell file is chosen", "no recording length is typed",
        "no spontaneous recording is chosen", "no driven recording is chosen", "no driven recording is added",
-       "a driven recording is not complete", "no drive amplitude is typed")
+       "a driven recording is not complete", "no drive amplitude is typed", "needs an observation",
+       "the observation cannot be used")
 
 
 def test_every_block_the_pages_say_is_known_to_be_lifted_on_the_page_or_not():
@@ -822,9 +823,10 @@ def test_every_block_the_pages_say_is_known_to_be_lifted_on_the_page_or_not():
     on the page and reads "Cannot start yet:", or is not and reads "Cannot start:". A block added without a place in
     one of the two fails here."""
     from core.gui import step_facts
-    from core.gui.panels.inference import config_tab, infer_tab, posterior_tab, prior_tab, validate_tab
+    from core.gui.panels.inference import config_tab, infer_tab, posterior_tab, prior_tab, tsnpe_tab, validate_tab
     from core.gui.widgets import form
-    said = {value for module in (step_facts, form, config_tab, prior_tab, posterior_tab, validate_tab, infer_tab)
+    said = {value for module in (step_facts, form, config_tab, prior_tab, posterior_tab, validate_tab, infer_tab,
+                                 tsnpe_tab)
             for name, value in vars(module).items() if name.endswith("BLOCKS") and isinstance(value, str)}
     said |= {form.NEEDS_A_NAME} | {blocks for _sentence, blocks in step_facts.INFER_BLANKS.values()}
     assert set(step_facts.FINAL_BLOCKS) == set(FINAL)

@@ -20,6 +20,7 @@ from core.gui.panels.inference.config_tab import ConfigPanel
 from core.gui.panels.inference.infer_tab import InferPanel
 from core.gui.panels.inference.posterior_tab import PosteriorPanel
 from core.gui.panels.inference.prior_tab import PriorPanel
+from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
 from core.gui.panels.inference.validate_tab import ValidatePanel
 from core.gui.run.controller import LIVE_TEXT, NOT_READ_YET_TEXT, controller
 from core.gui.step_facts import (LEADS, REFUSED_BLOCKS, Fact, about_words, ordered, origin_words, reading_words,
@@ -41,11 +42,11 @@ BLOCKS = "the name cannot be used"
 #: Each rebuilt page by its step, as the standing tests a page joins in its own task name it: the stand-in, then the
 #: pages of the window.
 PAGES = {"the stand-in": None, "Model and options": ConfigPanel, "Prior": PriorPanel, "Training": PosteriorPanel,
-         "Checks": ValidatePanel, "Inference": InferPanel}
+         "Checks": ValidatePanel, "Inference": InferPanel, "Narrowing round": TSNPEPanel}
 #: A field of each page an edit is typed into, by the page's class: of a page that shows a form only for what it has
 #: open, the form of what ``OPENED`` opens on it.
 EDITED = {None: "num_runs", ConfigPanel: "chi_n_freqs", PriorPanel: "num_iterations", PosteriorPanel: "num_runs",
-          ValidatePanel: "n_cal", InferPanel: "t_obs"}
+          ValidatePanel: "n_cal", InferPanel: "t_obs", TSNPEPanel: "num_runs"}
 #: What a page opens to show the form an edit is typed into: on the Checks list, the calibration's page.
 OPENED = {ValidatePanel: lambda page: page.open_check("calibration")}
 #: A record's name of the length the store lets stand, which no line of an origin holds at the window's least width.
@@ -1174,16 +1175,44 @@ def _twelve_driven_recordings_one_in_error(page) -> None:
     assert page.driven.reading_of(rows[7])[0] == "err"
 
 
+def _the_round_in_use(page, *, parent: str = "p1", network=(128, 8), digest=None) -> None:
+    """The narrowing round with a Nadrowski configuration and a prior in use, and a posterior trained with the prior
+    ``parent`` at ``network``, narrowed around the observation of ``digest`` when one is handed; read."""
+    from types import SimpleNamespace
+    from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, prior_stub
+    screen = page.window().part("inference")
+    posterior = SimpleNamespace(kind="posterior", id="q1", name="retrain_posterior", manifest=SimpleNamespace(
+        parents={"prior": parent}, body={"training": {"hidden_features": network[0], "num_transforms": network[1]}},
+        config={}, created="2026-10-03T03:12:00+00:00"), posterior=SimpleNamespace(truncation=None, x_obs_digest=digest))
+    screen.session = SbiSession(draft=screen.session.draft, cfg=_nad_cfg(), inf_prior=prior_stub(), posterior=posterior)
+    screen.refresh_gates()
+    page.read_facts()
+
+
+def _every_round_fact(page) -> None:
+    """The narrowing round saying all it can before a run: a posterior in use trained with another prior and at another
+    network than the round's, no observation chosen, a region level tighter than the engine's warning and more
+    directions than the model has parameters."""
+    _the_round_in_use(page, parent="another_prior", network=(256, 10))
+    rows = page.form.rows
+    rows["hpd_level"].widget.setText("0.95")
+    rows["n_directions"].widget.setText("99")
+    page.redraw()
+    assert rows["n_directions"].in_error() and rows["hpd_level"].line.kind == "warn"
+
+
 #: The pages the foot is held over at the smallest window, by a name: the stand-in, a table of rows on a page of the later
-#: steps, a list with a detail open, the Checks list with its check of the most rows open, and Inference with twelve
-#: driven recordings, one in error; each with the class's maker (or the class), the step it stands on, and what is done
-#: to it.
+#: steps, a list with a detail open, the Checks list with its check of the most rows open, Inference with twelve
+#: driven recordings, one in error, and the Narrowing round with every fact it says; each with the class's maker (or the
+#: class), the step it stands on, and what is done to it.
 FOOT_PAGES = {"the stand-in": (None, "training", None),
               "a table of rows": ("stand_in_table_page", "infer", _twelve_rows_one_in_error),
               "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open),
               "the Checks list, the check of the most rows open": (ValidatePanel, "checks", _the_most_rows_in_error),
               "Inference, twelve driven recordings, one in error": (InferPanel, "infer",
-                                                                     _twelve_driven_recordings_one_in_error)}
+                                                                     _twelve_driven_recordings_one_in_error),
+              "the Narrowing round, every fact it says": (TSNPEPanel, "narrowing", _every_round_fact)}
 
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
@@ -1198,8 +1227,8 @@ def test_the_foot_stays_over_nothing_at_the_smallest_window(held, factor, count,
     Read in the window's own coordinates, and asked of the toolkit at each edge, for a part drawn over another or cut by a
     parent reads right by its edges alone. The facts open in the same region, and their growing moves nothing out of the
     window. On the stand-in page, on a page with a table of twelve rows, one with a reading in error, on a list with
-    a detail open, and on the Checks list with the page of its check of the most rows open, its fold open and a row
-    in error."""
+    a detail open, on the Checks list with the page of its check of the most rows open, its fold open and a row in
+    error, on Inference with twelve driven recordings, and on the Narrowing round saying every fact it says."""
     from tests import _fixtures
     maker, step, shaped = FOOT_PAGES[held]
     with text_size(factor), _the_look(False):
@@ -3001,6 +3030,46 @@ def test_a_reason_that_waiting_will_not_lift_reads_cannot_start(tmp_path, monkey
         window.hide()
     _the_checks_lists_blocks(tmp_path / "checks")
     _the_inference_blocks(tmp_path / "inference", monkeypatch)
+    _the_rounds_blocks(tmp_path / "narrowing")
+
+
+def _the_rounds_blocks(tmp_path) -> None:
+    """The narrowing round's own blocks, each alone in the state that makes it, read beside its main button: no
+    posterior, a prior that is not the posterior's own, a setting in error, an observation the narrowed posterior in use
+    cannot use, and no observation listed: each lifted by a load, a choice or an edit on a page."""
+    from core.artifacts import ArtifactStore, use_store
+    from tests._fixtures import _nad_cfg, write_observation
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with use_store(ArtifactStore(tmp_path / "Artifacts")) as store:
+        window, page = _a_stand_in(tmp_path, TSNPEPanel, "narrowing")
+        made = {name: write_observation(store, _nad_cfg(), name=name, digest=mark * 16)
+                for name, mark in (("cell_a", "a"), ("cell_b", "b"))}
+        screen = page._screen
+        page.names.name.setText("retrain_round1")
+        _the_round_in_use(page)
+        page.obs_picker.restore_key(made["cell_a"])
+        page.read_facts()
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        screen.session.posterior = None
+        screen.refresh_gates()
+        page.read_facts()
+        assert page.foot.reason.text() == "Cannot start yet: needs a posterior."
+        _the_round_in_use(page, parent="another_prior")
+        assert page.foot.reason.text() == "Cannot start yet: the prior in use is not the posterior's own."
+        _the_round_in_use(page)
+        page.form.rows["n_directions"].widget.setText("0")
+        page.redraw()
+        assert page.foot.reason.text() == "Cannot start yet: a setting cannot be used."
+        page.form.rows["n_directions"].widget.setText("5")
+        _the_round_in_use(page, digest="a" * 16)
+        page.obs_picker.combo.setCurrentIndex(page.obs_picker.combo.findData(made["cell_b"]))
+        page.redraw()
+        assert page.foot.reason.text() == "Cannot start yet: the observation cannot be used."
+    with use_store(ArtifactStore(tmp_path / "empty")):
+        page.obs_picker.combo.setCurrentIndex(-1)
+        _the_round_in_use(page)
+        assert page.foot.reason.text() == "Cannot start yet: needs an observation."
+    window.hide()
 
 
 def _the_inference_blocks(tmp_path, monkeypatch) -> None:
@@ -3596,6 +3665,53 @@ WALKED_INFERENCE = {
 }
 
 
+def _a_round_to_start(page, *, narrowed: bool = False) -> None:
+    """The narrowing round ready to start: a Nadrowski configuration, a prior and a posterior trained with it in use,
+    amortized, or narrowed around cell_a; cell_a and cell_b, of another digest, listed, cell_a chosen, and cell_b greyed
+    for a narrowed posterior; the round named. The records stand in a store of the shape's own while the page reads."""
+    import tempfile
+    from pathlib import Path
+    from core.artifacts import ArtifactStore, use_store
+    from tests._fixtures import _nad_cfg, write_observation
+    with tempfile.TemporaryDirectory() as folder:
+        store = ArtifactStore(Path(folder) / "Artifacts")
+        with use_store(store):
+            made = {name: write_observation(store, _nad_cfg(), name=name, digest=mark * 16)
+                    for name, mark in (("cell_a", "a"), ("cell_b", "b"))}
+            _the_round_in_use(page, digest="a" * 16 if narrowed else None)
+            page.obs_picker.restore_key(made["cell_a"])
+            page.names.name.setText("retrain_round1")
+            page.read_facts()
+    combo = page.obs_picker.combo
+    assert combo.model().item(combo.findData(made["cell_b"])).isEnabled() is not narrowed
+    assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+
+
+def _the_rounds_rows(page) -> tuple:
+    """The fields of the round's main settings and of its fold, a ticked one by its box, in their order."""
+    rows = page.form.rows
+    main = [page.obs_picker.combo, rows["hpd_level"].widget, rows["n_directions"].widget, rows["num_runs"].widget,
+            rows["run_size_cap"].widget.ticked_box, rows["hidden_features"].widget, rows["num_transforms"].widget]
+    folded = [rows["learning_rate"].widget, rows["stop_after_epochs"].widget, rows["max_num_epochs"].widget.ticked_box,
+              rows["checkpoint_every"].widget.field, rows["checkpoint_every"].widget.ticked_box]
+    return main, folded
+
+
+#: The round's shapes, as ``WALKED`` reads them: ready to start from an amortized posterior, and from a narrowed one,
+#: with the observation it cannot use greyed in the list.
+WALKED_NARROWING = {
+    "an amortized posterior": (
+        _a_round_to_start, lambda page: [page.help_button], lambda page: _the_rounds_rows(page)[0],
+        lambda page: _the_rounds_rows(page)[1], lambda page: [page.names.name, page.names.note],
+        lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
+    "a narrowed posterior, an observation greyed": (
+        lambda page: _a_round_to_start(page, narrowed=True), lambda page: [page.help_button],
+        lambda page: _the_rounds_rows(page)[0], lambda page: _the_rounds_rows(page)[1],
+        lambda page: [page.names.name, page.names.note],
+        lambda page, small: [*([page.foot.more] if small else []), page.foot.check_again, page.foot.main_button]),
+}
+
+
 #: The rebuilt pages of the window, by the step each stands on, and the shapes its walk is read in: by the name of the
 #: shape, what is done to the page after its first show; the heading's buttons and the way to the next step that stand
 #: in that shape; the controls of its main settings; those of the fold, while it is open, or None for a shape with no
@@ -3645,6 +3761,7 @@ WALKED = {
     "training": WALKED_TRAINING,
     "checks": WALKED_CHECKS,
     "infer": WALKED_INFERENCE,
+    "narrowing": WALKED_NARROWING,
 }
 
 
@@ -4651,8 +4768,8 @@ def test_the_fix_sentence_names_this_page_or_the_steps_that_show_the_setting():
 
 
 def test_a_refusal_on_the_run_page_of_a_rebuilt_page_says_what_the_page_says(tmp_path):
-    """A failure with a refusal after something was spent stands on the run's page, in the words of the page it stands on;
-    an old page keeps the table's own."""
+    """A failure with a refusal after something was spent stands on the run's page, in the words of the page it stands on:
+    the stand-in's, then the Narrowing round's, each naming its own row."""
     from core.refusals import Refusal
     app = qt_app()
     window, page, _clock = _a_page(tmp_path)
@@ -4672,8 +4789,8 @@ def test_a_refusal_on_the_run_page_of_a_rebuilt_page_says_what_the_page_says(tmp
     other.fail(Refusal("The number of simulation batches must be at least 1; got 0.", field="num_runs"))
     turn_until(app, lambda: not controller().is_live())
     _settle()
-    assert panel.run_view.failure_message.text().endswith(
-        "Set it in the 'Batches' box in step 3, Training, or step 4, Checks, or step 6, Narrowing round.")
+    assert panel.run_view.failure_message.text().endswith("Set it in 'Batches' on this page."), (
+        panel.run_view.failure_message.text())
     panel.run_view.back_button.click()
 
 
@@ -4826,6 +4943,67 @@ def test_the_inference_buttons_stand_inside_the_smallest_window_with_real_metric
             for state, said in INFERENCE_BESIDE.items():
                 if state == "twelve driven recordings, one in error":
                     _twelve_driven_recordings_one_in_error(page)
+                page.form.fold.set_open(True)
+                page.redraw()
+                for _ in range(5):
+                    app.processEvents()
+                assert page.foot.reason.text() == said, (factor, state, page.foot.reason.text())
+                inside = QRect(0, 0, window.width(), window.height())
+                for part in (page.foot.main_button, page.foot.reason):
+                    edge = QRect(part.mapTo(window, QPoint(0, 0)), part.size())
+                    assert part.isVisible() and inside.contains(edge), (factor, state, type(part).__name__, edge)
+                    for x, y in ((edge.left() + 2, edge.center().y()), (edge.center().x(), edge.center().y()),
+                                 (edge.right() - 2, edge.center().y())):
+                        found = window.childAt(QPoint(x, y))
+                        assert found is part or (found is not None and part.isAncestorOf(found)), (
+                            factor, state, type(part).__name__, "something stands over it", x, y, found)
+            assert not user32.IsWindowVisible(int(window.winId())), "the window was shown on the screen"
+            window.hide()
+            app.processEvents()
+    assert user32.GetForegroundWindow() == front, "the front was taken from the window the person works in"
+
+
+#: What the Narrowing round says beside its main button in the two states its buttons are measured in, as an offscreen
+#: probe of the same set-up read them.
+ROUND_BESIDE = {"nothing in use": "Cannot start yet: needs a posterior, and 3 more above.",
+                "every fact it says": "Cannot start yet: needs an observation, and 3 more above."}
+
+
+@pytest.mark.display
+def test_the_rounds_buttons_stand_inside_the_smallest_window_with_real_metrics(tmp_path):
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped). With the real
+    platform's fonts and their metrics, at the least size the window takes on the screen it stands on, at the ordinary
+    text size and at one and a half times it, the Narrowing round's main button and the words beside it stand inside the
+    window with nothing drawn over them, the fold open: with nothing in use; and saying every fact it says before a run,
+    in a store of its own that holds nothing. The window is laid out where no screen shows it and is never shown or brought to the front: the window in front
+    stays in front."""
+    import ctypes
+    from PySide6.QtCore import QPoint, QRect, Qt
+    from PySide6.QtGui import QGuiApplication
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fonts
+    app = QApplication.instance() or QApplication([])
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.WinDLL("user32")
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    front = user32.GetForegroundWindow()
+    for factor in (1.0, 1.5):
+        with text_size(factor), _the_look(False), use_store(ArtifactStore(tmp_path / f"Artifacts {factor}")):
+            fonts.load_app_font(app)
+            controller_on(tmp_path, Clock(at(8, 12, 4)))
+            window = build_window()
+            window.setAttribute(Qt.WA_DontShowOnScreen)
+            available = window.screen().availableGeometry()
+            _opening, least = design.window_sizes((available.width(), available.height()))
+            window.setMinimumSize(1, 1)
+            window.resize(*least)
+            window.show()
+            window.go_to("inference", "narrowing")
+            page = window.part("inference").tsnpe_panel
+            for state, said in ROUND_BESIDE.items():
+                if state == "every fact it says":
+                    _every_round_fact(page)
                 page.form.fold.set_open(True)
                 page.redraw()
                 for _ in range(5):

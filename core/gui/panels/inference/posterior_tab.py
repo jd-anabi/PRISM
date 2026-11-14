@@ -45,7 +45,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 
 from core import config, orchestrator
 from core.artifacts import Accept, default_store
-from core.refusals import Refusal, default_clause, require_at_least, require_positive
+from core.refusals import Refusal
 
 from ... import check_lineage, continuing, design, fields, fonts, plans, record_words, settings, style, texts
 from ...memory_limit import computer, limit_words, memory_limit_in_force
@@ -55,11 +55,11 @@ from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import TYPED_EPOCHS_TEXT, RunSpec
 from ...run.view import SelectableLines, WrappedWords
-from ...step_facts import (CANCEL, CONTINUING, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
+from ...step_facts import (CANCEL, CONTINUING, FIT_RULES, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
                            Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
                            narrowed_question, new_set_question, new_training_question, of_this_model,
-                           posterior_in_use, saved_posterior_words, set_words, stopped_words, training_facts,
-                           uses_words)
+                           fit_row_problem, posterior_in_use, saved_posterior_words, set_words, stopped_words,
+                           training_facts, uses_words)
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.ask import ask
 from ...widgets.choice import Choice
@@ -120,24 +120,9 @@ DELETE_ONE_TEXT = "The 1 epoch kept is deleted; the next training starts from it
 DELETE_UNCOUNTED_TEXT = "The epochs kept are deleted; the next training starts from its first epoch."
 KEEP_IT, DELETE_IT = "Keep it", "Delete it"
 
-# THE SETTINGS A TRAINING READS, in the order the stage checks them: the field key, which is also build_posterior's
-# keyword but for the expected epochs, which only the run's page reads; and the rule's floor, an int for
-# require_at_least, None for require_positive. ONE table, read by the line under each field as it is typed and at the
-# press, so the two can never name different limits.
-_RULES = (
-    ("num_runs", 1),
-    ("run_size_cap", 0),                     # a TYPED 0 = follow the hardware batch, as "Automatic" does
-    ("hidden_features", 1),
-    ("num_transforms", 1),
-    ("learning_rate", None),
-    ("stop_after_epochs", 1),
-    ("max_num_epochs", 1),                   # "No limit" passes nothing
-    ("expected_epochs", 1),                  # blank: the last training's, or none
-    ("checkpoint_every", 0),                 # "Never" = 0
-    ("fisher_m", 1),
-    ("fisher_dz", None),
-    ("fisher_points", 1),
-)
+# THE SETTINGS A TRAINING READS, in the order the stage checks them, each with its rule's floor: the facts' one table,
+# which a narrowing round reads too.
+_RULES = tuple(FIT_RULES.items())
 #: The rotation's three: read only while the rotation is computed afresh.
 _ROTATION = ("fisher_m", "fisher_dz", "fisher_points")
 #: The budget's three: the reading of the saved simulation sets is made at what they hold.
@@ -151,21 +136,6 @@ _TRAINING_ROWS = ("resume", *(key for key, _ in _RULES))
 
 # Where the window shows this step's runs: Parameter inference, its step Training.
 _PLACE = ("inference", "training")
-
-
-def _check(key: str, value, minimum):
-    """Run one setting's rule: require_at_least with its floor, or require_positive when the floor is None. Returns the
-    value; raises Refusal(field=key) on a blank or an out-of-rule value."""
-    return require_positive(key, value) if minimum is None else require_at_least(key, value, minimum)
-
-
-def _rule_words(minimum) -> str:
-    """The rule as the line under a field says it: the words the refusal's own message uses after "must be"."""
-    return "greater than 0" if minimum is None else f"at least {minimum}"
-
-
-def _shown(value) -> str:
-    return f"{value:g}" if isinstance(value, float) else str(value)
 
 
 def _quietly(read, *args, **kwargs):
@@ -421,25 +391,13 @@ class PosteriorPanel(StepPage):
         return found
 
     def _row_problem(self, key: str, minimum) -> "tuple[str, str] | None":
-        """The rule the row ``key`` breaks now, as ``problems`` gives it; None for none."""
+        """The rule the row ``key`` breaks now, as ``problems`` gives it, by the facts' one table of a fit's rules; None for
+        none. A blank expected epochs is a choice."""
         row = self.form.rows[key]
         if key in _BLANK_CHOSEN and not row.widget.text().strip():
             return None
-        said = row.reading()
-        if said is not None:
-            return said, (f"{said[:-1]}{default_clause(key)}." if said.endswith(" is blank.") else said)
-        value = row.value()
-        if value is None:
-            return None
-        if isinstance(value, float) and not math.isfinite(value):
-            line = f"{row.label_text()} must be a finite number."
-        else:
-            try:
-                _check(key, value, minimum)
-                return None
-            except Refusal:
-                line = f"{row.label_text()} must be {_rule_words(minimum)}."
-        return line, f"{line[:-1]}; got {_shown(value)}{default_clause(key)}."
+        return fit_row_problem(key, row.value(), label=row.label_text(), reading=row.reading())
+
 
     def facts_from_form(self) -> tuple:
         """The facts of the step as the form, the session and the last reading stand: the rules under their fields and

@@ -1161,7 +1161,7 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window = build_window()
         inference, rail = window.part("inference"), window.shell.rail
-        offered = inference.tsnpe_panel.obs_picker.has_entries()
+        offered = inference.tsnpe_panel.observation_on_offer()
         assert offered, "the store's observation is not on offer"
 
         def rules(live=None):
@@ -1198,9 +1198,9 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
 
 
 def test_the_narrowing_round_reads_an_observation_written_after_the_window_opened(tmp_path):
-    """The steps' states are worked out after the panels' own gates: once an observation is in the store and the
-    gates run again (as they do after the inference step records one), the narrowing round no longer waits for an
-    observation, in the rail."""
+    """The steps' states are worked out after the pages' own gates, from what the round's own reading found: once an
+    observation is in the store and the round reads again (as it does when it is shown, and at a run's end while it is
+    in sight), the narrowing round no longer waits for an observation, in the rail."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.session import SbiSession
     from tests._fixtures import build_browse_store
@@ -1221,6 +1221,9 @@ def test_the_narrowing_round_reads_an_observation_written_after_the_window_opene
         window.part("inference").refresh_gates()
         assert window.shell.rail.row("narrowing").accessibleName() == spoken(False)
     with use_store(ArtifactStore(tmp_path / "full")):
+        window.part("inference").refresh_gates()
+        assert window.shell.rail.row("narrowing").accessibleName() == spoken(False), "the rail read the store itself"
+        window.part("inference").tsnpe_panel.read_facts()
         window.part("inference").refresh_gates()
         assert window.shell.rail.row("narrowing").accessibleName() == spoken(True) != spoken(False)
 
@@ -2202,10 +2205,11 @@ def test_the_current_row_stays_in_view_when_the_rail_has_less_room():
             window.hide()
 
 
-def test_the_current_row_stays_in_view_when_a_step_above_it_takes_a_second_line(tmp_path):
+def test_the_current_row_stays_in_view_when_a_step_above_it_takes_a_second_line(tmp_path, monkeypatch):
     """In a low window at 150 % text the open step, the last of the chain, stays in view when a step above it takes
     its second line again (the inference step becomes the step in hand once the session holds no observation): the
-    list grows while the room it has stays as it was."""
+    list grows while the room it has stays as it was. The checks are not read here, as the round's reading would read
+    them, so that step 4 waits for its reading and is not the step in hand."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.session import SbiSession
     from tests._fixtures import build_browse_store
@@ -2221,6 +2225,7 @@ def test_the_current_row_stays_in_view_when_a_step_above_it_takes_a_second_line(
     with use_store(ArtifactStore(tmp_path / "Artifacts")), text_size(1.5):
         window = build_window()
         rail, inference = window.shell.rail, window.part("inference")
+        monkeypatch.setattr(inference, "read_checks", lambda: None)
         try:
             inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"), cfg=object(),
                                            inf_prior=held("prior", "p1"), posterior=held("posterior", "q1"),
@@ -3670,9 +3675,9 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
     """Every place but Home and Settings stands its first frame or its first line twelve pixels in from the rail, from
     the window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
     text size scales it, opened first in the usual layout and in the small one: a step and a panel by the frame
-    their own layout holds, and every other place by what its own layout holds, the list of Your own models by its group too. Home, Settings and
-    the steps rebuilt are pages of the look, which keep its page margin and stand alike, and the window gives them
-    none."""
+    their own layout holds, and every other place by what its own layout holds, the list of Your own models by its group
+    too. Home, Settings and every step of Parameter inference are pages of the look, which keep its page margin and
+    stand alike, and the window gives them none: the first step and the last are measured."""
     from PySide6.QtCore import QMargins
     from PySide6.QtWidgets import QGroupBox
     from tests._look_helpers import text_size
@@ -3688,7 +3693,7 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     for place in keys.PARTS[1:]:
                         window.go_to(place.key, "narrowing" if place.key == "inference" else None)
                         QApplication.processEvents()
-                        if place.key != "settings":
+                        if place.key not in ("settings", "inference"):
                             assert _margins(window, place.key) == (design.scaled(12),) * 4, (factor, low, place.key)
                     listed = window.part("models")
                     group, = [box for box in listed.findChildren(QGroupBox) if box.title() == "User-defined models"]
@@ -3696,50 +3701,29 @@ def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windo
                     assert (at.x(), at.y(), listed.width() - at.x() - group.width()) == (design.scaled(12),) * 3, (
                         factor, low)
                     settings, home = window.part("settings"), window.part("home")
-                    step = window.part("inference").config_panel
                     assert home.contentsMargins() == settings.contentsMargins() == QMargins(0, 0, 0, 0)
                     assert settings.page.box.contentsMargins() == home.page.box.contentsMargins()
-                    assert step.contentsMargins() == QMargins(0, 0, 0, 0), "the step was given the old margin"
-                    assert step.page.box.contentsMargins() == home.page.box.contentsMargins()
+                    for step in (window.part("inference").config_panel, window.part("inference").tsnpe_panel):
+                        assert step.contentsMargins() == QMargins(0, 0, 0, 0), "the step was given the old margin"
+                        assert step.page.box.contentsMargins() == home.page.box.contentsMargins()
                 finally:
                     window.hide()
 
 
-def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
-    """In the column of a panel's controls -- each step not rebuilt yet -- no line that wraps is drawn shorter than
-    its words take at its width, on
-    an empty session and with a configuration made from the shipped Nadrowski bounds; and in a column where
-    nothing grows, each item stands at its own height for the column's width, what the column has to spare left
-    under its last item."""
+def test_no_line_of_a_step_that_wraps_is_drawn_shorter_than_its_words():
+    """On the page of each step, on an empty session and with a configuration made from the shipped Nadrowski bounds,
+    no line that wraps is drawn shorter than its words take at its width."""
     from PySide6.QtWidgets import QLabel
     from core import config
-    from core.gui.panels.base_panel import BasePanel
     qt_app()
     window = build_window()
     inference = window.part("inference")
-    panels = [("inference", step.key, panel) for step, panel in zip(keys.STEPS, inference.panels())
-              if isinstance(panel, BasePanel)]
+    pages = list(zip((step.key for step in keys.STEPS), inference.panels()))
 
-    def named(widget):
-        """A group's title, or the kind of a widget that has none."""
-        title = getattr(widget, "title", None)
-        return title() if callable(title) else type(widget).__name__
-
-    def wrong(panel):
-        """The wrapped lines of the column drawn shorter than their words take, and the items of a column where
-        nothing grows that stand at another height than their own for the column's width."""
-        column = panel.controls_layout
-        short = [label.text()[:30] for label in panel.controls.findChildren(QLabel)
-                 if label.isVisibleTo(panel) and label.wordWrap() and label.text()
-                 and label.height() < label.heightForWidth(label.width())]
-        loose = []
-        if not column.expandingDirections() & Qt.Vertical:
-            for item in (column.itemAt(number) for number in range(column.count())):
-                width, height = item.geometry().width(), item.geometry().height()
-                own = item.heightForWidth(width) if item.hasHeightForWidth() else item.sizeHint().height()
-                if not item.isEmpty() and height != own:
-                    loose.append(named(item.widget()))
-        return short, loose
+    def short(page):
+        return [label.text()[:30] for label in page.findChildren(QLabel)
+                if label.isVisibleTo(page) and label.wordWrap() and label.text()
+                and label.height() < label.heightForWidth(label.width())]
 
     try:
         _shown_off_screen(window, 1300, 820)
@@ -3750,14 +3734,13 @@ def test_a_panels_column_lays_each_item_at_its_height_for_the_columns_width():
                 inference.config_panel.foot.main_button.click()    # the first step's own button: a model
                 bounds = config.BOUNDS_PATH / "nadrowski" / "master.txt"
                 inference.install_config(inference.session.draft.make_config(bounds_path=str(bounds)))
-            for part, page, panel in panels:
-                window.go_to(part, page)
+            for step, page in pages:
+                window.go_to("inference", step)
                 for _ in range(3):                       # a step in sight already lays out what its gates just said
                     QApplication.sendPostedEvents()
                     QApplication.processEvents()
-                short, loose = wrong(panel)
-                if short or loose:
-                    found[(session, part, page)] = (short, loose)
+                if short(page):
+                    found[(session, step)] = short(page)
         assert found == {}, found
     finally:
         window.hide()
@@ -3767,11 +3750,10 @@ class _CannotBeBuilt(Exception):
     """An error of a kind no part of the window raises: its name is looked for in what the window shows."""
 
 
-# What the first opening of a part asks of the card or starts, by name and how often: Parameter inference's six
-# steps are built together, one of them, the Narrowing round, reads the card as it is built, and its gate reads it
-# again. The list may only shrink: a page that reads the card reads it at a moment of its own, never as it is built.
-_READ_AT_FIRST_OPENING = {"inference": {"the device check": 1, "the card's free memory": 2,
-                                        "the card's memory held": 2, "the card's memory in use": 2}}
+# What the first opening of a part asks of the card or starts, by name and how often: nothing, Parameter inference's
+# six steps, built together, among them. The list may only shrink: a page that reads the card reads it at a moment of
+# its own, never as it is built.
+_READ_AT_FIRST_OPENING = {}
 
 
 def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypatch):
@@ -3837,8 +3819,8 @@ def test_opening_prism_touches_no_card_and_starts_no_program(tmp_path, monkeypat
 
 def test_only_the_known_pages_read_the_card_when_first_opened(monkeypatch):
     """Each part opened for the first time, in the rail's order, asks the graphics card nothing and starts no
-    program, but Parameter inference, whose six steps are built together at its first opening: what it asks is
-    what is listed, so many times each, and nothing else. The window is shown, off the screen, and given an idle
+    program, Parameter inference, whose six steps are built together at its first opening, among them: what each asks
+    is what is listed, so many times each, and nothing else. The window is shown, off the screen, and given an idle
     turn after each opening, so that each part's first show runs as it runs in front of a person: a first opening
     is a build and a show."""
     from collections import Counter
@@ -3950,8 +3932,8 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
     error". The error's kind is in no text the page shows until "Show the full error" opens it, with its trace, in
     a read-only box in the fixed-width face, which takes the keyboard; the sentence, the kind and the trace went to
     the log. Opened again, the part shows its error page again, and every other part opens. "Try again", the
-    construction mended, builds the part in that place and opens it as a move does, at the place's own margin, and
-    the error page goes."""
+    construction mended, builds the part in that place and opens it as a move does, its steps at the look's own page
+    margin, and the error page goes."""
     import logging
     from core.gui import fonts, main_window
     from core.gui.screens.inference_screen import InferenceScreen
@@ -4009,7 +3991,10 @@ def test_a_part_that_fails_to_build_shows_its_error_page_and_the_rest_works(monk
         assert window.shell.stack.indexOf(page) == -1, "the error page stays in the stack"
         window.go_to("inference", "narrowing")
         QApplication.processEvents()
-        assert _margins(window, "inference") == (design.scaled(12),) * 4, "a part built again has no margin"
+        from PySide6.QtCore import QMargins
+        assert built.tsnpe_panel.contentsMargins() == QMargins(0, 0, 0, 0), "a part built again was given a margin"
+        assert built.tsnpe_panel.page.box.contentsMargins() == window.part("home").page.box.contentsMargins(), (
+            "a part built again stands at another margin than the look's")
     finally:
         window.hide()
 
@@ -4347,11 +4332,11 @@ def test_a_refusal_shown_in_a_part_builds_no_other_part_and_asks_the_card_nothin
 
 def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp_path):
     """Closing the window writes what the parts opened in that launch remember and nothing for a part never
-    opened: every value stored for one is as it was stored, the layout of each splitter among them, though such a
-    part, built and closed, writes values of its own in their place. Here Records alone is opened."""
-    from PySide6.QtCore import QByteArray
+    opened: every value stored for one is as it was stored. Parameter inference's steps write what they remember as it
+    comes into use and nothing at the close, so what they wrote stays too. Here Records alone is opened."""
     from core.gui import settings as st
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.inference import tsnpe_tab
+    from core.gui.remembered import NUM_RUNS_KEY, POSTERIOR_KEY
     qt_app()
     every = build_window()                    # what each part writes as the window closes, off one that opened all
     for place in keys.PARTS:
@@ -4360,11 +4345,10 @@ def test_a_part_never_opened_keeps_what_it_remembered_when_the_window_closes(tmp
     written = st.settings()
     remembered = {key: "kept from the last launch" for key in written.allKeys()
                   if key.split("/")[0] not in ("window", "artifacts")}
-    remembered.update({f"layout/{panel.layout_key()}/{splitter}": QByteArray(b"kept from the last launch")
-                       for panel in every._all_panels() if isinstance(panel, BasePanel)
-                       for splitter in ("splitter", "results")})
     groups = {key.split("/")[0] for key in remembered}
-    assert groups == {"inference_tsnpe", "layout"}, groups
+    assert groups == set(), groups
+    remembered.update({key: "kept from the last launch" for key in (
+        POSTERIOR_KEY, NUM_RUNS_KEY, tsnpe_tab.OBSERVATION_KEY, tsnpe_tab.NUM_RUNS_KEY, tsnpe_tab.RUN_SIZE_KEY)})
     st.use_ini_file(str(tmp_path / "kept.ini"))
     kept = st.settings()
     for key, value in remembered.items():
@@ -4713,10 +4697,11 @@ def test_the_help_key_opens_help(monkeypatch):
 
 def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_moves_nothing(monkeypatch):
     """Escape in the rail, on the row of the place in sight or on another row the arrows reached, gives the page in
-    sight its first setting, as a shortcut gives it; on a page whose every setting a run has locked, the page's first
-    control that is not a button, never the rail again, and from the run's foot the same. Escape anywhere else moves
-    nothing: no page changes, the keyboard stays where it is and nothing is said; and a run goes on, its stop
-    asked by no Escape, in the rail or on its own page's stop button."""
+    sight its first setting, as a shortcut gives it; on a page whose every setting another page's run has locked, the
+    page's first control that is not a button, never the rail again, and from the run's foot the same; over the run's
+    own page, from the run's foot, the keyboard stays on the foot. Escape anywhere else moves nothing: no page changes,
+    the keyboard stays where it is and nothing is said; and a run goes on, its stop asked by no Escape, in the rail or
+    on its own page's stop button."""
     from PySide6.QtWidgets import QPushButton, QToolButton
     from core.gui.panels.inference_tabs import TSNPEPanel
     qt_app()
@@ -4740,21 +4725,25 @@ def test_escape_in_the_rail_gives_the_keyboard_back_to_the_page_and_elsewhere_mo
                 QTest.keyClick(first, Qt.Key_Escape)
                 assert (window.current_place()[0], window.focusWidget(), said) == (part, first, []), (
                     f"Escape on the first setting of {part} moved something")
-            runner = window.panel(TSNPEPanel)              # a page of the old frame, whose form stands beside its run
+            runner = window.panel(TSNPEPanel)              # a page whose run's page takes its column
             with running(runner):
-                for target in ("narrowing", "prior"):
-                    window.go_to("inference", target)                        # every setting locked by the run
-                    QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
-                    held = window.focusWidget()
-                    assert not rail.isAncestorOf(held), f"Escape left the keyboard in the rail over {target}"
-                    assert window.part("inference").isAncestorOf(held), f"Escape gave the keyboard away from {target}"
-                    assert not isinstance(held, (QPushButton, QToolButton)), f"Escape gave a button of {target} it"
-                window.go_to("inference", "narrowing")
-                rail.take_keyboard()
-                QTest.keyClick(window.focusWidget(), Qt.Key_Tab)            # the foot, a button while the run is live
-                assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
-                QTest.keyClick(rail.foot, Qt.Key_Escape)
-                assert window.part("inference").isAncestorOf(window.focusWidget()), "Escape on the foot moved nothing"
+                window.go_to("inference", "prior")                         # every setting locked by the run
+                QTest.keyClick(window.focusWidget(), Qt.Key_Escape)
+                held = window.focusWidget()
+                assert not rail.isAncestorOf(held), "Escape left the keyboard in the rail over a locked page"
+                assert window.part("inference").isAncestorOf(held), "Escape gave the keyboard away from a locked page"
+                assert not isinstance(held, (QPushButton, QToolButton)), "Escape gave a button of a locked page it"
+                for target in ("prior", "narrowing"):
+                    window.go_to("inference", target)
+                    rail.take_keyboard()
+                    QTest.keyClick(window.focusWidget(), Qt.Key_Tab)        # the foot, a button while the run is live
+                    assert window.focusWidget() is rail.foot, "Tab from the rail did not reach the foot"
+                    QTest.keyClick(rail.foot, Qt.Key_Escape)
+                    if target == "prior":
+                        assert window.part("inference").isAncestorOf(window.focusWidget()), (
+                            "Escape on the foot moved nothing")
+                    else:
+                        assert window.focusWidget() is rail.foot, "Escape on the foot over the run's own page moved"
                 stop = runner.run_view.stop_button
                 assert (controller().is_live(), controller().status.stop_requested,
                         controller()._run.token.requested.is_set(), stop.isEnabled()) == (
@@ -6785,9 +6774,8 @@ def _stand_in_step(window, monkeypatch):
 
 def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts(monkeypatch):
     """A step built on the look's page is told when the window is low and when it is not, through its screen, and the
-    keyboard starts on the control it names, as the first step names its list of models. The steps not rebuilt yet
-    name none: the keyboard starts at the first setting, as it did, and they offer no low form, which nothing asks of
-    them."""
+    keyboard starts on the control it names, as the first step names its list of models and the narrowing round its
+    first setting, its list of observations."""
     from core.gui.main_window import _first_control
     app = qt_app()
     window = build_window()
@@ -6796,16 +6784,21 @@ def test_the_step_shown_hears_the_low_window_and_names_where_the_keyboard_starts
     today = window.part("inference")
     assert today.first_focus() is today.config_panel.model_combo and today.pending() == frozenset()
     window.go_to("inference", "narrowing")
-    assert today.first_focus() is None
-    assert window.focusWidget() is window._start_of(today) is _first_control(today), "today's steps moved"
+    named = today.tsnpe_panel.obs_picker.combo
+    assert today.first_focus() is named
+    assert window.focusWidget() is window._start_of(today) is named, "the round's keyboard does not start on its list"
+    told, real = [], today.tsnpe_panel.set_small
+    monkeypatch.setattr(today.tsnpe_panel, "set_small", lambda on: (told.append(on), real(on))[1])
     window.resize(1300, design.small_below() - 1)
-    app.processEvents()                                      # today's panels offer no low form: nothing raises
+    app.processEvents()
     window.resize(1300, 820)
+    app.processEvents()
+    assert told[-2:] == [True, False], "the round was not told the window is low, then high again"
     step = _stand_in_step(window, monkeypatch)
     window.go_to("inference", "model")
     assert window._start_of(today) is step.named and window.focusWidget() is step.named
     window.go_to("inference", "narrowing")
-    assert today.first_focus() is None, "the screen answered for a step not shown"
+    assert today.first_focus() is named, "the screen answered for a step not shown"
     window.go_to("inference", "model")
     assert not step.is_small()
     window.resize(1300, design.small_below() - 1)
@@ -7400,10 +7393,10 @@ def _a_store_that_holds_a_set(tmp_path, monkeypatch) -> None:
 
 def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_path, monkeypatch):
     """Parameter inference and Settings, first opened while a run is live, read no simulation set, no kept training, no
-    run history, and of the card nothing but what is listed, and start no program. The two pages whose lines the card and
-    the saved sets feed say they have read nothing yet. When the run ends each reads once, and the lines say what they
-    read; Settings, in sight, reads the last run once. The Training page, built with the screen, says beside "Before
-    you start" that it has read nothing yet."""
+    run history, and of the card nothing but what is listed, and start no program. The Narrowing round and the Training
+    page, built with the screen and shown during the run, say beside "Before you start" that they have read nothing yet,
+    and Settings says so of the last run. When the run ends Settings, in sight, reads the last run once, and the steps,
+    not in sight, read nothing then: the Narrowing round, shown again, reads once and says when it read."""
     from collections import Counter
     from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import NOT_READ_YET_TEXT
@@ -7423,27 +7416,25 @@ def test_a_first_opening_during_a_run_reads_nothing_and_reads_at_its_end(tmp_pat
         assert Counter(calls) == _READ_DURING_A_RUN, f"a first opening during a run read: {Counter(calls)}"
         calls.clear()
         inference = window.part("inference")
-        pages = (inference.tsnpe_panel,)
-        for page in pages:
-            assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == (
-                NOT_READ_YET_TEXT, "", ""), type(page).__name__
-        window.go_to("inference", "training")
-        app.processEvents()
-        assert inference.posterior_panel.foot.reading.text() == NOT_READ_YET_TEXT
-        assert calls == [], f"the Training page, shown during a run, read: {calls}"
+        for step, page in (("narrowing", inference.tsnpe_panel), ("training", inference.posterior_panel)):
+            window.go_to("inference", step)
+            app.processEvents()
+            assert page.foot.reading.text() == NOT_READ_YET_TEXT, step
+        assert calls == [], f"a step shown during a run read: {calls}"
         window.go_to("settings")
         app.processEvents()
         assert calls == [], f"Settings, first opened during a run, read: {calls}"
         assert window.part("settings").last_run.plain_text() == NOT_READ_YET_TEXT
     turn_until(app, lambda: not controller().is_live())
     app.processEvents()
-    assert calls.count("training_preview") == len(pages), f"each page reads once at the run's end: {calls}"
-    assert inference.posterior_panel.stale, "the Training page, not in sight at the run's end, read"
+    assert inference.posterior_panel.stale and inference.tsnpe_panel.stale, "a step not in sight at the run's end read"
     assert (calls.count("last_on"), calls.count("last_measured_on")) == (1, 1), calls
-    for page in pages:
-        assert page.budget_total.text().endswith(".") and NOT_READ_YET_TEXT not in page.budget_total.text()
-        assert page.budget_mem.text() and page.budget_ckpt.text(), type(page).__name__
     assert window.part("settings").last_run.plain_text() != NOT_READ_YET_TEXT
+    calls.clear()
+    window.go_to("inference", "narrowing")
+    app.processEvents()
+    assert (calls.count("last_on"), calls.count("last_measured_on")) == (1, 1), f"the round's reading: {calls}"
+    assert not inference.tsnpe_panel.stale and inference.tsnpe_panel.foot.reading.text() != NOT_READ_YET_TEXT
 
 
 def test_no_module_of_the_window_binds_at_its_import_a_reading_the_tests_count():
@@ -7468,8 +7459,8 @@ def test_no_module_of_the_window_binds_at_its_import_a_reading_the_tests_count()
 
 def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp_path, monkeypatch):
     """What a page read before a run stands through the run: a record deleted or written from Records while a run is live
-    has every picker list the store again, and reads nothing else; the lines keep what they said; and the run's end reads
-    them once. A page's own gates, run for any reason during the run, read nothing either."""
+    reads nothing, and the facts of the Narrowing round, in sight, say what they said; and the run's end has it read
+    once. A page's own gates, run for any reason during the run, read nothing either."""
     from core.gui.panels.inference_tabs import InferPanel
     from tests._fixtures import readings_of_a_run
     app = qt_app()
@@ -7477,60 +7468,74 @@ def test_a_store_change_during_a_run_changes_nothing_on_a_page_until_it_ends(tmp
     _a_store_that_holds_a_set(tmp_path, monkeypatch)
     window = build_window()
     runner = window.panel(InferPanel)
-    window.go_to("inference")
+    _shown_off_screen(window)
+    window.go_to("inference", "narrowing")
+    app.processEvents()
     records = window.part("records")
     inference = window.part("inference")
     page = inference.tsnpe_panel
-    said = (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text())
-    assert said[0] and said[2]
+
+    def said():
+        return [(row.kind, row.sentence.plain_text()) for row in page.foot.facts.rows()]
+
+    before = said()
+    assert before
+    read, real = [], page.read_disk
+    monkeypatch.setattr(page, "read_disk", lambda: (read.append(1), real())[1])
     with running(runner):
         calls = readings_of_a_run(monkeypatch)
         records.store_changed.emit()
         inference.refresh_gates()
         page.refresh_local_gates()
         app.processEvents()
-        assert calls == [], f"a change of the store during a run read: {calls}"
-        assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == said
+        assert (calls, read) == ([], []), f"a change of the store during a run read: {calls}"
+        assert said() == before
     turn_until(app, lambda: not controller().is_live())
-    assert calls.count("training_preview") == 1, calls
+    app.processEvents()
+    assert read == [1], read
+    window.hide()
 
 
-def test_a_start_taken_back_leaves_the_budget_lines_as_they_were(tmp_path):
+def test_a_start_taken_back_leaves_what_a_page_said_as_it_was(tmp_path):
     """A start that fails after the pages were locked unlocks them with the run still called live, so they do not read:
-    what they said before the start stands, and none of them says a run is live, for only a page built during a run can
-    say so, and such a page has read by the end of that run."""
+    what the Narrowing round said before the start stands, and it does not say a run is live, for only a page built
+    during a run can say so, and such a page has read by the end of that run."""
     from core.gui.panels.inference_tabs import InferPanel
     from core.gui.run.controller import NOT_READ_YET_TEXT
     qt_app()
     _on_the_runs_clock(tmp_path)
     window = build_window()
     runner = window.panel(InferPanel)
-    window.go_to("inference")
+    window.go_to("inference", "narrowing")
     page = window.part("inference").tsnpe_panel
-    said = (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text())
+
+    def said():
+        return page.foot.reading.text(), [(row.kind, row.sentence.plain_text()) for row in page.foot.facts.rows()]
+
+    before = said()
     with pytest.raises(TypeError):
         start_run(runner, StandIn(), spec=_training_spec(place=("inference", "infer")), watch_dir=5)
     assert not controller().is_live()
-    assert (page.budget_total.text(), page.budget_mem.text(), page.budget_ckpt.text()) == said
-    assert NOT_READ_YET_TEXT not in said
+    assert said() == before
+    assert before[0] != NOT_READ_YET_TEXT
 
 
 def test_a_panel_with_a_problem_says_the_problem_while_a_run_is_live(tmp_path):
-    """A box left blank is said as ever during a run, for it reads nothing, and a line that says the problem is no line a
-    run keeps."""
+    """A box left blank is said under it as ever during a run, for that reads nothing, and a line that says the problem
+    is no line a run keeps."""
     from core.gui.fields import label
     from core.gui.panels.inference_tabs import InferPanel
     qt_app()
     _on_the_runs_clock(tmp_path)
     window = build_window()
     runner = window.panel(InferPanel)
-    window.go_to("inference")
+    window.go_to("inference", "narrowing")
     page = window.part("inference").tsnpe_panel
     with running(runner):
-        page.num_runs.setText("")
-        page._sync_budget()
-        assert page.budget_total.text() == f"{label('num_runs')} is blank."
-        assert (page.budget_mem.text(), page.budget_ckpt.text()) == ("", "")
+        page.form.rows["num_runs"].widget.setText("")
+        page.redraw()
+        line = page.form.rows["num_runs"].line
+        assert (line.kind, line.words) == ("err", f"{label('num_runs')} is blank."), (line.kind, line.words)
 
 
 # ══ a chain of loads in the whole window ══

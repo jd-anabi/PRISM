@@ -1,4 +1,4 @@
-"""QSettings round-trips, the training-budget group, layout geometry, and the config-tab hardware fields. Split from test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
+"""QSettings round-trips, layout geometry, and the config-tab hardware fields. Split from test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -27,239 +27,10 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from tests._fixtures import (budget_cfg as _budget_cfg, build_inference, build_part, build_run_host,  # noqa: E402
-                             code_only, prior_stub as _prior_stub, pump, qt_app, write_simulation_set)
+from tests._fixtures import (build_inference, build_part, build_run_host, code_only, pump, qt_app,  # noqa: E402
+                             write_simulation_set)
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
-
-# -- the training budget (the Narrowing round's page) -----------------------------------------------
-def _budget_panel(cfg=None, prior=None):
-    from core.gui.session import SbiSession
-
-    qt_app()
-    inf = build_inference(session=SbiSession())
-    inf.session.cfg = cfg
-    inf.session.inf_prior = prior
-    inf.refresh_gates()
-    return inf, inf.tsnpe_panel             # the page that keeps the budget's three lines
-
-
-def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand(monkeypatch):
-    """_sync_budget runs from refresh_gates(), so an exception in a STATUS LINE would take down the
-    whole page. The gate tests set session.cfg to a bare object(); so could any future stub.
-
-    The page does not swap such a config for None: it goes into orchestrator.training_preview as it
-    is, so this pins the preview's FAIL-SOFT branch. A config the preview cannot read lands in
-    estimate_error, and the memory line says "unavailable" with the error. The session's cadence is 0
-    (tests/conftest.py rebinds orchestrator's copy), which keeps the checkpoint line at "off" and the
-    word "config"; with checkpointing on the Narrowing round's own rule stands. With no config the memory
-    line says its geometry was the hardware's defaults. Read on the Narrowing round's page, which keeps
-    these lines."""
-    from core import orchestrator
-
-    inf, panel = _budget_panel(cfg=object(), prior=object())
-    panel._sync_budget()                                   # must not raise
-    assert panel.budget_total.text(), "the total line went blank on an unknown config"
-    assert "config" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
-
-    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 50)
-    panel._sync_budget()                                   # must not raise
-    assert "simulations" in panel.budget_total.text(), panel.budget_total.text()
-    assert "OWN identity" in panel.budget_ckpt.text(), panel.budget_ckpt.text()
-    mem = panel.budget_mem.text()
-    assert "CUDA-only" in mem or mem.startswith("Peak-memory estimate unavailable: AttributeError"), mem
-
-    inf.session.cfg = None
-    panel._sync_budget()                                   # must not raise
-    mem = panel.budget_mem.text()
-    assert "CUDA-only" in mem or mem.endswith("(Estimated from hardware defaults until a config is built.)"), mem
-
-
-def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
-    """The mixin used to read value() -- 0 for "" and for a lone "-" mid-typing -- and then
-    max(1, ...) / max(0, ...) the result, so a blank Batches box showed the budget for ONE batch and
-    a negative cap showed the hardware width, both as if someone had typed them. A live line cannot
-    pop a dialog, so it says which box is wrong, in the box's own label, and shows no number until
-    it is fixed: no clamp, no default, no raise. The memory and checkpoint lines go empty with it --
-    an estimate for a width nobody asked for is the same lie in GiB. Read on the Narrowing round's
-    page, whose row of the simulations per batch reads the label with what its 0 means."""
-    from core.gui.fields import label
-
-    _inf, panel = _budget_panel(cfg=object(), prior=object())
-    for text in ("", "-"):
-        panel.num_runs.setText(text)                        # textChanged -> _sync_budget; must not raise
-        assert panel.budget_total.text() == f"{label('num_runs')} is blank.", panel.budget_total.text()
-        assert panel.budget_mem.text() == "" and panel.budget_ckpt.text() == ""
-    panel.num_runs.setText("0")
-    assert panel.budget_total.text() == f"{label('num_runs')} must be at least 1.", panel.budget_total.text()
-    panel.num_runs.setText("3")
-    panel.run_size_cap.setText("-5")
-    assert panel.budget_total.text() == f"{label('run_size_cap')} must be at least 0.", panel.budget_total.text()
-    assert panel.budget_mem.text() == "" and panel.budget_ckpt.text() == ""
-    panel.run_size_cap.setText("")
-    assert panel.budget_total.text() == f"{label('run_size_cap')} is blank.", panel.budget_total.text()
-    # A TYPED 0 in the cap box is "automatic", not blank: the lines come back, for 3 batches.
-    panel.run_size_cap.setText("0")
-    assert "simulations" in panel.budget_total.text() and "3 batches" in panel.budget_total.text(), \
-        panel.budget_total.text()
-    assert panel.budget_ckpt.text(), "the checkpoint line must come back once both boxes pass"
-
-
-def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint(monkeypatch):
-    """The user-facing face of the rule that the region belongs to the simulation cache's identity.
-    The TSNPE tab shares the budget group's code, whose checkpoint line is computed from the
-    AMORTIZED identity -- so at the parent's budget it read
-    "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely", which is exactly what a
-    round at that budget did before the region became part of the identity. The region is drawn
-    when the round starts, so the tab cannot resolve a directory in advance; it states the rule.
-
-    Whether checkpointing is on at all is the TRAINING STAGE's binding of the cadence
-    (orchestrator.TRAINING_CHECKPOINT_EVERY, read through training_preview), so that is the one this
-    test rebinds -- and config's live copy is set to the OPPOSITE value each time, because the tab used
-    to read that copy and a round never does."""
-    from core import config as _cfg, orchestrator
-    inf, _ = _budget_panel(cfg=_budget_cfg(), prior=object())
-    panel = inf.tsnpe_panel
-    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 50)
-    monkeypatch.setattr(_cfg, "TRAINING_CHECKPOINT_EVERY", 0)
-    panel._sync_budget()
-    text = panel.budget_ckpt.text()
-    assert "Resumes" not in text and "OWN identity" in text, text
-    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
-    monkeypatch.setattr(_cfg, "TRAINING_CHECKPOINT_EVERY", 50)
-    panel._sync_budget()
-    assert "off" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
-
-
-def test_the_budget_lines_only_format_the_preview(monkeypatch):
-    """The three lines under the training budget used to DERIVE what they showed: the width
-    (_effective_width), the memory geometry (_budget_memory's own n_fine / n_vars / steady), the cache
-    directory (resolve_dir under the process-default root) and the cadence (config's LIVE copy of
-    TRAINING_CHECKPOINT_EVERY, which the training stage never reads). Four places for the line and the
-    run to disagree. Now ONE orchestrator call resolves all of it as build_posterior does, and the tabs
-    only format what it returns.
-
-    Read on the Narrowing round's page, the one page that keeps the lines; the mixin's own checkpoint line,
-    whose "off" the round's page says, is read off the mixin state by state. Pinned three ways. Every line is exactly
-    the formatting of a preview the test hands in -- a
-    deliberately inconsistent one (width 700 against a 512 box), so a tab that recomputed anything
-    would show a different number. The call receives the session's config and prior as they are, the
-    two boxes as ints and the tab's memoised hardware, and is not made at all while a box is blank
-    (the preview takes ints only). And neither the mixin nor the TSNPE override names any of the
-    machinery it used to call."""
-    import ast
-    import dataclasses
-    import inspect
-    import textwrap
-    from core import orchestrator
-    from core.gui.fields import label
-    from core.gui.panels.inference.base import _TrainingBudgetMixin
-    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
-
-    cfg, prior = _budget_cfg(), _prior_stub()
-    inf, panel = _budget_panel(cfg, prior=prior)
-    tsnpe = panel
-    base = orchestrator.TrainingPreview(
-        n_runs=3, width=700, hw_batch=2048, n_fine=250_000, n_vars=3,
-        need_elements=2 ** 28, have_elements=2 ** 30, estimate_error=None,
-        checkpoint="new", batches_done=0, siblings="", cadence=50, checkpoint_error=None,
-        device_type="cuda", itemsize=4)
-    handed = {"preview": base}
-    calls = []
-
-    def fake(c, p, **kw):
-        calls.append((c, p, kw))
-        return handed["preview"]
-
-    monkeypatch.setattr(orchestrator, "training_preview", fake)
-
-    def lines(tab, preview):
-        handed["preview"] = preview
-        calls.clear()
-        tab._sync_budget()
-        return tab.budget_total.text(), tab.budget_mem.text(), tab.budget_ckpt.text()
-
-    panel.num_runs.setText("3")
-    panel.run_size_cap.setText("512")
-    total, mem, _ckpt = lines(panel, base)
-
-    # the call: the session's objects as they are, the boxes as ints, the tab's memoised hardware
-    assert len(calls) == 1, calls
-    c, p, kw = calls[0]
-    assert c is cfg and p is prior, "the preview must see the session's config and prior as they are"
-    assert kw == {"num_runs": 3, "run_size_cap": 512, "hw": panel._hardware()}, kw
-    assert type(kw["num_runs"]) is int and type(kw["run_size_cap"]) is int, kw
-    assert kw["hw"] is panel._hardware(), "detect_device() is memoised by the tab, not probed per keystroke"
-
-    # the total line: the PREVIEW's width (700), never the box's 512
-    assert total == ("2,100 simulations = 3 batches x 700 rows (capped from 2,048).\nBatches is also the "
-                     "(t_scale, T_obs) diversity count: every row in a batch shares one operating point, so "
-                     "batch COUNT is the statistics and batch WIDTH is not."), total
-    assert "capped from" not in lines(panel, dataclasses.replace(base, width=2048))[0]
-
-    # the memory line
-    assert mem.startswith("Worst-case peak ~1.00 GiB per batch (n_fine <= 250,000, 3 state vars); "
-                          "planner budget right now ~4.00 GiB, so it fits in one piece.\n"), mem
-    assert "upper bound" in mem.lower() and "hardware defaults" not in mem, mem
-    assert "does NOT fit" in lines(panel, dataclasses.replace(base, need_elements=2 ** 31))[1]
-    assert lines(panel, dataclasses.replace(base, device_type="cpu"))[1] == \
-        "Peak-memory estimate is CUDA-only; this config runs on cpu."
-    failed = dataclasses.replace(base, estimate_error="RuntimeError: boom", n_fine=None, n_vars=None,
-                                 need_elements=None, have_elements=None)
-    assert lines(panel, failed)[1] == "Peak-memory estimate unavailable: RuntimeError: boom"
-
-    # the checkpoint line, state by state; the TSNPE tab states its rule whenever checkpointing is on
-    sib = ("[checkpoint] 1 other checkpoint(s) exist and do NOT match this run: "
-           "abc123def456 (2 batches, differs in n_runs)")
-    want = {
-        "off": "Checkpointing is off (config.TRAINING_CHECKPOINT_EVERY = 0): a crash loses the run.",
-        "needs_config": "Checkpoint status needs a config and a prior -- the prior is part of the identity.",
-        "resume_complete": ("Resumes a COMPLETE checkpoint (2 batches) -- simulation will be skipped "
-                            "entirely and only the flow retrained."),
-        "resume_partial": "Resumes an existing checkpoint: 2/3 batches already done.",
-        "new_with_siblings": "WARNING: these settings match no checkpoint, so this starts a NEW run.\n" + sib,
-        "new": "No checkpoint exists yet; this starts a new run.",
-    }
-    for state, text in want.items():
-        pv = dataclasses.replace(base, checkpoint=state,
-                                 batches_done=2 if state.startswith("resume") else 0,
-                                 siblings=sib if state == "new_with_siblings" else "",
-                                 cadence=0 if state == "off" else 50)
-        assert _TrainingBudgetMixin._budget_checkpoint(panel, pv) == text, state
-        rule = lines(tsnpe, pv)[2]
-        if state == "off":
-            assert rule == text, "with checkpointing off the TSNPE tab says what the budget's own line says"
-        else:
-            assert "OWN identity" in rule and "Resumes" not in rule, (state, rule)
-    assert _TrainingBudgetMixin._budget_checkpoint(panel, dataclasses.replace(
-        base, checkpoint_error="OSError: disk gone")) == "Checkpoint status unavailable: OSError: disk gone"
-
-    # no config yet: the memory line says its geometry was the hardware defaults
-    inf.session.cfg = None
-    assert lines(panel, base)[1].endswith("\n(Estimated from hardware defaults until a config is built.)")
-    assert calls[0][0] is None
-    inf.session.cfg = cfg
-
-    # a blank box: the preview is not called at all
-    panel.num_runs.setText("")
-    calls.clear()
-    panel._sync_budget()
-    assert calls == [] and panel.budget_total.text() == f"{label('num_runs')} is blank.", calls
-
-    # neither formatter names the machinery it used to call (names and attributes, not string text:
-    # the "off" line keeps the words config.TRAINING_CHECKPOINT_EVERY on purpose)
-    def names(obj):
-        tree = ast.parse(textwrap.dedent(inspect.getsource(obj)))
-        return ({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-                | {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)})
-
-    gone = {"peak_sim_elements", "sim_memory_budget_elements", "n_force_channels", "training_identity",
-            "training_checkpoint", "peek", "describe_siblings", "resolve_dir", "TRAINING_CHECKPOINT_EVERY",
-            "N_ND_MAX", "_effective_width", "batch_size", "steady_idx", "inits_dict"}
-    mixin = names(_TrainingBudgetMixin)
-    assert "training_preview" in mixin and not (mixin & gone), sorted(mixin & gone)
-    override = names(TSNPEPanel._budget_checkpoint)
-    assert not (override & {"config", "TRAINING_CHECKPOINT_EVERY", "orchestrator"}), sorted(override)
 
 def test_missing_picker_key_restores_to_default_not_blank():
     """A saved selection whose file is gone must leave the picker at its default, never blank it via
@@ -674,17 +445,18 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
     and the kind of observation as step 1 is applied; the bounds file, the model it came into use with and the prior as a
     prior's run returns it; the batches and the simulations per batch as a training starts, as the text of their boxes;
     the posterior as a training's run returns it; the mode, the cell file with its model or the recordings, and the
-    driven recordings as an inference starts; and at each of these moments the plan last used with the model and
-    when, blank with no plan in use. Nothing is written as a choice is made or a button is pressed before a run starts,
-    nor as a plan is filled; and closing writes the window's size and place and the groups of the pages not rebuilt yet,
-    never a key of the rebuilt steps nor of the plans."""
+    driven recordings as an inference starts; the observation, the batches and the simulations per batch as a narrowing
+    round starts, and its posterior as its run returns it; and at each of these moments the plan last used with the
+    model and when, blank with no plan in use. Nothing is written as a choice is made or a button is pressed before a run
+    starts, nor as a plan is filled; and closing writes the window's size and place and what Records keeps, never a key
+    of the steps nor of the plans."""
     from types import SimpleNamespace
     from PySide6.QtCore import QSettings
     from core import orchestrator
     from core.artifacts import ArtifactStore, default_store, use_store
     from core.gui import settings as st
     from core.gui.run.controller import controller
-    from tests._fixtures import _nad_cfg, _prior_artifact, build_run_host, build_window
+    from tests._fixtures import _nad_cfg, _prior_artifact, build_run_host, build_window, write_observation
     from tests._runs import Clock, StandIn, at, controller_on, running, turn_until
     app = qt_app()
     written = []
@@ -764,13 +536,34 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
                                            results={})))
         turn_until(app, lambda: not controller().is_live(), 10.0)
         assert at_the_moment() == [], "an inference's end wrote what it started with again"
+        narrowed = screen.tsnpe_panel
+        observed = write_observation(default_store(), screen.session.cfg, name="cell_b")
+        monkeypatch.setattr(ArtifactStore, "load_observation", lambda store, cfg, ref: SimpleNamespace(
+            kind="observation", id=ref, name="cell_b"))
+        window.go_to("inference", "narrowing")
+        narrowed.read_facts()
+        narrowed.obs_picker.restore_key(observed)
+        narrowed.names.name.setText("retrain_round1")
+        narrowed.form.rows["num_runs"].widget.setText("321")
+        narrowed.read_facts()
+        assert at_the_moment() == [], "the round's choices were written as they were made"
+        rounds = StandIn(word="Narrowing round")
+        monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+        narrowed._main_clicked()
+        assert rounds.started.wait(5), narrowed.foot.reason.text()
+        assert at_the_moment() == ["inference_tsnpe/num_runs", "inference_tsnpe/observation",
+                                   "inference_tsnpe/run_size_cap", *plans]
+        held = st.settings()
+        assert [held.value(f"inference_tsnpe/{key}") for key in ("observation", "num_runs", "run_size_cap")] == [
+            observed, "321", "0"], "the round's choices were not written as they started"
+        rounds.release(SimpleNamespace(kind="posterior", id="20261008T150000", name="retrain_round1", manifest=None))
+        turn_until(app, lambda: not controller().is_live(), 10.0)
+        assert at_the_moment() == ["inference_posterior/posterior", *plans]
         window._save_state()
         closing = at_the_moment()
         groups = {key.split("/")[0] for key in closing}
         assert "window/geometry" in closing
-        assert groups <= {"window", "layout", "inference_tsnpe", "artifacts"}, sorted(groups)
-        assert not groups & {"inference_config", "inference_prior", "inference_posterior", "inference_infer", "plans"}, (
-            closing)
+        assert groups <= {"window", "artifacts"}, sorted(groups)
 
 
 
@@ -1540,7 +1333,7 @@ def test_the_picks_read_step_ones_heading_where_the_plans_name_it(monkeypatch):
 
 
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
-    """On the Prior, Posterior, Validate and TSNPE pages (the Config tab is pinned the same way by
+    """On the Prior, Training, Checks and Narrowing round pages (the first step is pinned the same way by
     test_the_config_tab_science_knobs_open_at_config_and_are_not_written), every SCIENCE KNOB opens at
     config.py's value -- the truncate module's, for the HPD level and the direction count -- on EVERY
     launch, and its key is neither written nor read. A stale key an older build left in PRISM.ini is
@@ -1556,10 +1349,9 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     ran.
 
     Three legs: an empty file; a file holding every old key one step from config.py; a save after
-    every knob box was edited, which must write the selections and the budget and nothing else. The
-    Prior and Training pages hold their settings as rows of their forms, and write nothing at a save: what
-    they remember is written as it comes into use, so the old keys of their boxes and the keys of their rows
-    are both in the file, and neither is read.
+    every knob box was edited, which must write nothing. Every page holds its settings as rows of its form,
+    and writes nothing at a save: what it remembers is written as it comes into use, so the old keys of its
+    boxes and the keys of its rows are both in the file, and neither is read.
     """
     from PySide6.QtCore import QSettings
     from core import config
@@ -1585,7 +1377,7 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
         ("inference_validate", "validate_panel", {
             "cal_n": config.SBC_N_CAL, "cal_scales": config.CAL_N_SCALES}),
         ("inference_tsnpe", "tsnpe_panel", {
-            "hpd": _tr.DEFAULT_HPD, "n_dirs": _tr.DEFAULT_N_DIRECTIONS}),
+            "hpd_level": _tr.DEFAULT_HPD, "n_directions": _tr.DEFAULT_N_DIRECTIONS}),
     )
 
     def stale(default):
@@ -1626,6 +1418,8 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
         qs.setValue(f"inference_prior/{old}", "7")
     for old in ("flow_hidden", "flow_transforms", "flow_lr", "flow_patience"):
         qs.setValue(f"inference_posterior/{old}", "7")
+    for old in ("hpd", "n_dirs"):
+        qs.setValue(f"inference_tsnpe/{old}", "0.5")
     qs.setValue("inference_prior/bounds_source", "direct")
     qs.setValue("inference_prior/bounds", "stale_bounds.txt")
     qs.setValue("inference_posterior/num_runs", "1234")
@@ -1641,7 +1435,7 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     assert relaunched.prior_panel._kept_pick == ("", "stale_bounds.txt"), "the bounds file is a selection"
     assert relaunched.prior_panel.typed_tick.isChecked() is False
     assert relaunched.posterior_panel.form.rows["num_runs"].value() == 1234, "the Training budget is remembered"
-    assert relaunched.tsnpe_panel.num_runs.text() == "4321", "the TSNPE budget is remembered"
+    assert relaunched.tsnpe_panel.form.rows["num_runs"].value() == 4321, "the round's budget is remembered"
 
     # (c) nothing writes them: every knob box edited, the four panels saved into a file of their own
     for _group, attr, keys in knobs:
@@ -1652,35 +1446,28 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
                   relaunched.tsnpe_panel):
         panel.save_settings(out)
     out.sync()
-    expected = {"inference_prior": set(),
-                "inference_posterior": set(),
-                "inference_validate": set(),
-                "inference_tsnpe": {"observation", "num_runs", "run_size_cap"}}
+    expected = {"inference_prior": set(), "inference_posterior": set(), "inference_validate": set(),
+                "inference_tsnpe": set()}
     for group, keys in expected.items():
         out.beginGroup(group)
         written = set(out.childKeys())
         out.endGroup()
-        assert written == keys, f"[{group}] writes {sorted(written)}; the selections and budget are {sorted(keys)}"
+        assert written == keys, f"[{group}] writes {sorted(written)} at a save"
 
 
-def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
-    """The TSNPE tab's restore_settings was complete and NEVER CALLED: its __init__ was born
-    without the `self.restore_settings(settings.settings())` line every other panel ends with, and
-    nothing else calls it (MainWindow._save_state calls only save_settings). Every launch showed
-    config.py's budget and the store's first observation while PRISM.ini held the last session's,
-    and the tab's keys were dead writes.
+def test_the_round_restores_its_observation_and_budget_only(monkeypatch):
+    """The narrowing round puts back what the remembered table keeps of it, as a round started with them wrote it: the
+    observation, chosen in its list, and the batches and the simulations per batch, as their rows' values, each marked
+    kept from last time; nothing else. The region's level and its directions, and the network, are science settings and
+    open at their usual values, whatever an older build wrote under their keys. A budget that is no whole number is
+    passed over, and costs the observation nothing; with no observation remembered, none is chosen.
 
-    Now the tab restores its SELECTION (the observation) and its BUDGET (batches, rows-per-batch) and
-    nothing else: the HPD level and the direction count are science knobs and open at the truncate
-    module's defaults. The budget is saved as the boxes' TEXT, so a box left blank at close opens at
-    config.py's default; the old save wrote value(), which turns "" into a 0 nobody typed.
-
-    The last leg pins the defect class, not the instance: every panel with a restore_settings of its
-    own calls it from its own __init__.
-    """
+    The last leg pins the defect class, not the instance: every page with a restore_settings of its own calls it from
+    its own __init__."""
     import types
     from core import config
     from core.gui import settings as st
+    from core.gui.panels.inference import tsnpe_tab
     from core.gui.panels.inference.config_tab import ConfigPanel
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.panels.inference.posterior_tab import PosteriorPanel
@@ -1692,62 +1479,48 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
     from tests._fixtures import code_only, qt_app
 
     qt_app()
-    # Two complete observations, so a restored pick is distinguishable from the default first entry.
-    # The store is stubbed at the picker's one seam; each row carries exactly what refresh() reads.
-    rows = [types.SimpleNamespace(complete=True, finished=True, label=label, id=id_,
-                                  created="2026-09-16T12:00:00",
-                                  mode="spontaneous", width=50, amortized=None)
-            for label, id_ in (("first", "20260916T120000"), ("second", "20260916T130000"))]
-    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "observation" else [])
+    # Two complete observations, so a restored pick is told from none. The store is stubbed at the list's one seam;
+    # each row carries exactly what its refresh reads.
+    listed = [types.SimpleNamespace(complete=True, finished=True, label=label, id=id_, created="2026-09-16T12:00:00",
+                                    mode="spontaneous", width=50, amortized=None)
+              for label, id_ in (("first", "20260916T120000"), ("second", "20260916T130000"))]
+    store = types.SimpleNamespace(list=lambda kind: list(listed) if kind == "observation" else [])
     monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+    usual = {"hpd_level": _tr.DEFAULT_HPD, "n_directions": _tr.DEFAULT_N_DIRECTIONS,
+             "num_runs": config.TRAINING_NUM_RUNS, "run_size_cap": config.TRAINING_RUN_SIZE,
+             "hidden_features": config.NSF_HIDDEN_FEATURES, "num_transforms": config.NSF_NUM_TRANSFORMS}
 
-    defaults = {"hpd": str(_tr.DEFAULT_HPD), "n_dirs": str(_tr.DEFAULT_N_DIRECTIONS),
-                "num_runs": str(config.TRAINING_NUM_RUNS), "run_size_cap": str(config.TRAINING_RUN_SIZE)}
+    def values(page):
+        return {key: page.form.rows[key].value() for key in usual}
 
-    def boxes(panel):
-        return {"hpd": panel.hpd.text(), "n_dirs": panel.n_dirs.text(),
-                "num_runs": panel.num_runs.text(), "run_size_cap": panel.run_size_cap.text()}
+    # (a) an empty file: no observation chosen, every usual value. Each screen is HELD in a local: it owns its pages'
+    # objects, and a dropped screen takes its pages with it.
+    first = build_inference()
+    page = first.tsnpe_panel
+    assert page.obs_picker.key() == "" and values(page) == usual, (page.obs_picker.key(), values(page))
 
-    # (a) an empty file: the first observation and every default. Each screen is HELD in a local:
-    # it owns its panels' C++ objects, and a dropped screen takes its panels with it.
-    inf1 = build_inference()
-    tp = inf1.tsnpe_panel
-    assert tp.obs_picker.key() == "20260916T120000", tp.obs_picker.key()
-    assert boxes(tp) == defaults, boxes(tp)
-
-    # (b) one session picks the second observation and edits all four boxes; the next launch shows
-    # that observation and that budget, and the truncate module's defaults for the other two
-    tp.obs_picker.combo.setCurrentIndex(1)
-    tp.num_runs.setText("1234")
-    tp.run_size_cap.setText("512")
-    tp.hpd.setText("0.99")
-    tp.n_dirs.setText("3")
+    # (b) what a round wrote, beside what an older build wrote under the science settings' keys: the observation and the
+    # budget come back, kept from last time; the rest opens at its usual values
     qs = st.settings()
-    tp.save_settings(qs)
+    for key, value in ((tsnpe_tab.OBSERVATION_KEY, "20260916T130000"), (tsnpe_tab.NUM_RUNS_KEY, "1234"),
+                       (tsnpe_tab.RUN_SIZE_KEY, "512"), ("inference_tsnpe/hpd", "0.5"),
+                       ("inference_tsnpe/n_dirs", "3"), ("inference_tsnpe/hpd_level", "0.5")):
+        qs.setValue(key, value)
     qs.sync()
-    inf2 = build_inference()
-    again = inf2.tsnpe_panel
-    assert again.obs_picker.key() == "20260916T130000", "the observation is a selection: restored at construction"
-    assert (again.num_runs.text(), again.run_size_cap.text()) == ("1234", "512"), boxes(again)
-    assert "1,234 batches" in again.budget_total.text(), "the budget lines must follow the restored boxes"
-    assert (again.hpd.text(), again.n_dirs.text()) == (defaults["hpd"], defaults["n_dirs"]), \
-        f"the HPD level and the direction count are science knobs: {boxes(again)}"
+    second = build_inference()
+    again = second.tsnpe_panel
+    assert again.obs_picker.key() == "20260916T130000", "the observation is a selection: put back as the page is built"
+    assert values(again) == {**usual, "num_runs": 1234, "run_size_cap": 512}, values(again)
+    assert [again.form.rows[key].kept for key in ("observation", "num_runs", "run_size_cap", "hpd_level")] == [
+        True, True, True, False]
 
-    # (c) both budget boxes BLANK at close: saved as "", and the next launch opens at config.py
-    again.num_runs.setText("")
-    again.run_size_cap.setText("")
-    qs = st.settings()
-    again.save_settings(qs)
+    # (c) a budget that is no whole number: passed over, and the observation still comes back
+    for key in (tsnpe_tab.NUM_RUNS_KEY, tsnpe_tab.RUN_SIZE_KEY):
+        qs.setValue(key, "")
     qs.sync()
-    qs.beginGroup("inference_tsnpe")
-    raw = (str(qs.value("num_runs")), str(qs.value("run_size_cap")))
-    qs.endGroup()
-    assert raw == ("", ""), f"the budget must be saved as the boxes' text, not value()'s 0: {raw}"
-    inf3 = build_inference()
-    third = inf3.tsnpe_panel
-    assert (third.num_runs.text(), third.run_size_cap.text()) == \
-        (defaults["num_runs"], defaults["run_size_cap"]), boxes(third)
-    assert third.obs_picker.key() == "20260916T130000", "a blank budget must not cost the observation"
+    third = build_inference()
+    assert values(third.tsnpe_panel) == usual, values(third.tsnpe_panel)
+    assert third.tsnpe_panel.obs_picker.key() == "20260916T130000", "a blank budget must not cost the observation"
 
     # (d) the defect class: a restore_settings its own __init__ never calls is dead code
     call = "self.restore_settings(settings.settings())"
@@ -1757,18 +1530,19 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
                 f"{cls.__name__} defines restore_settings and its __init__ never calls it"
     assert "restore_settings" in vars(TSNPEPanel)
     assert "restore_settings" not in vars(ValidatePanel), \
-        "the Validate tab restores nothing, so it carries no restore_settings to forget to call"
+        "the Checks page restores nothing, so it carries no restore_settings to forget to call"
 
 
 def test_consents_are_never_persisted(tmp_path):
-    """A CONSENT is answered per run and never remembered. The TSNPE tab's "Start a new simulation even if a cache one
-    setting away exists" (the near-miss consent) opens at its construction default at every launch; the Inference page
-    holds no consent at all, so an answer an older page's tick wrote is read by nothing.
+    """A CONSENT is answered per run and never remembered. The narrowing round's consent to a new simulation set beside a
+    saved one a setting away is a question asked at the stage's refusal, and the Inference page holds no consent at all,
+    so an answer an older page's tick wrote is read by nothing.
 
-    Three legs: no save_settings or restore_settings names a consent; a save after the tick was flipped writes none,
-    and the Inference page writes nothing; an old PRISM.ini that holds both answers opens at the defaults.
-    """
+    Three legs: no restore_settings names a consent; neither page holds a tick of one, and a save writes nothing for
+    either; an old PRISM.ini that holds both answers opens the round, whose start hands no consent."""
+    import types
     from PySide6.QtCore import QSettings
+    from core import orchestrator
     from core.gui import settings as st
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
@@ -1777,35 +1551,30 @@ def test_consents_are_never_persisted(tmp_path):
     qt_app()
     # (a) the source: executable code only, so a comment explaining the rule cannot trip it
     for cls, names in ((TSNPEPanel, ("new_run",)), (InferPanel, ("other_obs", "accept"))):
-        for method in (cls.save_settings, cls.restore_settings):
-            src = code_only(method)
-            for name in names:
-                assert name not in src, f"{cls.__name__}.{method.__name__} names the consent {name}"
+        src = code_only(cls.restore_settings)
+        for name in names:
+            assert name not in src, f"{cls.__name__}.restore_settings names the consent {name}"
 
-    # (b) the tick flipped, then saved: its group is written, and no consent is in it; the Inference page writes nothing
+    # (b) no tick, and nothing written at a save
     inf = build_inference()
-    inf.tsnpe_panel.new_run.setChecked(True)
-    assert not hasattr(inf.infer_panel, "other_obs"), "the Inference page holds a consent of its own"
+    assert not hasattr(inf.tsnpe_panel, "new_run") and not hasattr(inf.infer_panel, "other_obs")
     out = QSettings(str(tmp_path / "saved.ini"), QSettings.IniFormat)
     for panel in (inf.tsnpe_panel, inf.infer_panel):
         panel.save_settings(out)
     out.sync()
-    out.beginGroup("inference_tsnpe")
-    written = set(out.childKeys())
-    out.endGroup()
-    assert written and "new_run" not in written, f"[inference_tsnpe] writes a consent: {sorted(written)}"
-    out.beginGroup("inference_infer")
-    assert out.childKeys() == [], "the Inference page writes at a save"
-    out.endGroup()
+    assert out.allKeys() == [], f"a page wrote at a save: {out.allKeys()}"
 
-    # (c) an old PRISM.ini holding both answers: a relaunch opens every box at its default
+    # (c) an old PRISM.ini holding both answers: the round's start hands no consent
     qs = st.settings()
     for key, value in (("inference_tsnpe/new_run", "1"), ("inference_infer/other_obs", "1")):
         qs.setValue(key, value)
     qs.sync()
-    inf2 = build_inference()
-    assert inf2.tsnpe_panel.new_run.isChecked() is False
-    assert not hasattr(inf2.infer_panel, "other_obs")
+    again = build_inference().tsnpe_panel
+    sent = []
+    again.dispatch = lambda fn, *args, **kwargs: (sent.append((fn, kwargs)), False)[1]
+    knobs = again._read_knobs()
+    again._start(object(), object(), object(), types.SimpleNamespace(id="o1", name="o1"), knobs, new_run=False)
+    assert sent and sent[-1][0] is orchestrator.tsnpe_round and sent[-1][1]["new_run"] is False, sent
 
 
 def test_get_bool_falls_back_on_an_unparseable_value():

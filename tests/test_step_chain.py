@@ -1134,9 +1134,9 @@ def test_each_store_kind_has_one_word():
     assert record_words.kind_word("fdt") == record_words.kind_word("crossval") == "record"
 
 
-# the main button of each step's page, by the step; a rebuilt page's is its foot's
+# the main button of each step's page, by the step: its foot's
 _MAIN = {"model": "foot.main_button", "prior": "foot.main_button", "training": "foot.main_button",
-         "checks": "foot.main_button", "infer": "foot.main_button", "narrowing": "btn_round"}
+         "checks": "foot.main_button", "infer": "foot.main_button", "narrowing": "foot.main_button"}
 
 
 def _main_button(panel, step):
@@ -1245,7 +1245,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
 
 def test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them(monkeypatch):
     """One run of the gates runs every step's own gate first, in the steps' order, and then says the six steps'
-    states once: the rules' own for the session, with the narrowing round's observation on offer as its list
+    states once: the rules' own for the session, with the narrowing round's observation on offer as its held reading
     says. The rail's rows read them, and Home, in sight, reads its next step from them at once."""
     from PySide6.QtCore import Qt
     from core.gui.session import SbiSession
@@ -1265,7 +1265,7 @@ def test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them(
         heard.clear()
         inference.refresh_gates()
         states = chain.step_states(inference.session, label=record_words.label_of,
-                                   observation_on_offer=inference.tsnpe_panel.obs_picker.has_entries())
+                                   observation_on_offer=inference.tsnpe_panel.observation_on_offer())
         assert heard == [step.key for step in keys.STEPS] + [states], heard
         assert inference.step_states() == states
         assert [rail.row(step.key).accessibleName() for step in keys.STEPS] == [state.spoken for state in states]

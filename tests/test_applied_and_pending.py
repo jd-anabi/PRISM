@@ -17,7 +17,7 @@ from tests._fixtures import build_inference, build_window, qt_app
 from tests._window_helpers import _apply, _line, _pick, _units_file
 
 #: The pages of Parameter inference built on the step page, by their files beside it.
-REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py", "validate_tab.py", "infer_tab.py")
+REBUILT = ("config_tab.py", "prior_tab.py", "posterior_tab.py", "validate_tab.py", "infer_tab.py", "tsnpe_tab.py")
 #: The files of a check's page, its form and its result, beside the Checks list's.
 CHECK_FILES = ("check_page.py", "check_results.py", "check_forms.py")
 #: What every step's "Before you start" says last while no plan is in use and every setting it reads is at its usual
@@ -418,7 +418,7 @@ def test_a_page_on_a_session_of_stand_ins_reads_unchanged_and_raises_nothing():
         page.refresh_local_gates()
         page.read_facts()
         assert screen.step_states() == chain.step_states(
-            session, observation_on_offer=screen.tsnpe_panel.obs_picker.has_entries(), label=record_words.label_of)
+            session, observation_on_offer=screen.tsnpe_panel.observation_on_offer(), label=record_words.label_of)
         assert page.in_use_words()[0] in ("unnamed", "Nadrowski")
 
 
@@ -3622,13 +3622,14 @@ def test_the_stop_and_end_of_a_posterior_load_say_what_is_true_of_the_page(tmp_p
 
 
 def _a_narrowing_round_brings(window, screen, narrowed, monkeypatch, *, heard=None):
-    """Run the narrowing round of step 6 from its own button, its stage a stand-in that returns the saved posterior
+    """Run the narrowing round of step 6 from its foot's button, its stage a stand-in that returns the saved posterior
     ``narrowed``, loaded as the round's stage hands its posterior back, and turn until its run has ended; ``heard`` is
     called each time the steps' states are worked out again while the run goes. The posterior returned."""
     from core import orchestrator
     from core.artifacts import Accept, default_store
     from core.gui.panels.inference import tsnpe_tab
     from core.gui.run.controller import controller
+    from tests._fixtures import write_observation
     from tests._runs import StandIn, turn_until
     app = qt_app()
     loaded = default_store().load_posterior(screen.session.cfg, narrowed, accept=Accept(truncated=True))
@@ -3638,10 +3639,15 @@ def _a_narrowing_round_brings(window, screen, narrowed, monkeypatch, *, heard=No
     monkeypatch.setattr(tsnpe_tab, "default_store",
                         lambda: SimpleNamespace(load_observation=lambda cfg, ref: observation))
     round_page = screen.tsnpe_panel
+    observed = write_observation(default_store(), screen.session.cfg)
     window.go_to("inference", "narrowing")
     screen.refresh_gates()
-    assert round_page.obs_picker.key() and round_page.btn_round.isEnabled()
-    round_page.btn_round.click()
+    round_page.read_facts()
+    round_page.obs_picker.restore_key(observed)
+    round_page.names.name.setText("retrain_round2")
+    round_page.read_facts()
+    assert round_page.obs_picker.key() and round_page.foot.main_button.isEnabled(), round_page.foot.reason.text()
+    round_page.foot.main_button.click()
     assert rounds.started.wait(5)
     if heard is not None:
         screen.states_changed.connect(heard)
@@ -4523,29 +4529,6 @@ def test_each_of_the_name_and_the_note_is_emptied_on_its_own_after_a_resume(tmp_
         resumed("p2")
         assert (stand_in.calls[-1][1]["name"], stand_in.calls[-1][1]["note"]) == ("retrain_3", "a third try")
         assert (page.names.name.text(), page.names.note.text()) == ("", "typed since")
-
-
-def test_the_narrowing_rounds_row_keeps_its_meaning(tmp_path, monkeypatch):
-    """The Narrowing round keeps its page of today: its row of the simulations per batch reads the label with what its 0
-    means, its budget lines say what they said, and its refusals name no box of the Training page's own four settings."""
-    from PySide6.QtWidgets import QLabel
-    from core.gui import fields
-    from core.refusals import Refusal
-    qt_app()
-    screen = build_inference()
-    page = screen.tsnpe_panel
-    labels = [label.text() for label in page.findChildren(QLabel)]
-    assert "Simulations per batch (0 = automatic)" in labels, labels
-    page.run_size_cap.setText("")
-    assert page.budget_total.text() == "Simulations per batch is blank."
-    for key in ("checkpoint_every", "resume", "max_num_epochs", "expected_epochs"):
-        assert fields.fix_sentence(key) == "", key
-        assert fields.fix_sentence(key, here="training") == f"Set it in '{fields.label(key)}' on this page.", key
-    shown = []
-    monkeypatch.setattr(page, "own_line", lambda text, level="info": shown.append(text))
-    monkeypatch.setattr("core.gui.panels.run_host.show_refusal", lambda host, exc: None)
-    page._refusal(Refusal("resume='require' needs checkpointing on.", field="resume"))
-    assert shown == ["resume='require' needs checkpointing on."], shown
 
 
 def test_a_taken_name_greys_the_start_as_it_is_typed(tmp_path, monkeypatch):
@@ -5543,3 +5526,154 @@ def test_an_inference_name_taken_meanwhile_empties_the_observations_name_and_say
             "Attention. The observation was saved as cell_b; give the inference another name."), (
             said.sentence.plain_text())
         assert page.names.name_value() == "retrain_inf"
+
+
+# ── the sixth step, the narrowing round ──
+@contextlib.contextmanager
+def _sixth_step(tmp_path, monkeypatch, *, narrowed=False, network=(256, 10)):
+    """The narrowing round in a whole window in sight, off the screen, on the test's own clock and store: the first step
+    applied; a real Nadrowski configuration of the master bounds file and a prior of it in use; two observations,
+    cell_a and cell_b, of other digests; a posterior trained with that prior at ``network`` held, narrowed around cell_a
+    with ``narrowed``; the observation loaded at the press a stand-in of the one chosen; the round's stage a stand-in
+    run; the page read: (window, screen, page, the stand-in run, the observations' ids by name)."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from tests._fixtures import _nad_cfg, _prior_artifact, write_observation
+    from tests._runs import StandIn
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        window, screen, first = _shown_first_step(tmp_path)
+        _apply(first)
+        cfg = _nad_cfg()
+        prior = default_store().load_prior(cfg, _prior_artifact(default_store(), cfg, name="retrain_prior").id)
+        made = {name: write_observation(default_store(), cfg, name=name, digest=mark * 16)
+                for name, mark in (("cell_a", "a"), ("cell_b", "b"))}
+        posterior = SimpleNamespace(
+            kind="posterior", id="20261003T031200", name="retrain_posterior",
+            manifest=SimpleNamespace(parents={"prior": prior.id, "observation": made["cell_a"] if narrowed else None},
+                                     body={"mode": cfg.observation_mode, "amortized": not narrowed,
+                                           "training": {"hidden_features": network[0], "num_transforms": network[1]}},
+                                     config={}, created="2026-10-03T03:12:00+00:00"),
+            posterior=SimpleNamespace(x_obs_digest="a" * 16 if narrowed else None, truncation=None))
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=prior, posterior=posterior)
+        screen.refresh_gates()
+        window.go_to("inference", "narrowing")
+        page = screen.tsnpe_panel
+        run = StandIn(word="Narrowing round")
+        monkeypatch.setattr(orchestrator, "tsnpe_round", run)
+        monkeypatch.setattr(ArtifactStore, "load_observation", lambda store, cfg, ref: SimpleNamespace(
+            kind="observation", id=ref, name=store.get("observation", ref).name))
+        page.read_facts()
+        yield window, screen, page, run, made
+
+
+def _ready_round(page, made, name="retrain_round1", observation="cell_a") -> None:
+    page.obs_picker.restore_key(made[observation])
+    page.names.name.setText(name)
+    page.read_facts()
+
+
+def _round_ends(run, payload=None) -> None:
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    run.release(payload if payload is not None else _round_posterior())
+    turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+
+
+def _round_posterior(acceptance=0.12, ident="20261113T160000"):
+    """What a round around cell_a returns, as a stand-in that says what the pages read of a posterior from a narrowing
+    round."""
+    return SimpleNamespace(kind="posterior", id=ident, name="retrain_round1",
+                           manifest=SimpleNamespace(parents={}, body={"amortized": False, "training": {
+                               "tsnpe_acceptance": acceptance}}, config={}, created="2026-11-13T16:00:00+00:00"),
+                           posterior=SimpleNamespace(x_obs_digest="a" * 16, truncation=None))
+
+
+def test_the_round_passes_the_network_it_shows(tmp_path, monkeypatch):
+    """The round hands its stage the network the page shows, the width and the depth always, at their usual values as
+    typed ones, so that what is on the page is what trains; and the region's level and directions, the budget and the
+    fit's settings, each as an argument; the epoch limit only when one is typed."""
+    from tests._runs import turn_until
+    with _sixth_step(tmp_path, monkeypatch) as (_window, _screen, page, run, made):
+        _ready_round(page, made)
+        page._main_clicked()
+        assert run.started.wait(5), page.foot.reason.text()
+        args, kwargs = run.calls[-1]
+        assert args[3].id == made["cell_a"], args
+        handed = {key: kwargs.get(key) for key in ("hidden_features", "num_transforms", "level", "n_directions",
+                                                   "num_runs", "run_size_cap", "learning_rate", "stop_after_epochs",
+                                                   "checkpoint_every", "resume", "new_run", "if_name_taken", "name")}
+        assert handed == {"hidden_features": 128, "num_transforms": 8, "level": 0.999, "n_directions": 5,
+                          "num_runs": 5000, "run_size_cap": 0, "learning_rate": 0.001, "stop_after_epochs": 20,
+                          "checkpoint_every": 50, "resume": "auto", "new_run": False, "if_name_taken": "unnamed",
+                          "name": "retrain_round1"}, handed
+        assert "max_num_epochs" not in kwargs
+        _round_ends(run)
+        page.form.rows["hidden_features"].widget.setText("64")
+        page.form.rows["num_transforms"].widget.setText("4")
+        page.form.rows["max_num_epochs"].widget.set_value(30)
+        page.names.name.setText("retrain_round2")
+        count = len(run.calls)
+        page._main_clicked()
+        turn_until(qt_app(), lambda: len(run.calls) > count, 5.0)
+        _args, kwargs = run.calls[-1]
+        assert (kwargs["hidden_features"], kwargs["num_transforms"], kwargs["max_num_epochs"]) == (64, 4, 30)
+        _round_ends(run)
+
+
+def test_the_network_of_the_posterior_in_use_is_said_and_marked_when_it_differs(tmp_path, monkeypatch):
+    """Under the network: the posterior in use's own, from its record, and marked "Attention." under the depth while the
+    round trains another."""
+    with _sixth_step(tmp_path, monkeypatch, network=(256, 10)) as (_window, _screen, page, _run, _made):
+        page.redraw()
+        line = page.form.rows["num_transforms"].line
+        assert (line.kind, line.words) == ("warn", "The posterior in use was trained at 256 by 10; this round trains "
+                                                   "128 by 8."), (line.kind, line.words)
+        page.form.rows["hidden_features"].widget.setText("256")
+        page.form.rows["num_transforms"].widget.setText("10")
+        page.redraw()
+        assert not page.form.rows["num_transforms"].line.says()
+        assert page.network_line.plain_text() == "The posterior in use was trained at 256 by 10."
+
+
+def test_a_region_level_below_the_engines_warning_is_said_before_the_run(tmp_path, monkeypatch):
+    """A region level below the engine's warning is said under it before the run, and greys nothing: narrowing that
+    tight removes part of the prior for good. The page's threshold is the engine's default less its margin."""
+    from core.gui.step_facts import REGION_WARN_BELOW
+    from core.SBI import truncate
+    assert REGION_WARN_BELOW == round(truncate.DEFAULT_HPD - 0.009, 6)
+    with _sixth_step(tmp_path, monkeypatch) as (_window, _screen, page, _run, made):
+        _ready_round(page, made)
+        row = page.form.rows["hpd_level"]
+        row.widget.setText("0.95")
+        page.redraw()
+        assert (row.line.kind, row.line.words) == ("warn", "Tighter than 0.99. Narrowing removes part of the prior for "
+                                                           "good; no later round gets it back.")
+        assert page.foot.main_button.isEnabled(), page.foot.reason.text()
+        row.widget.setText("0.995")
+        page.redraw()
+        assert not row.line.says()
+
+
+def test_the_rounds_shared_rows_read_as_trainings_and_are_held_to_the_same_rules(tmp_path, monkeypatch):
+    """The eight settings a round shares with a training are named as the Training page names them and held to the same
+    rules, from the one table both pages read: a value out of rule says the same line under its row on both pages."""
+    from core.gui.panels.inference.posterior_tab import PosteriorPanel
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+    from core.gui.step_facts import FIT_RULES
+    from tests._fixtures import code_only
+    shared = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate", "stop_after_epochs",
+              "max_num_epochs", "checkpoint_every")
+    assert set(shared) <= set(FIT_RULES)
+    assert "fit_row_problem" in code_only(PosteriorPanel._row_problem) and "fit_row_problem" in code_only(
+        TSNPEPanel.problems)
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, _made):
+        training = screen.posterior_panel
+        for key in shared:
+            for one in (page, training):
+                widget = one.form.rows[key].widget
+                if hasattr(widget, "ticked_box"):
+                    widget.ticked_box.setChecked(False)
+                (widget.field if hasattr(widget, "field") else widget).setText("-1" if key != "learning_rate" else "0")
+                one.redraw()
+            lines = [(one.form.rows[key].label_text(), one.form.rows[key].line.words) for one in (page, training)]
+            assert lines[0] == lines[1] and lines[0][1], (key, lines)

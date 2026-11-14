@@ -24,9 +24,8 @@ Three shapes of entry:
 * ``None`` for a key the window has no control for: the device, which the window never exposes, and the
   settings of the checks that no check's form offers.
 
-Four settings stand only on the Training page, for its own run: the checkpoint cadence, the resume
-policy, the epoch limit and the expected epochs. A page of the old kind, whose run reads none of them
-from a box, names no box for them (``ON_TRAINING_ALONE``).
+Two settings stand only on the Training page, for its own run: the resume policy and the expected epochs; with no
+step named, no box is named for them (``ON_TRAINING_ALONE``).
 
 A saved simulation set that a training would not continue is told by what it differs in, each entry of its identity
 by its name on screen (``IDENTITY_ROWS``, ``difference_lines``): a list compared entry by entry, each limit by its
@@ -36,8 +35,7 @@ A place is written in the words the rail's places are written in (``keys.place_w
 are joined as ``keys.places_words`` joins them, so a place is named in one table and its joining is
 written in one place. ``num_runs`` and ``run_size_cap`` sit in training, in the narrowing round and on
 a check's form with the same label, so their place is a tuple of every one and the sentence names each:
-one place would send a user refused in the narrowing round to training. The narrowing round's row of the second reads
-"(0 = automatic)" after the label, where the Training page has its tick "Automatic". The three drive keys
+one place would send a user refused in the narrowing round to training. The three drive keys
 are static strings built exactly as the Inference page builds its drive's rows (``labels.gui_forcing_label``
 with ``config.FORCING_DISPLAY_UNITS``); the page makes a row for each forcing name of the configuration
 in use, so a model with an ``amp_y`` or ``offset`` drive shows rows this table does not name.
@@ -71,16 +69,16 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "t_obs": (("checks", "infer"), "Recording length"),
     "num_runs": (("training", "checks", "narrowing"), "Batches"),
     "run_size_cap": (("training", "checks", "narrowing"), "Simulations per batch"),
-    "checkpoint_every": ("training", "Save the simulations every … batches"),
+    "checkpoint_every": (("training", "narrowing"), "Save the simulations every … batches"),
     "resume": ("training", "Continue or start new"),
     "new_run": (f"Answer 'Start training on a new simulation set' in the question 'Start training' asks "
-                f"{_in('training')}, or tick 'Start a new simulation even if a cache one setting away exists' "
-                f"{_in('narrowing')}."),
+                f"{_in('training')}, or 'Start the narrowing round' in the question that 'Start the narrowing round' "
+                f"asks {_in('narrowing')}."),
     # the kept training to resume: the Training step lists every kept training with its Resume
     "resume_fit": f"Look at the kept trainings {_in('training')}.",
     # the narrowing round
-    "n_directions": ("narrowing", "Directions truncated"),
-    "hpd_level": ("narrowing", "HPD level"),
+    "n_directions": ("narrowing", "Directions narrowed"),
+    "hpd_level": ("narrowing", "Region level"),
     "observation": ("narrowing", "Observation"),
     # calibration and inference sizes
     "n_cal": ("checks", "Test datasets"),
@@ -96,11 +94,11 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "min_cluster_size": ("prior", "Smallest cluster"),
     "min_samples": ("prior", "Cluster density"),
     # the flow and the Fisher rotation
-    "hidden_features": (("training", "checks"), "Network width"),
-    "num_transforms": (("training", "checks"), "Network depth"),
-    "learning_rate": ("training", "Learning rate"),
-    "stop_after_epochs": ("training", "End the fit after … epochs without improvement"),
-    "max_num_epochs": ("training", "Epoch limit"),
+    "hidden_features": (("training", "checks", "narrowing"), "Network width"),
+    "num_transforms": (("training", "checks", "narrowing"), "Network depth"),
+    "learning_rate": (("training", "narrowing"), "Learning rate"),
+    "stop_after_epochs": (("training", "narrowing"), "End the fit after … epochs without improvement"),
+    "max_num_epochs": (("training", "narrowing"), "Epoch limit"),
     "fisher_m": ("training", "Rotation: simulations per perturbation"),
     "fisher_dz": ("training", "Rotation: step"),
     "fisher_points": ("training", "Rotation: parameter sets averaged"),
@@ -189,9 +187,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
 }
 
 
-#: The settings that stand on the Training page alone, for its own run: a page of the old kind names no box for them,
-#: since its run reads none of them from one.
-ON_TRAINING_ALONE = frozenset({"checkpoint_every", "resume", "max_num_epochs", "expected_epochs"})
+#: The settings that stand on the Training page alone, for its own run: with no step named, no box is named for them.
+ON_TRAINING_ALONE = frozenset({"resume", "expected_epochs"})
 
 #: What a page of the look says where the table's own sentence lists every old page's box.
 ON_THIS_PAGE: dict[str, str] = {
@@ -202,6 +199,10 @@ ON_THIS_PAGE: dict[str, str] = {
     "note": "Change it in 'Note' on this page.",
     "accept_other_observation": "Answer the question that the start button asks on this page.",
 }
+#: The steps whose own question a sentence of ``ON_THIS_PAGE`` answers: on another page the table's sentence, which names
+#: the step, is said. A key not listed is answered on every page that names it.
+ASKED_ON = {"new_run": ("training", "narrowing"), "accept_truncated": ("training",),
+            "accept_other_observation": ("infer",)}
 
 
 #: A saved simulation set's identity as a person reads it, row by row: the entries a row folds into its one line, what
@@ -390,7 +391,8 @@ def fix_sentence(key: str | None, here: str | None = None) -> str:
     ``here`` is the place a page of the look stands on, a step or a part, whose rows are named without the word for a
     box: ``"Set it in 'Batches' on this page."`` when the row stands there, and else
     ``"Set it in 'Batches' in step 3, Training, or step 6, Narrowing round."``; a sentence entry says what
-    ``ON_THIS_PAGE`` gives for it, when it gives anything. With no ``here`` a page not rebuilt yet keeps its own
+    ``ON_THIS_PAGE`` gives for it, when it gives anything and the page is one ``ASKED_ON`` names for it, else the
+    table's own. With no ``here`` a page not rebuilt yet keeps its own
     words, and names no box of ``ON_TRAINING_ALONE``."""
     if key is None or (here is None and key in ON_TRAINING_ALONE):
         return ""
@@ -401,6 +403,6 @@ def fix_sentence(key: str | None, here: str | None = None) -> str:
             return f"Set it in the '{text}' box {_in(place)}."
         return f"Set it in '{text}' " + ("on this page." if here in (place if isinstance(place, tuple) else (place,))
                                          else f"{_in(place)}.")
-    if here is not None and key in ON_THIS_PAGE:
+    if here is not None and key in ON_THIS_PAGE and here in ASKED_ON.get(key, (here,)):
         return ON_THIS_PAGE[key]
     return entry or ""

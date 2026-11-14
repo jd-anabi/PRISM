@@ -19,10 +19,10 @@ HELP = {
             "simulate.",
     "prior": "Load a saved prior from the store, or choose “(from scratch)” to construct a new "
              "stability-screened parameter prior.",
-    "tsnpe_obs": "The observation to refine around. Written by the Infer tab at INFERENCE time -- "
-                 "an amortized posterior has none when it is SAVED, which is why there is a picker "
-                 "here rather than an automatic choice. The round refuses unless the stored "
-                 "observation is bitwise the one currently loaded.",
+    "tsnpe_obs": "The observation to narrow around. An inference in step 5 makes one -- an amortized "
+                 "posterior has none when it is SAVED, which is why there is a list here rather than an "
+                 "automatic choice. A posterior already narrowed takes only the observation it was "
+                 "narrowed around.",
     "tsnpe_hpd": "How much of the posterior's credible mass the truncated region must contain. "
                  "0.999 by default and deliberately generous: truncation permanently deletes prior "
                  "support, and no later round can recover it. A region that is too WIDE only costs "
@@ -35,11 +35,6 @@ HELP = {
                   "them), on noise rather than on information. A direction whose t_scale loading is "
                   "above 1/√d, d being the latent width (the number of inferred parameters), is "
                   "skipped and the next one taken.",
-    "tsnpe_new_run": "Tick this only after a round has been REFUSED for starting a new simulation "
-                     "cache while a committed one sits exactly one setting away. The refusal names the "
-                     "setting and both values: if you meant to continue that cache, change the setting "
-                     "back instead. Ticking it starts a new cache from zero and the box clears itself "
-                     "afterwards, so the next round is protected again.",
     "sweep_iters": "GLOBAL sweep rounds. Total candidates screened for stability = rounds x "
                    "candidates-per-round, so this is the coverage of the broad Sobol census that "
                    "SEEDS the local flood-fill. The sweep is ITERATION-bounded, which is why the "

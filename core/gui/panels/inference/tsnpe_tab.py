@@ -1,251 +1,618 @@
+"""Step 6, Narrowing round: a second posterior trained for one observation only. The prior is cut down to the region the
+posterior in use finds believable for that observation, and training is repeated there: the proposal is the prior
+restricted to that region, never the posterior. The result is valid only near that observation.
+
+The step holds nothing of its own: a round's posterior comes into use in step 3, through the screen's one way in, once
+its run returns it, and the posterior it came from stays in Records. The form holds the observation the round is drawn
+around, the region's level and how many directions it narrows, the budget of the round's simulations, the network and,
+folded, the fit's settings: each passed to the round as an argument, the network always, so that what is on the page
+is what trains. Their rules are a training's own, read from the one table both pages read.
+
+The list of observations holds the observations of the configuration's kind of observation and width; with a posterior
+in use that was narrowed around one observation, those it cannot be used on are listed greyed. An observation an
+inference makes is chosen in the list once that run has ended, the line under it saying what it replaced. Nothing is
+read while a run is live: the observations' records, the run history and the kept sets are read by the page's reading
+alone. The observation chosen and the budget are remembered once a round has started with them.
+"""
+import json
+import math
 import traceback
+from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QGroupBox, QLabel, QPushButton, QVBoxLayout)
 
 from core import config, orchestrator
 from core.artifacts import default_store
+from core.artifacts.store import MANIFEST
 from core.refusals import Refusal, require_at_least, require_between
+from core.SBI import truncate
 
-from ... import check_lineage, icons, record_words, settings
-from ...fields import label
+from ... import check_lineage, record_words, settings
+from ...memory_limit import computer, limit_words, memory_limit_in_force
+from ...remembered import put_many
+from ...run import ends, history
+from ...run.controller import controller
+from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, CHANGED_TO_TEXT, CHECK_THIS_WORDS,
+                           DIRECTIONS_TEXT, FIT_RULES, NETWORK_DIFFERS_TEXT, NETWORK_HELD_TEXT, NEW_SET_ROUND_TEXT,
+                           NEW_SET_ROUND_TITLE, NO_OBSERVATION_WORDS, NO_PRIOR_WORDS, REGION_TEXT, REGION_WARN_BELOW,
+                           ROTATION_REUSED_TEXT, ROUND_CAME_FROM_TEXT, ROUND_IN_USE_TEXT, ROUND_KEPT_TEXT,
+                           ROUND_START_WORDS, SAME_OBSERVATION_WORDS, Fact, fit_row_problem, pressed_reading,
+                           round_facts, round_how_long, round_uses)
 from ...widgets.artifact_picker import StorePicker
-from ...widgets.forms import make_form
-from ...widgets.help_badge import add_help_row, with_badge
-from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .base import _StagePanel, _TrainingBudgetMixin, training_spec
+from ...widgets.ask import ask
+from ...widgets.form import NameAndNote, TickedField
+from ...widgets.labeled_inputs import FloatField, IntField
+from ...widgets.result_region import NextStep
+from .base import training_spec
 from .help_text import HELP
+from .step_page import StepPage
 
+TITLE = "Narrowing round"
+SENTENCE = ("Trains a second posterior for one observation only: the prior is cut down to the region the posterior in "
+            "use finds believable for that observation, and training is repeated there (truncated sequential neural "
+            "posterior estimation, TSNPE). The result is valid only near that observation.")
+CHOOSE_OBSERVATION = "Choose an observation"
+STOP_WORDS = "Stop the narrowing round…"
+EPOCHS = "epochs"
+#: The words beside the main button while a field breaks its rule.
+SETTING_BLOCKS = "a setting cannot be used"
+#: What the settings file keeps of a round, written once a round has started with them.
+OBSERVATION_KEY = "inference_tsnpe/observation"
+NUM_RUNS_KEY = "inference_tsnpe/num_runs"
+RUN_SIZE_KEY = "inference_tsnpe/run_size_cap"
+#: The fit's settings a round reads, a training's own and under its rules, in the order the stage checks them.
+_FIT = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learning_rate", "stop_after_epochs",
+        "max_num_epochs", "checkpoint_every")
 # Where the window shows this step's runs: Parameter inference, its step Narrowing round.
 _PLACE = ("inference", "narrowing")
 
 
-# ── 6. TSNPE (truncated sequential NPE) ───────────────────────────────────────
-class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
-    """Tab 6. Refines the current posterior on ONE observation, without giving up the amortized one.
+def observation_digests(store) -> dict:
+    """Each observation's id and the digest its record holds, its manifest read once by its folder: a counted reading,
+    made by the page's reading alone. An observation whose record cannot be read is left out."""
+    found = {}
+    try:
+        listed = store.list("observation")
+    except Exception:                        # noqa: BLE001 -- a store that cannot be read gives nothing
+        return found
+    for summary in listed:
+        try:
+            manifest = json.loads((Path(summary.path) / MANIFEST).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        body = manifest.get("body") if isinstance(manifest, dict) else None
+        digest = body.get("x_obs_digest") if isinstance(body, dict) else None
+        if isinstance(digest, str) and digest:
+            found[str(summary.id)] = digest
+    return found
 
-    ⚠⚠ WHAT THIS TAB MUST NOT BECOME. TSNPE proposes from the PRIOR RESTRICTED to an HPD region. It
-    does NOT propose from the posterior. Fitting a density to the posterior and proposing from that
-    gives ``p_L ∝ L^(L+1) q`` -- tempering -- and credible intervals then contract as
-    ``(L+1)^(-1/2)`` with NO new information entering. SBC comes out flat anyway, because it validates
-    the flow against the proposal it was trained on, so nothing on the Validate tab would catch it.
-    The rule lives in ``core/SBI/truncate.py`` and is pinned by ``tests/test_conditioning_repair.py``.
 
-    Gated on a posterior, the prior it was trained against, AND a persisted observation.
-    An amortized posterior has no observation at SAVE time (its ``default_x`` is None), so the Infer
-    tab records one at INFERENCE time and this tab keys on that.
+def _plain(value):
+    """``value`` as a run's history holds it: a name, a number, a truth value or nothing as it is; a list of them as a
+    list; anything else by its words."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(one) for one in value]
+    return str(value)
 
-    The budget group is the Posterior tab's, through ``_TrainingBudgetMixin``: a round is a simulation
-    campaign, not a click, and the number belongs on screen before the button.
 
-    Persists (group "inference_tsnpe"): the observation and the two budget fields. The HPD level and
-    the direction count open at ``truncate.DEFAULT_HPD`` and ``DEFAULT_N_DIRECTIONS`` on every
-    launch, and the new-simulation box is a per-round consent that is never persisted.
-    """
+def _whole(value) -> "int | None":
+    try:
+        return int(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
+class TSNPEPanel(StepPage):
+    """Step 6. The form's rows are read by their field keys; ``obs_picker`` lists the observations. The page reads what
+    the checks need at its own readings, as the Training page does, so the screen does not read them again while it is
+    in sight."""
+
+    #: Whether the page's reading reads what the checks need, which the screen then leaves to it while it is in sight.
+    reads_the_checks = True
 
     def __init__(self, screen, parent=None):
-        super().__init__(screen, parent)
-        from core.SBI import truncate as _tr
-
-        box = QGroupBox("TSNPE round")
-        v = QVBoxLayout(box)
-        warn = QLabel("Restricts the PRIOR to the posterior's credible region and retrains there. It "
-                      "never proposes from the posterior itself. The result is NON-AMORTIZED and is "
-                      "marked as such in its manifest: loading it later asks first, and Infer refuses "
-                      "any other observation unless 'Run on a different observation' is ticked.")
-        warn.setWordWrap(True)
-        warn.setTextFormat(Qt.PlainText)
-        v.addWidget(warn)
-
-        form = make_form()
-        self.obs_picker = StorePicker("observation")
-        add_help_row(form, label("observation"), self.obs_picker, HELP["tsnpe_obs"])
-        # The observation's own mode and conditioning width, beneath the combo. This is the one
-        # picker whose selection is loaded on the GUI thread and checked against the session's config
-        # (_round), so seeing the geometry before the click is what turns that refusal into a
-        # non-event.
-        self.obs_line = self._derived_label()
-        form.addRow("", self.obs_line)
-        self.obs_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_obs_line())
-        self._sync_obs_line()
-        self.hpd = FloatField(str(_tr.DEFAULT_HPD))
-        self.n_dirs = IntField(str(_tr.DEFAULT_N_DIRECTIONS))
-        add_help_row(form, label("hpd_level"), self.hpd, HELP["tsnpe_hpd"])
-        add_help_row(form, label("n_directions"), self.n_dirs, HELP["tsnpe_dirs"])
-        v.addLayout(form)
-
-        self.btn_round = QPushButton("Run TSNPE round")
-        self.btn_round.setProperty("accent", True)         # primary CTA (Fluent accent)
-        self.btn_round.clicked.connect(self._round)
-        v.addWidget(self.btn_round)
-        self.controls_layout.addWidget(box)
-
-        # The SAME budget group the Posterior tab shows, and the same code behind it.
-        budget = QGroupBox("Simulation budget for this round")
-        bv = QVBoxLayout(budget)
-        bform = make_form()
-        self.num_runs = IntField(str(config.TRAINING_NUM_RUNS))
-        self.run_size_cap = IntField(str(config.TRAINING_RUN_SIZE))
-        add_help_row(bform, label("num_runs"), self.num_runs, HELP["num_runs"])
-        # The row's label says the zero its box takes for automatic, which the Training page says with a tick.
-        add_help_row(bform, label("run_size_cap") + " (0 = automatic)", self.run_size_cap, HELP["run_size"])
-        bv.addLayout(bform)
-        self.budget_total = self._derived_label()
-        self.budget_mem = self._derived_label()
-        self.budget_ckpt = self._derived_label()
-        for lab in (self.budget_total, self.budget_mem, self.budget_ckpt):
-            bv.addWidget(lab)
-        for fld in (self.num_runs, self.run_size_cap):
-            fld.textChanged.connect(lambda _t: self._sync_budget())
-        # The near-miss consent, per run and never persisted: a cache one setting away is refused
-        # before any simulation unless the operator asks for a new run. It is needed on THIS tab
-        # because a near miss fires for rounds too -- a 2-batch test round and a 5000-batch round on
-        # the same parent differ only in the batch count -- and the region is drawn inside the
-        # worker, so an up-front dialog like the Posterior tab's is impossible: the refusal arrives
-        # from the stage, seconds in, and this is how the user answers it.
-        self.new_run = QCheckBox("Start a new simulation even if a cache one setting away exists")
-        bv.addWidget(with_badge(self.new_run, HELP["tsnpe_new_run"]))
-        self.controls_layout.addWidget(budget)
-        self._sync_budget()
-        # LAST, like every other panel's __init__ (BasePanel.restore_settings): the budget boxes'
-        # textChanged is wired above, so a restored budget redraws the three lines, and the picker
-        # listed the store at construction, so a saved observation id resolves. This line was missing
-        # from the tab's first commit: every launch showed config.py's budget and the first
-        # observation while PRISM.ini held the last session's.
+        super().__init__(screen, TITLE, SENTENCE, step="narrowing", parent=parent)
+        self._digests: dict = {}             # each observation's digest, as the last reading read them
+        self._digests_read = False           # whether the last reading read them (a narrowed posterior in use)
+        self._preview = None                 # the training preview at the budget, as the last reading made it
+        self._per_epoch = None               # the run history's pace of a round's epoch at this size
+        self._expected = None                # the epochs the last narrowing round of this kind ran, and its words
+        self._last = self._measured = None   # the last run on this computer, and the last that measured its batches
+        self._history_read = False
+        self._trained_with = ""              # the label of the prior the posterior in use was trained with
+        self._followed = None                # the observation in use the list last moved to, by its id
+        self._changed = ""                   # what the line under the list says of an observation it was moved to
+        self._remembered = ""                # the observation the last round started with
+        self._made = None                    # the posterior a round of this page returned, until its run has ended
+        self._handed = None                  # the parent posterior and the observation the last round was handed
+        self._call = None                    # what the last round was dispatched with, for its start again
+        self._bodies: dict = {}              # the body of the observation chosen at the last reading, by its id
+        self.obs_picker = StorePicker("observation", parent=self, keeps_selection=True, hint=CHOOSE_OBSERVATION,
+                                      row_filter=self._of_this_kind)
+        form = self.form
+        form.add("observation", self.obs_picker.combo, help_text=HELP["tsnpe_obs"])
+        form.add("hpd_level", FloatField(truncate.DEFAULT_HPD), usual=truncate.DEFAULT_HPD, help_text=HELP["tsnpe_hpd"])
+        form.add("n_directions", IntField(truncate.DEFAULT_N_DIRECTIONS, grouped=True),
+                 usual=truncate.DEFAULT_N_DIRECTIONS, help_text=HELP["tsnpe_dirs"])
+        form.add("num_runs", IntField(config.TRAINING_NUM_RUNS, grouped=True), usual=config.TRAINING_NUM_RUNS,
+                 help_text=HELP["num_runs"])
+        form.add("run_size_cap", TickedField(IntField(config.TRAINING_RUN_SIZE, grouped=True), "Automatic", 0),
+                 usual=config.TRAINING_RUN_SIZE, help_text=HELP["run_size"])
+        form.add("hidden_features", IntField(config.NSF_HIDDEN_FEATURES, grouped=True),
+                 usual=config.NSF_HIDDEN_FEATURES, help_text=HELP["flow_hidden"])
+        form.add("num_transforms", IntField(config.NSF_NUM_TRANSFORMS, grouped=True), usual=config.NSF_NUM_TRANSFORMS,
+                 help_text=HELP["flow_transforms"])
+        self.network_line = form.add_sentence("", under="num_transforms")
+        self.network_line.setVisible(False)
+        form.add("learning_rate", FloatField(config.TRAINING_LEARNING_RATE), usual=config.TRAINING_LEARNING_RATE,
+                 folded=True, help_text=HELP["flow_lr"])
+        form.add("stop_after_epochs", IntField(config.TRAINING_STOP_AFTER_EPOCHS, grouped=True),
+                 usual=config.TRAINING_STOP_AFTER_EPOCHS, folded=True, help_text=HELP["flow_patience"])
+        form.add("max_num_epochs", TickedField(IntField(None, grouped=True), "No limit", None), EPOCHS, usual=None,
+                 folded=True)
+        form.add("checkpoint_every", TickedField(IntField(config.TRAINING_CHECKPOINT_EVERY, grouped=True), "Never", 0),
+                 usual=config.TRAINING_CHECKPOINT_EVERY, folded=True)
+        self.rotation_row = form.add_text("rotation", ROTATION_REUSED_TEXT, "")
+        self._names = NameAndNote("posterior", required=True)
+        self.use_names(self._names)
         self.restore_settings(settings.settings())
+        self.refresh_local_gates()
 
-    def _read_inputs(self) -> dict:
-        """Every box a round reads, through the shared rules, or the first Refusal.
+    # ── what is in use ──
+    def _held(self) -> tuple:
+        """The configuration, the prior and the posterior in use, each None when none is held."""
+        session = getattr(self._screen, "session", None)
+        return (getattr(session, "cfg", None), getattr(session, "inf_prior", None),
+                getattr(session, "posterior", None))
 
-        A blank box is a refusal, never a zero: FloatField.value() handed a blank HPD to the stage as
-        0.0 and IntField.value() a blank direction box as 0, and the stage refused each with a
-        sentence naming neither the box nor the default. The batch count was clamped to 1 and a blank
-        rows-per-batch became a 0 nobody typed; rows-per-batch accepts a TYPED 0 (= automatic) and
-        nothing blank. The latent-width ceiling on the direction count is the stage's: it needs the
-        posterior, and the click does not have its width.
-        """
-        n_runs, cap = self._budget_values()
-        return {
-            "n_directions": require_at_least("n_directions", self.n_dirs.value_or_none(), 1),
-            "hpd_level": require_between("hpd_level", self.hpd.value_or_none(), 0.0, 1.0,
-                                         open_lo=True, open_hi=True),
-            "num_runs": require_at_least("num_runs", n_runs, 1),
-            "run_size_cap": require_at_least("run_size_cap", cap, 0),
-        }
+    def _narrowed_digest(self) -> "str | None":
+        """The digest of the observation the posterior in use was narrowed around; None for one that was not."""
+        return getattr(getattr(self._held()[2], "posterior", None), "x_obs_digest", None)
 
-    def _round(self):
-        s = self.session
-        if s.posterior is None or s.inf_prior is None or not self.obs_picker.key():
-            return
-        # The boxes first, before the observation is re-hashed: a refused box costs nothing. The stage
-        # runs the same rules again at entry and adds the one check only it can make, the direction
-        # count against the latent width -- this tab has no posterior width to measure it against.
+    def _of_this_kind(self, summary) -> bool:
+        """Whether the observation ``summary`` is of the configuration's kind of observation and width: only those can be
+        used with it. With no configuration in use every observation is listed."""
+        cfg = self._held()[0]
+        if cfg is None:
+            return True
+        mode = getattr(cfg, "observation_mode", None)
+        if mode is not None and getattr(summary, "mode", None) not in (None, mode):
+            return False
         try:
-            v = self._read_inputs()
-        except Refusal as e:
-            self._refusal(e)
+            from core.artifacts.manifest import conditioning_block
+            width = int(conditioning_block(cfg)["width"])
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its width lists by kind
+            return True
+        held = getattr(summary, "width", None)
+        return held in (None, 0) or int(held) == width
+
+    def _usable(self, ident: str) -> bool:
+        """Whether the observation ``ident`` can be used by the posterior in use: any, unless it was narrowed around one,
+        and then only that one, by its digest, as the last reading read the digests."""
+        wanted = self._narrowed_digest()
+        return wanted is None or not self._digests_read or self._digests.get(ident) == wanted
+
+    def _grey(self) -> None:
+        """The observations the posterior in use cannot be used on, greyed in the list with why."""
+        combo = self.obs_picker.combo
+        model = combo.model()
+        for at in range(combo.count()):
+            ident = combo.itemData(at)
+            item = model.item(at) if hasattr(model, "item") else None
+            if item is None or ident is None:
+                continue
+            usable = self._usable(str(ident))
+            item.setEnabled(usable)
+            if not usable:
+                item.setToolTip(CANNOT_BE_USED_TEXT + ".")
+
+    def observation_on_offer(self) -> bool:
+        """Whether the list holds an observation the round can be drawn around, as the last reading found them."""
+        combo = self.obs_picker.combo
+        return any(combo.itemData(at) is not None and self._usable(str(combo.itemData(at)))
+                   for at in range(combo.count()))
+
+    def _follow_the_observation(self) -> None:
+        """The list moved to the observation in use when it is not the one it last moved to: an observation an inference
+        made, or one loaded, chosen; a choice it replaces is said on the line under the list. Never while a run is live:
+        the page's reading and a run's end call this."""
+        observation = getattr(getattr(self._screen, "session", None), "observation", None)
+        ident = getattr(observation, "id", None)
+        if not ident or ident == self._followed:
             return
-        # Loaded HERE, on the GUI thread: the load re-hashes the file and checks its mode and
-        # conditioning width against this config, so a mismatch is a dialog now rather than an
-        # exception hours into the round. The stage takes the wrapper; nothing loads by reference.
+        before = self.obs_picker.key()
+        self.obs_picker.refresh()
+        if self.obs_picker.combo.findData(ident) < 0:
+            return
+        before_words = self.obs_picker.combo.itemText(self.obs_picker.combo.findData(before)) if before else ""
+        self.obs_picker.restore_key(ident)
+        self._followed = ident
+        self._changed = (CHANGED_TO_TEXT.format(record_words.label_of(observation), before_words)
+                         if before and before != ident else "")
+        self.form.rows["observation"].kept = False
+
+    def take_carried(self, carries) -> None:
+        """What a next step carries here: the observation it names, chosen in the list. Nothing is asked: the round holds
+        nothing of its own to let go."""
+        ident = carries.get("observation") if hasattr(carries, "get") else None
+        if not ident:
+            return
+        if self.obs_picker.combo.findData(ident) < 0 and not controller().is_live():
+            self.obs_picker.refresh()
+            self._grey()
+        if self.obs_picker.combo.findData(ident) >= 0:
+            self.obs_picker.restore_key(ident)
+            self._changed = ""
+        self.redraw()
+
+    # ── what a page answers ──
+    def main_words(self) -> str:
+        return ROUND_START_WORDS
+
+    def in_use_words(self) -> tuple:
+        """What the round would be drawn from: the posterior in use, by its label."""
+        posterior = self._held()[2]
+        if posterior is None:
+            return "", "Load or train a posterior in step 3 to narrow it."
+        return record_words.label_of(posterior), "A narrowing round draws its region from this posterior."
+
+    def _never(self) -> bool:
+        return self.form.rows["checkpoint_every"].value() == 0
+
+    def problems(self) -> dict:
+        """Every rule the form breaks now, by field key in the order a press reads them: the line under the field and
+        what the press says, the stage's own sentence. The fit's settings by a training's own rules; the region's level
+        inside (0, 1) and the directions at least 1 and at most the model's parameters."""
+        rows, found = self.form.rows, {}
+        level = rows["hpd_level"]
+        said, value = level.reading(), level.value()
+        if said is None and value is not None:
+            try:
+                require_between("hpd_level", value, 0.0, 1.0, open_lo=True, open_hi=True)
+            except Refusal as refused:
+                found["hpd_level"] = (f"{level.label_text()} must be greater than 0 and less than 1.", refused.message)
+        elif said is not None:
+            found["hpd_level"] = (said, pressed_reading("hpd_level", said))
+        directions = rows["n_directions"]
+        said, value, count = directions.reading(), directions.value(), self._parameters()
+        if said is None and value is not None:
+            try:
+                require_at_least("n_directions", value, 1)
+                if count is not None and value > count:
+                    found["n_directions"] = (DIRECTIONS_TEXT.format(count),) * 2
+            except Refusal as refused:
+                found["n_directions"] = (f"{directions.label_text()} must be at least 1.", refused.message)
+        elif said is not None:
+            found["n_directions"] = (said, pressed_reading("n_directions", said))
+        for key in _FIT:
+            row = rows[key]
+            problem = fit_row_problem(key, row.value(), label=row.label_text(), reading=row.reading())
+            if problem is not None:
+                found[key] = problem
+        return found
+
+    def _parameters(self) -> "int | None":
+        """How many parameters the model in use has: the most directions a region can narrow."""
+        cfg = self._held()[0]
         try:
-            obs = default_store().load_observation(s.cfg, self.obs_picker.key())
-        except Exception as e:                                  # noqa: BLE001 -- _on_error sorts refusal from bug
-            # The exception itself, unwrapped. A store refusal is a Refusal that already names the
-            # observation (store.py's load_observation labels every sentence), so it reaches the
-            # yellow box through _on_error's isinstance; a bug reaches the red one with its
-            # traceback. The old "Could not load observation '<key>':" prefix re-typed both into
-            # one string, and the yellow box could never be opened for it.
-            self._on_error(e, traceback.format_exc())
+            return len(cfg.params_dict) + len(cfg.rescale_params)
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say counts nothing
+            return None
+
+    def _network(self) -> tuple:
+        rows = self.form.rows
+        return rows["hidden_features"].value(), rows["num_transforms"].value()
+
+    def _network_words(self) -> tuple:
+        """What the line under the network says of the posterior in use's own network: its kind and its sentence."""
+        training = getattr(getattr(self._held()[2], "manifest", None), "body", None)
+        training = training.get("training") if isinstance(training, dict) else None
+        held = tuple(_whole((training or {}).get(key)) for key in ("hidden_features", "num_transforms"))
+        if None in held:
+            return "", ""
+        if held != tuple(self._network()):
+            return "warn", NETWORK_DIFFERS_TEXT.format(*held, *self._network())
+        return "info", NETWORK_HELD_TEXT.format(*held)
+
+    def facts_from_form(self) -> tuple:
+        """The facts of the step as the form, the session and the last reading stand. Reads nothing."""
+        cfg, prior, posterior = self._held()
+        rows, found = self.form.rows, self.problems()
+        for key, row in rows.items():
+            if row.widget is None or key in ("name", "note", "observation"):
+                continue
+            row.set_line("err" if key in found else "", found[key][0] if key in found else "")
+        level = rows["hpd_level"].value()
+        if "hpd_level" not in found and level is not None and level < REGION_WARN_BELOW:
+            rows["hpd_level"].set_line("warn", REGION_TEXT.format(REGION_WARN_BELOW))
+        kind, said = self._network_words()
+        self.network_line.set_text(said)
+        self.network_line.setVisible(bool(said))
+        if kind == "warn" and "num_transforms" not in found:
+            rows["num_transforms"].set_line("warn", said)
+            self.network_line.setVisible(False)
+        key = self.obs_picker.key()
+        observation_facts = []
+        if key and not self._usable(key):
+            rows["observation"].set_line("err", CANNOT_BE_USED_TEXT + ".")
+            observation_facts.append(Fact("err", CANNOT_BE_USED_TEXT + ".", CANNOT_BE_USED_BLOCKS))
+        else:
+            rows["observation"].set_line("warn" if self._changed else "", self._changed)
+        needs = [name for name, held in (("posterior", posterior), ("prior", prior), ("observation", key)) if not held]
+        uses = prior_own = ""
+        if posterior is not None and prior is not None and key:
+            observation = self.obs_picker.selection_text()
+            uses = round_uses(record_words.label_of(posterior), record_words.label_of(prior), observation,
+                              self._observation_body(key))
+        if posterior is not None and prior is not None:
+            parents = getattr(getattr(posterior, "manifest", None), "parents", None)
+            trained_with = parents.get("prior") if isinstance(parents, dict) else None
+            in_use = record_words.label_of(prior)
+            prior_own = in_use if not trained_with or trained_with == getattr(prior, "id", None) else (
+                self._trained_with or NO_PRIOR_WORDS, in_use)
+        simulations = None
+        preview = self._preview if "num_runs" not in found and "run_size_cap" not in found else None
+        if preview is not None and getattr(preview, "width", None):
+            simulations = rows["num_runs"].value() * preview.width
+        how_long = round_how_long(self._expected, self._per_epoch) if self._history_read else ""
+        memory = limit_words(memory_limit_in_force())
+        if self._history_read:
+            memory = f"{memory} {ends.last_run_sentence(self._last, self._measured)}"
+        names = [fact for fact in (self._names.name_fact(), self._names.note_fact()) if fact]
+        field_facts = [*observation_facts, *(Fact("err", line, SETTING_BLOCKS) for line, _said in found.values())]
+        return round_facts(needs=needs, uses=uses, prior_own=prior_own or None, simulations=simulations,
+                           checks=self._pre_run(), fit="never" if self._never() else "saved", how_long=how_long,
+                           memory=memory, others_pending=self._others_pending(), name_facts=names,
+                           field_facts=field_facts, plan_lines=self.plan_lines())
+
+    def _observation_body(self, ident: str):
+        return self._bodies.get(ident)
+
+    def _pre_run_rows(self) -> "tuple | None":
+        """The checks' rows for the prior in use alone, as the screen last read them; None before its first reading."""
+        rows = getattr(self._screen, "pre_run_rows", None)
+        return rows() if callable(rows) else None
+
+    def _pre_run(self) -> tuple:
+        rows = self._pre_run_rows()
+        if rows is None or self._held()[1] is None:
+            return ()
+        return (check_lineage.pre_run_fact(rows),)
+
+    # ── the reading of the disk ──
+    def read_disk(self) -> None:
+        """What the checks need, read by the screen; the observations listed again and, with a posterior narrowed around
+        one in use, each one's digest; the list moved to the observation in use; the label of the prior the posterior
+        was trained with; the training preview at the budget, for the simulations the round makes; and the run history:
+        the last run on this computer, and the pace of an epoch and the epochs of the last narrowing round of this
+        kind."""
+        screen = self._screen
+        if screen is not None and hasattr(screen, "read_checks"):
+            screen.read_checks()
+        cfg, prior, posterior = self._held()
+        store = default_store()
+        self.obs_picker.refresh()
+        self._digests_read = self._narrowed_digest() is not None
+        self._digests = observation_digests(store) if self._digests_read else {}
+        if not self.obs_picker.key():
+            ident = getattr(getattr(getattr(screen, "session", None), "observation", None), "id", None)
+            self.obs_picker.restore_key(ident or self._remembered)
+            self.form.rows["observation"].kept = not ident and bool(self.obs_picker.key())
+        self._follow_the_observation()
+        self._grey()
+        key, self._bodies = self.obs_picker.key(), {}
+        if key:
+            try:
+                self._bodies[key] = store.get("observation", key).body
+            except Exception:                # noqa: BLE001 -- an observation that cannot be read is named alone
+                pass
+        parents = getattr(getattr(posterior, "manifest", None), "parents", None)
+        ref = parents.get("prior") if isinstance(parents, dict) else None
+        self._trained_with = ""
+        if ref and ref != getattr(prior, "id", None):
+            try:
+                self._trained_with = record_words.label_of(_Record(store.get("prior", ref)))
+            except Exception:                # noqa: BLE001 -- a prior no longer in Records is said so
+                self._trained_with = ""
+        folder, here = controller().folder(), computer()
+        self._last, self._measured = history.last_on(folder, here), history.last_measured_on(folder, here)
+        self._history_read = True
+        self._preview = self._per_epoch = self._expected = None
+        rows, found = self.form.rows, self.problems()
+        if cfg is None or prior is None or found.keys() & {"num_runs", "run_size_cap"}:
             return
-        # A name another posterior takes while the round trains is dropped, not refused: the round's
-        # posterior is saved under its id and the run says so.
-        self.dispatch(orchestrator.tsnpe_round, s.cfg, s.posterior, s.inf_prior, obs,
-                      n_directions=v["n_directions"], level=v["hpd_level"],
-                      num_runs=v["num_runs"], run_size_cap=v["run_size_cap"],
-                      new_run=self.new_run.isChecked(), if_name_taken="unnamed",
-                      provide_fig_sink=True, on_result=self._on_round)
-        self.new_run.setChecked(False)
+        self._preview = orchestrator.training_preview(cfg, prior, num_runs=rows["num_runs"].value(),
+                                                      run_size_cap=rows["run_size_cap"].value())
+        width = getattr(self._preview, "width", None)
+        if width and not found.keys() & {"hidden_features", "num_transforms"}:
+            try:
+                self._per_epoch = history.estimate(folder, word="Narrowing round", per="epoch",
+                                                   size={"network": tuple(self._network()),
+                                                         "simulations": rows["num_runs"].value() * width})
+            except Exception:                # noqa: BLE001 -- a history written by hand says nothing
+                self._per_epoch = None
+        try:
+            spec = training_spec("Narrowing round", _PLACE, STOP_WORDS, cfg, self._stage_values(), narrowed=True)
+            self._expected = controller().expected_epochs(spec)
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its kind has no last round
+            self._expected = None
+
+    def _stage_values(self) -> dict:
+        """The fit's settings the round would be handed now, as far as they pass their rules."""
+        rows, found = self.form.rows, self.problems()
+        return {key: rows[key].value() for key in _FIT if key not in found and rows[key].value() is not None}
+
+    def _run_ended(self, status) -> None:
+        """A run has ended. One of this page's that returned its posterior: its result said. Then the reading, which
+        lists the observations again and moves the list to the observation in use, which the controller's order makes
+        safe: no run is live by now."""
+        made, self._made = self._made, None
+        handed, self._handed = self._handed, None
+        if made is not None:
+            self._say_the_result(made, handed)
+        super()._run_ended(status)
+
+    # ── the press ──
+    def _read_knobs(self) -> dict:
+        """The settings the round is handed, read through the rules: the first broken is refused, and nothing changes.
+        The epoch limit only when one is typed."""
+        for key, (_line, said) in self.problems().items():
+            raise Refusal(said, field=key)
+        rows = self.form.rows
+        knobs = {key: rows[key].value() for key in _FIT if not (key == "max_num_epochs" and rows[key].value() is None)}
+        knobs["level"], knobs["n_directions"] = rows["hpd_level"].value(), rows["n_directions"].value()
+        return knobs
+
+    def main_pressed(self) -> None:
+        """Start the narrowing round on the configuration, the posterior and the prior in use, around the observation
+        chosen, loaded here, at the press: a refusal of the load is said as any refusal is, a fault as a fault. A start
+        after the frequency band or the audit of the prior in use read "Failed" asks first, "Cancel" preselected."""
+        cfg, prior, posterior = self._held()
+        if posterior is None or prior is None or not self.obs_picker.key():
+            return
+        try:
+            knobs = self._read_knobs()
+        except Refusal as refused:
+            self._refusal(refused)
+            return
+        rows = self._pre_run_rows()
+        failed = None if rows is None else check_lineage.pre_run_question(rows, start=self.main_words())
+        if failed is not None:
+            title, text, other = failed
+            if not ask(self, title, text, CANCEL, other):
+                return
+        try:
+            observation = default_store().load_observation(cfg, self.obs_picker.key())
+        except Refusal as refused:
+            self._refusal(refused)
+            return
+        except Exception as error:           # noqa: BLE001 -- a fault is told as a fault
+            self._on_error(error, traceback.format_exc())
+            return
+        self._start(cfg, posterior, prior, observation, knobs, new_run=False)
+
+    def _start(self, cfg, posterior, prior, observation, knobs: dict, *, new_run: bool) -> bool:
+        """Dispatch the round with ``knobs`` and the consent to start a new set, ``new_run``; once it has started, the
+        observation chosen and the budget are remembered. True when its run was started."""
+        names = self._names
+        call = dict(knobs)
+        call.update(resume="auto", new_run=new_run, name=names.name_value(), note=names.note_value(),
+                    if_name_taken="unnamed")
+        self._call = (cfg, posterior, prior, observation, knobs)
+        started = self.dispatch(orchestrator.tsnpe_round, cfg, posterior, prior, observation, provide_fig_sink=True,
+                                on_result=self._on_round, **call)
+        if started:
+            self._handed = (posterior, observation)
+            model = getattr(getattr(getattr(self._screen, "session", None), "draft", None), "model", None)
+            put_many([(OBSERVATION_KEY, self.obs_picker.key()), (NUM_RUNS_KEY, str(knobs["num_runs"])),
+                      (RUN_SIZE_KEY, str(knobs["run_size_cap"]))] + self._screen.last_used(model))
+        return started
+
+    def _refusal(self, exc) -> None:
+        """A refusal, as every page tells one; but the stage's refusal of a new simulation set beside a saved one a
+        setting away is a question, the stage's own sentence in it: "Start the narrowing round" dispatches the same call
+        again with the consent and the objects already loaded; "Cancel", preselected, starts nothing."""
+        if getattr(exc, "field", None) != "new_run" or self._call is None or controller().is_live():
+            super()._refusal(exc)
+            return
+        cfg, posterior, prior, observation, knobs = self._call
+        sentence = f"{getattr(exc, 'message', None) or exc} {NEW_SET_ROUND_TEXT}"
+        if ask(self, NEW_SET_ROUND_TITLE, sentence, CANCEL, ROUND_START_WORDS):
+            self._start(cfg, posterior, prior, observation, knobs, new_run=True)
 
     def run_spec(self, fn, *args, **kwargs):
         """A narrowing round: a training of its own, on the region, so its run is a training's, narrowed; its first
         total of unusable driven recordings compared with the audit of the prior in use that counted as it starts, as
-        the screen last read the checks."""
+        the screen last read the checks; its history keeps what it was started with."""
         if fn is not orchestrator.tsnpe_round:
             return super().run_spec(fn, *args, **kwargs)
-        rows = getattr(self._screen, "pre_run_rows", lambda: None)()
+        rows = self._pre_run_rows()
         prior = args[2] if len(args) > 2 else None
-        return training_spec("Narrowing round", _PLACE, "Stop the narrowing round…", args[0], kwargs, narrowed=True,
-                             audit=check_lineage.counted_audit(rows) if rows is not None else None,
+        plan = self._screen.plan_entry() if hasattr(self._screen, "plan_entry") else None
+        return training_spec("Narrowing round", _PLACE, STOP_WORDS, args[0], kwargs, narrowed=True, plan=plan,
+                             settings=self.settings_entry(), audit=check_lineage.counted_audit(rows) if rows else None,
                              prior=getattr(prior, "id", None),
                              prior_words=record_words.phrase_of("prior", prior) if prior is not None else "")
 
-    def _on_round(self, payload):
-        """Install the round's LoadedPosterior -- it carries its own region and observation digest
-        (None for an amortized one), so Validate restricts its prior and Infer can warn about any
-        other observation. Without an on_result the round trains for hours and the result is
-        discarded; without the region riding on the returned wrapper, a later Save (a rename) would
-        write it marked amortized -- but the region is already on disk from build_posterior's own
-        write, not something this handler has to remember to carry.
+    def settings_entry(self) -> dict:
+        """What this round is started with, as its run's history keeps it: names and numbers only. The model and its
+        options as step 1 holds them, the bounds file, the prior, the posterior it is drawn from and the observation by
+        their ids, the region's level and its directions, the name and the note, and one row for each fit's setting
+        the round reads, with its label, its value and its usual one."""
+        from .prior_tab import bounds_in_use
+        session = getattr(self._screen, "session", None)
+        draft = getattr(session, "draft", None)
+        cfg, prior, posterior = self._held()
+        options = {name: _plain(getattr(draft, name, None))
+                   for name in ("chi_mode", "chi_n_freqs", "chi_k_pad", "chi_max_cycles", "reparam_rotate",
+                                "units_override")}
+        rows = [{"step": self.step, "name": key, "label": self.form.rows[key].label_text(),
+                 "value": _plain(self.form.rows[key].value()), "origin": "", "plan": None,
+                 "usual": _plain(self.form.rows[key].usual())} for key in _FIT]
+        return {"model": _plain(getattr(draft, "model", None)), "chi_mode": _plain(getattr(draft, "chi_mode", None)),
+                "options": options, "bounds": _plain(bounds_in_use(cfg) if cfg is not None else None),
+                "prior": _plain(getattr(prior, "id", None)), "parent_posterior": _plain(getattr(posterior, "id", None)),
+                "observation": self.obs_picker.key() or None,
+                "level": _plain(self.form.rows["hpd_level"].value()),
+                "directions": _plain(self.form.rows["n_directions"].value()),
+                "name": self._names.name_value(), "note": self._names.note_value(), "rows": rows}
 
-        The posterior comes into use through the screen's one way in, which remembers it as the posterior last in use
-        and works the gates and the steps' states out again, as a posterior a training returns does.
-        """
-        self.log_pane.append_line(
-            f"TSNPE round complete. This posterior is NON-AMORTIZED: it is valid near the "
-            f"observation {payload.posterior.x_obs_digest}, and its manifest records so.", "warning")
+    def _on_round(self, payload) -> None:
+        """The round returned its posterior, while its run is still live: it comes into use through the screen's one way
+        in, which remembers it as the posterior last in use; nothing is read until the run has ended."""
+        self._made = payload
         self._screen.take_posterior(payload)
 
-    def _budget_checkpoint(self, preview) -> str:
-        """The mixin's line is computed from the AMORTIZED identity, and on this tab it used to say
-        "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely" whenever the budget
-        matched the parent's -- and that is what a round at that budget did before the region became
-        part of the identity. The region is drawn when the round starts, so nothing here can be
-        resolved in advance; the honest line is the rule.
+    def _say_the_result(self, made, handed) -> None:
+        """The round's result, once its run has ended: the posterior in use from step 3 on, the observation it was
+        narrowed around and how much of the prior's draws its region kept; the posterior it came from, which stays in
+        Records; and the next steps."""
+        parent, observation = handed if handed else (None, None)
+        body = getattr(getattr(made, "manifest", None), "body", None)
+        training = body.get("training") if isinstance(body, dict) else None
+        acceptance = (training or {}).get("tsnpe_acceptance") if isinstance(training, dict) else None
+        said = ROUND_IN_USE_TEXT.format(record_words.label_of(made),
+                                        record_words.label_of(observation) if observation else NO_OBSERVATION_WORDS)
+        try:
+            share = float(acceptance)
+            if math.isfinite(share):
+                said = f"{said} {ROUND_KEPT_TEXT.format(math.floor(share * 100 + 0.5))}"
+        except (TypeError, ValueError):
+            pass
+        facts = [Fact("info", said)]
+        if parent is not None:
+            facts.append(Fact("info", ROUND_CAME_FROM_TEXT.format(record_words.label_of(parent))))
+        self.result.set_sentences(facts)
+        self.result.set_next_steps((NextStep(CHECK_THIS_WORDS, "checks"), NextStep(SAME_OBSERVATION_WORDS, "infer")))
+        name, note = self._names.name_value(), self._names.note_value()
+        if name and getattr(made, "name", "") == name:
+            self._names.name.clear()
+        if note:
+            self._names.note.clear()
 
-        Whether there is a checkpoint AT ALL is the preview's answer (``preview.checkpoint``), which
-        reads the training stage's own binding of the cadence. This used to read
-        config.TRAINING_CHECKPOINT_EVERY -- the live module copy, which a round never reads -- so the
-        line could promise a checkpoint the round would not write, or deny one it would."""
-        if preview.checkpoint == "off":
-            return super()._budget_checkpoint(preview)
-        return ("A TSNPE round is checkpointed under its OWN identity: the truncation region is part "
-                "of it and is drawn when the round starts, so it never resumes the amortized checkpoint "
-                "at these settings. Re-running with the SAME posterior, observation, HPD level, "
-                "direction count and budget redraws the same region and resumes that round's own "
-                "checkpoint; a run exactly one setting away from a committed cache is refused unless "
-                "'Start a new simulation even if a cache one setting away exists' is ticked; anything "
-                "else simulates the full budget from zero.")
+    # ── what is remembered ──
+    def restore_settings(self, qs) -> None:
+        """The observation the last round started with, put back as the list's choice while the session holds none, and
+        the budget, as its boxes' text; each marked kept from last time until it is touched. A value that is no whole
+        number is passed over; the region's level and directions, and the network, open at their usual values."""
+        self._remembered = settings.get_str(qs, OBSERVATION_KEY, "")
+        self.obs_picker.restore_key(self._remembered)
+        self.form.rows["observation"].kept = bool(self._remembered) and self.obs_picker.key() == self._remembered
+        for key, name in ((NUM_RUNS_KEY, "num_runs"), (RUN_SIZE_KEY, "run_size_cap")):
+            raw = settings.get_str(qs, key, "").strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            row = self.form.rows[name]
+            row.set_value(value)
+            row.kept = True
 
-    def _sync_obs_line(self) -> None:
-        """The read-only line under the observation picker. See PriorPanel._sync_prior_line for
-        why ``currentIndexChanged`` also covers ``refresh()``."""
-        self.obs_line.setText(self.obs_picker.selection_summary())
 
-    def refresh_local_gates(self):
-        s = self.session
-        self.obs_picker.refresh()
-        self._sync_obs_line()
-        self.btn_round.setEnabled(s.posterior is not None and s.inf_prior is not None
-                                  and bool(self.obs_picker.key()))
-        self._sync_budget()
+class _Record:
+    """A manifest as a record's label reads it: its kind, its name and its manifest."""
 
-    def save_settings(self, qs):
-        """The observation and the budget only, the budget as the boxes' TEXT so a box left blank at
-        close opens at config.py's default. The HPD level and the direction count are science knobs
-        and open at the truncate module's defaults on every launch; the consent box under the budget
-        is answered per round and is never written."""
-        qs.beginGroup("inference_tsnpe")
-        qs.setValue("observation", self.obs_picker.key())
-        settings.save_field(qs, "num_runs", self.num_runs)
-        settings.save_field(qs, "run_size_cap", self.run_size_cap)
-        qs.endGroup()
-
-    def restore_settings(self, qs):
-        qs.beginGroup("inference_tsnpe")
-        self.obs_picker.restore_key(settings.get_str(qs, "observation"))
-        # Defaults are the config constants: a missing key, a wiped file and a box saved blank all
-        # open at the stage defaults (get_int falls back on "" as on a missing key).
-        self.num_runs.setText(str(settings.get_int(qs, "num_runs", config.TRAINING_NUM_RUNS)))
-        self.run_size_cap.setText(str(settings.get_int(qs, "run_size_cap", config.TRAINING_RUN_SIZE)))
-        qs.endGroup()
+    def __init__(self, manifest):
+        self.kind, self.name, self.manifest = manifest.kind, manifest.name, manifest
