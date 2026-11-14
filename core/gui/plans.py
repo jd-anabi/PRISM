@@ -14,17 +14,19 @@ by the inference screen, which outlives the session a step 1 applied replaces.
 
 A page hands the plan code its rows through ``plan_fields``, each with ``value``, ``set_value``, ``usual``,
 ``set_origin``, ``label_text`` and ``kept``, and says through ``plan_read`` what its run reads: the values of its own
-form, or, for a step the page's run follows, what that step holds. Nothing here reads the disk but ``list_plans``,
-``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and ``plan_path``, ``bounds_key``, ``window_problems`` and
-``_in_another_case``, which only those, the page's readings and the save's press call, the press reaching
-``bounds_key`` through ``window_problems``; a page calls them only at its readings and its presses, never while a run
-is live.
+form, or, for a step the page's run follows, what that step holds. What "Before you start" says of the plan is worked
+out from plain values (``departures_from``), the pages read into them once. Nothing here reads the disk but
+``list_plans``, ``read_checked``, ``save_plan``, ``taken`` and ``file_sha``, and ``plan_path``, ``bounds_key``,
+``window_problems`` and ``_in_another_case``, which only those, the page's readings and the save's press call, the
+press reaching ``bounds_key`` through ``window_problems``; a page calls them only at its readings and its presses,
+never while a run is live.
 """
+import functools
 import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +54,17 @@ HEADING_OF = {"model": "Model and options", "prior": "Prior", "training": "Train
 #: The headings a fill reaches, in their order: the steps whose pages are of the look. The later headings are read and
 #: shown, and not filled.
 FILLED = tuple(HEADING_OF.values())
+#: The headings each step's run reads, by the step's key: what the earlier steps it follows hold, then its own form.
+#: A check, an inference and a narrowing round follow the model and the prior, never Training's form: a posterior is in
+#: use whatever trained it.
+READS: dict[str, tuple[str, ...]] = {
+    "model": ("Model and options",),
+    "prior": ("Model and options", "Prior"),
+    "training": ("Model and options", "Prior", "Training"),
+    "checks": ("Model and options", "Prior", "Calibration"),
+    "infer": ("Model and options", "Prior", "Inference"),
+    "narrowing": ("Model and options", "Prior", "Narrowing round"),
+}
 #: A plan's name: what the file's name may be when the window saves one.
 NAME_RULE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 NAME_TEXT = "A plan's name is the letters a to z in either case, digits, _ and -, at most 40 characters."
@@ -442,37 +455,67 @@ def would_replace(screen, values: dict, *, steps=None, keep_remembered: bool = F
 
 # ── what is said ──
 def headings_to(step: str) -> tuple[str, ...]:
-    """The headings a step's run reads: its own and every earlier step's."""
-    order = list(HEADING_OF)
-    return tuple(HEADING_OF[key] for key in order[:order.index(step) + 1]) if step in HEADING_OF else ()
+    """The headings a step's run reads, in their order (``READS``): none for a place that is no step a plan fills."""
+    return READS.get(step, ())
 
 
-def _departures(screen, headings: Sequence[str]) -> tuple[int, list]:
-    """How many of the settings the run reads the source in use holds, and every departure among them, in the steps'
-    order: against the source's value where it holds the setting, else against the usual one. The last heading is the
-    page's own, read from its form, where a row in error is said by its own line and is no departure; the others are
-    what their steps hold."""
-    source = screen.plan_source
+def departures_from(source: "PlanSource | None", read: Mapping[tuple[str, str], object],
+                    usual: Mapping[tuple[str, str], object], labels: Mapping[tuple[str, str], str], *,
+                    words: "Mapping[tuple[str, str], Callable[[object], str]] | None" = None) -> tuple[str, ...]:
+    """Every departure among the settings a run reads, worked out from plain values alone, in the order of ``read``:
+    each setting, keyed by its heading and its name, against the value ``source`` holds for it where it holds one, else
+    against its value in ``usual``; a setting with no usual value there that the source does not hold, a bounds file,
+    departs from nothing. Each is said by its label in ``labels``, and its values by its own way of saying them in
+    ``words`` where one is handed, else as a sentence says a plain value."""
+    words = words or {}
+    found = []
+    for pair, value in read.items():
+        held = None if source is None else source.values.get(pair)
+        if held is None and pair not in usual:
+            continue
+        against = held if held is not None else usual[pair]
+        if same(value, against):
+            continue
+        say = words.get(pair) or _plain_words
+        found.append(DEPARTURE.format(labels.get(pair, pair[1]), say(value), "usual" if held is None else source.kind,
+                                      say(against)))
+    return tuple(found)
+
+
+def _plain_words(value) -> str:
+    return value_words(None, value)
+
+
+def _read_for(screen, headings: Sequence[str]) -> tuple[dict, dict, dict, dict]:
+    """What a run that reads ``headings`` reads of the pages, read once into plain mappings keyed by heading and name:
+    each value read, each usual value (none for a bounds file, which has none), each label, and each setting's own way
+    of saying its values. The last heading is the page's own, read from its form, where a row in error is said by its
+    own line and is no departure; the others are what their steps hold."""
     pages = {HEADING_OF.get(page.step): page for page in screen.step_pages()}
-    held_count, departures = 0, []
+    read, usual, labels, words = {}, {}, {}, {}
     for heading in headings:
         page = pages.get(heading)
         if page is None:
             continue
-        fields = page.plan_fields()
-        for name, value in page.plan_read(applied=heading != headings[-1]).items():
+        fields, own = page.plan_fields(), heading == headings[-1]
+        for name, value in page.plan_read(applied=not own).items():
             row = fields.get(name)
-            if row is None or (heading == headings[-1] and _in_error(row)):
+            if row is None or (own and _in_error(row)):
                 continue
-            held = plan_value(source, heading, name)
-            if held is None and name in LEFT_ALONE:
-                continue
-            against = held if held is not None else row.usual()
-            held_count += held is not None
-            if not same(value, against):
-                departures.append(DEPARTURE.format(row.label_text(), value_words(row, value),
-                                                   "usual" if held is None else source.kind, value_words(row, against)))
-    return held_count, departures
+            pair = (heading, name)
+            read[pair], labels[pair], words[pair] = value, row.label_text(), functools.partial(value_words, row)
+            if name not in LEFT_ALONE:
+                usual[pair] = row.usual()
+    return read, usual, labels, words
+
+
+def _departures(screen, headings: Sequence[str]) -> tuple[int, tuple]:
+    """How many of the settings the run reads the source in use holds, and every departure among them, in the steps'
+    order, from the pages read once."""
+    source = screen.plan_source
+    read, usual, labels, words = _read_for(screen, headings)
+    held = 0 if source is None else sum(source.values.get(pair) is not None for pair in read)
+    return held, departures_from(source, read, usual, labels, words=words)
 
 
 def _in_error(row) -> bool:
@@ -487,8 +530,9 @@ def _head(source: PlanSource) -> str:
 
 def plan_facts(screen, headings: Sequence[str]) -> tuple[Fact, ...]:
     """What "Before you start" says of the plan in use for a run that reads ``headings``: the source, and every
-    departure among the settings the run reads, each named; and, for a plan, that its file has been changed or removed
-    since the fill, as the last reading found it. Reads nothing."""
+    departure among the settings the run reads, each named, worked out by ``departures_from`` from the pages read once;
+    and, for a plan, that its file has been changed or removed since the fill, as the last reading found it. Reads
+    nothing."""
     source = screen.plan_source
     held, departures = _departures(screen, headings)
     listed = "; ".join(departures)

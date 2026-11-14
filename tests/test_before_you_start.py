@@ -781,7 +781,8 @@ def test_plan_facts_read_the_form_of_their_own_step_and_what_the_others_hold():
     assert _plan_said(screen, ("Model and options",)) == [
         ("info", "No plan. 1 setting differs from the usual: Rotation off (usual on).")]
     wrong = _screen(batches=0, width=128)
-    wrong.step_pages()[2].plan_fields()["num_runs"]._wrong = True
+    training = next(page for page in wrong.step_pages() if page.step == "training")
+    training.plan_fields()["num_runs"]._wrong = True
     assert _plan_said(wrong) == [("info", "No plan. Every setting is at its usual value.")]
     assert plans.plan_line(_screen(_source(), batches=9500), ("Model and options", "Prior", "Training")) == (
         "Plan: retrain, 1 change")

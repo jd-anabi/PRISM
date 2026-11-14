@@ -1342,6 +1342,52 @@ def test_the_later_headings_are_shown_not_applied_yet_and_counted(tmp_path, monk
     assert ("Narrowing round", "num_transforms") not in screen.plan_source.values
 
 
+def test_the_plan_facts_come_from_values_not_widgets(tmp_path, monkeypatch, store):
+    """The departures the plan's sentences name are worked out from plain values alone: what the run reads, the usual
+    values and the labels, each by its heading and its name, against the source's value where it holds the setting and
+    the usual one otherwise, in the order of what is read; a setting with no usual value that the source does not hold
+    departs from nothing. A setting's own words for its values are handed beside them. A step's facts read its pages once
+    into those mappings and work the departures out from them, holding no widget."""
+    from datetime import datetime
+    from core.gui import plans as window_plans
+    read = {("Prior", "bounds"): "master.txt", ("Training", "num_runs"): 9500, ("Training", "hidden_features"): 256,
+            ("Narrowing round", "hpd_level"): 0.99, ("Narrowing round", "n_directions"): 3}
+    usual = {("Training", "num_runs"): 5000, ("Training", "hidden_features"): 128,
+             ("Narrowing round", "hpd_level"): 0.999, ("Narrowing round", "n_directions"): 5}
+    labels = {("Prior", "bounds"): "Bounds file", ("Training", "num_runs"): "Batches",
+              ("Training", "hidden_features"): "Network width", ("Narrowing round", "hpd_level"): "Region level",
+              ("Narrowing round", "n_directions"): "Directions narrowed"}
+    assert window_plans.departures_from(None, read, usual, labels) == (
+        "Batches 9,500 (usual 5,000)", "Network width 256 (usual 128)", "Region level 0.99 (usual 0.999)",
+        "Directions narrowed 3 (usual 5)")
+    source = window_plans.PlanSource("plan", "retrain", None, "", datetime(2026, 10, 6, 12, 4),
+                                     {("Prior", "bounds"): "master_tier1.txt", ("Training", "num_runs"): 9500,
+                                      ("Narrowing round", "hpd_level"): 0.95})
+    assert window_plans.departures_from(source, read, usual, labels) == (
+        "Bounds file master.txt (plan master_tier1.txt)", "Network width 256 (usual 128)",
+        "Region level 0.99 (plan 0.95)", "Directions narrowed 3 (usual 5)")
+    assert window_plans.departures_from(source, read, usual, labels,
+                                        words={("Training", "hidden_features"): lambda value: f"{value} wide"})[1] == (
+        "Network width 256 wide (usual 128 wide)")
+    assert window_plans.departures_from(source, {}, usual, labels) == ()
+    window, screen, page, _folder, _clock = _the_window(tmp_path, monkeypatch)
+    handed, real = [], window_plans.departures_from
+    monkeypatch.setattr(window_plans, "departures_from",
+                        lambda *args, **kwargs: (handed.append((args, kwargs)), real(*args, **kwargs))[1])
+    screen.posterior_panel.form.rows["num_runs"].set_value(4000)
+    handed.clear()
+    facts = screen.posterior_panel.plan_lines()
+    assert [fact.sentence for fact in facts] == [
+        "No plan. 1 setting differs from the usual: Batches 4,000 (usual 5,000)."]
+    assert len(handed) == 1, handed
+    (held, read_, usual_, labels_), _words = handed[0]
+    assert held is None and {heading for heading, _name in read_} <= {"Model and options", "Prior", "Training"}
+    assert read_[("Training", "num_runs")] == 4000 and usual_[("Training", "num_runs")] == 5000
+    plain = (type(None), bool, int, float, str)
+    assert all(isinstance(value, plain) for value in (*read_.values(), *usual_.values())), (read_, usual_)
+    assert all(isinstance(label, str) for label in labels_.values())
+
+
 def test_a_plans_bounds_file_waits_until_its_model_is_applied(tmp_path, monkeypatch, store):
     """Filled while the model on step 1's form is not the one applied, a plan's bounds file is not selected in the list
     of another model's folder: it waits, the limits typed by hand no longer read, and when step 1 applies the model the
