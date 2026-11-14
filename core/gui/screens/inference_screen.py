@@ -438,20 +438,13 @@ class InferenceScreen(QWidget):
 
     def open_with(self, step: str, carries) -> None:
         """A next step of a result was pressed: the step ``step`` opens, then its page takes what the next step
-        ``carries``, on a page that takes anything; the narrowing round's page of the old frame has the observation
-        carried chosen in its list, and takes nothing else. KeyError, naming it, for a key
+        ``carries``, on a page that takes anything. KeyError, naming it, for a key
         that is no step's, before anything moves."""
         page = self.panels()[keys.step_number(step) - 1]
         self.navigate.emit("inference", step)
         take = getattr(page, "take_carried", None)
         if callable(take):
             take(carries)
-            return
-        # The narrowing round's page of the old frame takes the observation carried in its own list.
-        picker = getattr(page, "obs_picker", None)
-        if picker is not None and carries.get("observation"):
-            picker.refresh()
-            picker.restore_key(carries["observation"])
 
     def current_step(self) -> str:
         """The key of the step shown: the first, Model and options, until another is shown."""
@@ -959,7 +952,7 @@ class InferenceScreen(QWidget):
         self.pending_shown = self.pending()
         self._states = chain.step_states(self.session, live=live, stopping=status.state == "stopping",
                                          pending=self.pending_shown, checks=self.checks_summary(),
-                                         observation_on_offer=self.tsnpe_panel.obs_picker.has_entries(),
+                                         observation_on_offer=self.tsnpe_panel.observation_on_offer(),
                                          label=record_words.label_of, retrying=status.state == "retrying",
                                          kept=continuing.for_the_steps(self._offers))
         self.states_changed.emit(self._states)

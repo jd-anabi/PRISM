@@ -987,3 +987,71 @@ def test_the_cell_is_said_unchecked_when_the_prior_is_not_the_posteriors_own():
     misfit = inference_facts(mode="simulated", uses=INFERRED, cell_problem="This cell does not fit the bounds file in "
                                                                              "use: missing ND parameters k.")
     assert reason_beside(misfit, live=False, nothing_to_apply=False) == "Cannot start yet: the cell does not fit."
+
+
+# ── the sixth step, the narrowing round ──
+#: What the round uses, as its facts are read with but where a test looks elsewhere.
+ROUND = dict(uses="Posterior retrain_posterior and its prior retrain_prior; observation cell_b, a simulated cell, 4.5 s.",
+             prior_own="retrain_prior", simulations=10_240_000)
+
+
+def test_what_the_round_uses_is_named():
+    """The round names what it uses: the posterior in use and its prior, the observation, where it came from and how
+    long it is; with one of the three missing, each missing one blocks, as a load or a run on the page lifts it."""
+    from core.gui.step_facts import round_facts, round_uses
+    body = {"source": {"kind": "simulated", "T_obs_s": 4.5}}
+    assert round_uses("retrain_posterior", "retrain_prior", "cell_b", body) == ROUND["uses"]
+    assert round_uses("retrain_posterior", "retrain_prior", "bench_3", {"source": {"kind": "experimental",
+                                                                                   "T_obs_s": 12.0}}) == (
+        "Posterior retrain_posterior and its prior retrain_prior; observation bench_3, your own recordings, 12 s.")
+    assert round_uses("p", "q", "o", None) == "Posterior p and its prior q; observation o."
+    assert ("info", ROUND["uses"]) in _said(round_facts(**ROUND))
+    held = round_facts(needs=("posterior", "prior", "observation"))
+    assert [fact.blocks for fact in held if fact.blocks] == ["needs a posterior", "needs a prior",
+                                                             "needs an observation"]
+    assert reason_beside(held, live=False, nothing_to_apply=False) == "Cannot start yet: needs a posterior, and 2 more above."
+
+
+def test_a_prior_that_is_not_the_posteriors_own_blocks():
+    """The prior in use must be the one the posterior was trained with: "Fine." when it is; when it is not, an "Error."
+    naming both and the one to load, which a load in step 2 lifts."""
+    from core.gui.step_facts import round_facts
+    assert ("fine", "This posterior was trained with the prior in use, retrain_prior.") in _said(round_facts(**ROUND))
+    held = round_facts(**{**ROUND, "prior_own": ("retrain_prior", "other_prior")})
+    assert ("err", "This posterior was trained with retrain_prior; the prior in use is other_prior. Load retrain_prior "
+                   "in step 2.") in _said(held)
+    assert reason_beside(held, live=False, nothing_to_apply=False) == (
+        "Cannot start yet: the prior in use is not the posterior's own.")
+
+
+def test_the_round_says_what_it_continues():
+    """A round simulates its own set, named with its simulations; filled to continue its set, it says the batch it
+    continues from in place of that."""
+    from core.gui.step_facts import ROUND_SIMULATIONS_TEXT, round_facts
+    assert ("info", ROUND_SIMULATIONS_TEXT.format(10_240_000)) in _said(round_facts(**ROUND))
+    held = _said(round_facts(**{**ROUND, "continuing_from": 236}))
+    assert ("info", "Continues this round's simulation set from batch 236.") in held
+    assert not any(sentence.startswith("Simulates") for _kind, sentence in held), held
+
+
+def test_the_rounds_simulations_line_never_claims_to_continue_a_trainings_set():
+    """The simulations' line of a round says it never continues a training's simulations, only its own set when the
+    same round runs again with the same settings: a region drawn when the round starts is part of the set's identity."""
+    from core.gui.step_facts import round_facts
+    said = [sentence for _kind, sentence in _said(round_facts(**ROUND)) if sentence.startswith("Simulates")]
+    assert said == ["Simulates 10,240,000 simulations in the round's own simulation set. A round never continues a "
+                    "training's simulations; if this same round was run before with the same settings, its saved "
+                    "simulations are continued."], said
+    assert not any("Resumes" in sentence or "skipped" in sentence for _kind, sentence in _said(round_facts(**ROUND)))
+
+
+def test_the_rounds_time_comes_from_earlier_rounds_or_says_there_is_none():
+    """The fit's length comes from the last narrowing round of this kind, with the pace of an epoch when one is known;
+    with no earlier round, the page says there is none, and never names the Training page's number."""
+    from core.gui.step_facts import round_how_long
+    expected = (40, "about 40 epochs: the last narrowing round of this kind, retrain_round1, ran 40")
+    assert round_how_long(expected, (120.0, "the last narrowing round of this size took about 2 minutes an epoch")) == (
+        "Fit: about 40 epochs of about 2 minutes: the last narrowing round of this kind, retrain_round1, ran 40.")
+    assert round_how_long(expected) == "Fit: about 40 epochs: the last narrowing round of this kind, retrain_round1, ran 40."
+    assert round_how_long(None) == "There is no earlier narrowing round to estimate the fit's length from."
+    assert "Training page" not in round_how_long(expected)

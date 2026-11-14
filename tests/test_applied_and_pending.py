@@ -5677,3 +5677,97 @@ def test_the_rounds_shared_rows_read_as_trainings_and_are_held_to_the_same_rules
                 one.redraw()
             lines = [(one.form.rows[key].label_text(), one.form.rows[key].line.words) for one in (page, training)]
             assert lines[0] == lines[1] and lines[0][1], (key, lines)
+
+
+def test_a_new_observation_moves_the_list_and_says_so(tmp_path, monkeypatch):
+    """An observation an inference makes moves the round's list to it once that run has ended, never while it is live;
+    the line under the list says which it replaced."""
+    from tests._runs import StandIn, start_run
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, made):
+        page.obs_picker.restore_key(made["cell_a"])
+        stand_in = StandIn(word="Inference")
+        start_run(screen.infer_panel, stand_in)
+        screen.take_observation(SimpleNamespace(kind="observation", id=made["cell_b"], name="cell_b", manifest=None))
+        page.redraw()
+        assert page.obs_picker.key() == made["cell_a"], "the list moved while a run was live"
+        _round_ends(stand_in, payload=object())
+        assert page.obs_picker.key() == made["cell_b"]
+        line = page.form.rows["observation"].line
+        assert (line.kind, line.words) == ("warn", "Changed to the observation just made, cell_b. Before: cell_a.")
+
+
+def test_the_observations_a_narrowed_posterior_cannot_use_are_greyed_with_their_reason(tmp_path, monkeypatch):
+    """With a posterior narrowed around cell_a in use, cell_b, of another digest, is listed greyed with why, and chosen
+    all the same it is said under the list and greys the start; cell_a stays choosable, so one is on offer."""
+    with _sixth_step(tmp_path, monkeypatch, narrowed=True) as (_window, _screen, page, _run, made):
+        combo = page.obs_picker.combo
+        at_b, at_a = combo.findData(made["cell_b"]), combo.findData(made["cell_a"])
+        item_b, item_a = combo.model().item(at_b), combo.model().item(at_a)
+        assert not item_b.isEnabled() and item_b.toolTip() == (
+            "Cannot be used: this posterior was narrowed around another observation.")
+        assert item_a.isEnabled() and page.observation_on_offer()
+        combo.setCurrentIndex(at_b)
+        page.names.name.setText("retrain_round1")
+        page.redraw()
+        line = page.form.rows["observation"].line
+        assert (line.kind, line.words) == ("err", "Cannot be used: this posterior was narrowed around another "
+                                                  "observation.")
+        assert page.foot.reason.text().startswith("Cannot start yet: the observation cannot be used")
+
+
+def test_the_step_six_mark_follows_the_rounds_held_reading(tmp_path, monkeypatch):
+    """Step 6 can start only while its list holds an observation the posterior in use can be drawn around, as the
+    round's own reading found them: with a posterior narrowed around an observation none listed is, it cannot."""
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, _made):
+        assert page.observation_on_offer() and screen.step_states()[5].can_start
+        screen.session.posterior.posterior.x_obs_digest = "f" * 16
+        page.read_facts()
+        screen.recompute_states()
+        assert not page.observation_on_offer() and not screen.step_states()[5].can_start
+
+
+def test_narrow_around_this_observation_selects_it_on_the_round(tmp_path, monkeypatch):
+    """A next step that carries an observation opens the round with that observation chosen in its list, the step shown
+    as it takes it; nothing is asked, nothing applied, and no run starts."""
+    from core.gui.run.controller import controller
+    with _sixth_step(tmp_path, monkeypatch) as (window, screen, page, run, made):
+        page.obs_picker.restore_key(made["cell_a"])
+        window.go_to("inference", "infer")
+        forget_asked()
+        held = (screen.session.cfg, screen.session.inf_prior, screen.session.posterior, screen.session.observation)
+        screen.open_with("narrowing", {"observation": made["cell_b"]})
+        assert window.current_place() == ("inference", "narrowing") and page.obs_picker.key() == made["cell_b"]
+        assert all_asked() == [] and not controller().is_live() and run.calls == []
+        assert (screen.session.cfg, screen.session.inf_prior, screen.session.posterior,
+                screen.session.observation) == held
+
+
+def test_a_new_posterior_keeps_the_observation_and_a_new_prior_lets_it_go(tmp_path, monkeypatch):
+    """The observation is the posterior's data, not its product: a posterior that comes into use keeps the observation in
+    use, and step 5 stays done; a prior that comes into use lets it go, with the posterior."""
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, _page, _run, made):
+        observation = SimpleNamespace(kind="observation", id=made["cell_a"], name="cell_a", manifest=None)
+        screen.take_observation(observation)
+        screen.take_posterior(_round_posterior())
+        assert screen.session.observation is observation and screen.step_states()[4].done
+        screen.take_prior(screen.session.cfg, screen.session.inf_prior)
+        assert screen.session.observation is None and screen.session.posterior is None
+
+
+def test_the_round_reads_the_model_in_use_alone(tmp_path, monkeypatch):
+    """With a Hopf configuration in use beside Nadrowski's observations none of them is listed, an observation of
+    another model's width being of no use to it; back to Nadrowski, they are listed again."""
+    from core import cli, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    hopf = cli.make_sim_config("HOPF", VALID_LABELS[VALID_MODELS.index("HOPF")], registry.state_dep_drift("HOPF"),
+                               str(BOUNDS_PATH / "hopf" / "cell.txt"))
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, made):
+        nadrowski = screen.session.cfg
+        screen.session.cfg = hopf
+        screen.refresh_gates()
+        page.read_facts()
+        assert page.obs_picker.combo.count() == 0 and not page.observation_on_offer()
+        screen.session.cfg = nadrowski
+        screen.refresh_gates()
+        page.read_facts()
+        assert {page.obs_picker.combo.itemData(at) for at in range(page.obs_picker.combo.count())} == set(made.values())
