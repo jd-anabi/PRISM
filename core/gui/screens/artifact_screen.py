@@ -421,7 +421,7 @@ class ArtifactScreen(QWidget):
         """
         s = self.table.current_summary()
         if s is None:
-            show_refusal(self, Refusal("No artifact is selected.", field="artifact"))
+            show_refusal(self, Refusal("No artifact is selected.", field="artifact"), here="records")
             return
         if not s.complete:
             # A leftover directory has no manifest, so there is no chain to walk -- and unlike the
@@ -432,7 +432,7 @@ class ArtifactScreen(QWidget):
         try:
             text = render_lineage(self._resolved_store(), s.kind, s.id)
         except Refusal as exc:               # a parent that cannot be read at all
-            show_refusal(self, exc)
+            show_refusal(self, exc, here="records")
             self._set_status(exc.message, error=True)
             return
         path = choose_file(self, "Save lineage report", f"{s.kind}-{s.name or s.id}-lineage.txt",
@@ -573,7 +573,7 @@ class ArtifactScreen(QWidget):
         """
         s = self.table.current_summary()
         if s is None:
-            show_refusal(self, Refusal("No artifact is selected.", field="artifact"))
+            show_refusal(self, Refusal("No artifact is selected.", field="artifact"), here="records")
             return None
         if not s.complete:
             self._set_status(f"{s.dir_name} has no usable manifest ({s.reason}), so there is nothing "
@@ -597,7 +597,7 @@ class ArtifactScreen(QWidget):
             note = require_note("note", self.note_edit.text())
             self._resolved_store().set_note(s.kind, s.id, note)
         except Refusal as exc:      # a refused note text (field="note"), or the store's refusal
-            show_refusal(self, exc)  # for a row gone since it was listed -- field="artifact", so
+            show_refusal(self, exc, here="records")  # for a row gone since it was listed -- field="artifact", so
                                      # the box names the list, not the note box
             self._set_status(exc.message, error=True)
             return
@@ -671,7 +671,7 @@ class ArtifactScreen(QWidget):
                              f"deleted: {type(e).__name__}: {e}", error=True)
             return
         if refusal is not None:
-            show_refusal(self, refusal)
+            show_refusal(self, refusal, here="records")
             self._set_status(f"{s.kind} {s.label} has {len(deps)} dependent(s) and was not deleted.",
                              error=True)
             return
@@ -691,7 +691,7 @@ class ArtifactScreen(QWidget):
         # A row that went, or dependents that arrived, since the list -- shown as the store wrote
         # it, fix sentence and all (its refusals are fielded).
         except Refusal as exc:
-            show_refusal(self, exc)
+            show_refusal(self, exc, here="records")
             self._set_status(exc.message, error=True)
             return
         except Exception as e:                      # noqa: BLE001 -- reported, never raised

@@ -4771,6 +4771,11 @@ def test_the_fix_sentence_names_this_page_or_the_steps_that_show_the_setting():
     assert fields.fix_sentence("new_run", here="training") == "Answer the question that the start button asks on this page."
     assert fields.fix_sentence("name", here="prior") == "Choose another name in 'Name' on this page."
     assert fields.fix_sentence("note", here="prior") == "Change it in 'Note' on this page."
+    # a part says its own sentence of what it holds itself, and no step's "on this page" for what it does not hold
+    assert fields.fix_sentence("note", here="records") == "Edit it in the Note box in Records."
+    assert fields.fix_sentence("note") == "Change it in 'Note' in step 5, Inference, or in the Note box in Records."
+    assert fields.fix_sentence("name", here="records") == fields.fix_sentence("name") != ""
+    assert fields.fix_sentence("name", here="model") == fields.fix_sentence("name")
     assert fields.fix_sentence("artifact", here="prior") == fields.fix_sentence("artifact") != ""
     assert fields.fix_sentence("device", here="prior") == "" and fields.fix_sentence(None, here="prior") == ""
     assert fields.fix_sentence("no_such_key", here="prior") == ""

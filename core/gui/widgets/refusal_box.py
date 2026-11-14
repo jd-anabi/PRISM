@@ -22,9 +22,10 @@ from PySide6.QtWidgets import QMessageBox
 from .. import fields as gui_fields
 
 
-def show_refusal(parent, exc) -> None:
+def show_refusal(parent, exc, here: "str | None" = None) -> None:
     """Show ``exc`` (a ``core.refusals.Refusal``, or any subclass such as ``StoreError``) as the
-    yellow warning box, modally, parented to ``parent``.
+    yellow warning box, modally, parented to ``parent``; ``here`` is the place that raised it, whose own
+    sentence says where to fix it.
 
     An INSTANCE dialog built and shown with ``.exec()``, never ``QMessageBox.warning(...)``:
     ``tests/conftest.py::_no_modal_dialogs`` patches the instance method only, and the C++ statics
@@ -34,7 +35,7 @@ def show_refusal(parent, exc) -> None:
     box.setIcon(QMessageBox.Warning)                  # user input, not a crash
     box.setWindowTitle("Check your inputs")
     box.setText(exc.message)
-    fix = gui_fields.fix_sentence(exc.field)
+    fix = gui_fields.fix_sentence(exc.field, here=here)
     if fix:
         box.setInformativeText(fix)
     box.setStandardButtons(QMessageBox.Ok)

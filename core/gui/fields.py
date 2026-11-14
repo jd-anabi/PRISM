@@ -199,10 +199,13 @@ ON_THIS_PAGE: dict[str, str] = {
     "note": "Change it in 'Note' on this page.",
     "accept_other_observation": "Answer the question that the start button asks on this page.",
 }
-#: The steps whose own question a sentence of ``ON_THIS_PAGE`` answers: on another page the table's sentence, which names
-#: the step, is said. A key not listed is answered on every page that names it.
+#: The steps whose own question or box a sentence of ``ON_THIS_PAGE`` answers: on another page the table's sentence,
+#: which names the step, is said. The name and the note stand on the five steps that make a record.
+_RECORDED = ("prior", "training", "checks", "infer", "narrowing")
 ASKED_ON = {"new_run": ("training", "narrowing"), "accept_truncated": ("training",),
-            "accept_other_observation": ("infer",)}
+            "accept_other_observation": ("infer",), "name": _RECORDED, "note": _RECORDED}
+#: What a part says of a setting it holds itself, where the table's sentence lists every place that holds it.
+ON_A_PART = {("note", "records"): f"Edit it in the Note box {_in('records')}."}
 
 
 #: A saved simulation set's identity as a person reads it, row by row: the entries a row folds into its one line, what
@@ -392,10 +395,12 @@ def fix_sentence(key: str | None, here: str | None = None) -> str:
     box: ``"Set it in 'Batches' on this page."`` when the row stands there, and else
     ``"Set it in 'Batches' in step 3, Training, or step 6, Narrowing round."``; a sentence entry says what
     ``ON_THIS_PAGE`` gives for it, when it gives anything and the page is one ``ASKED_ON`` names for it, else the
-    table's own. With no ``here`` a page not rebuilt yet keeps its own
-    words, and names no box of ``ON_TRAINING_ALONE``."""
+    table's own; a part says ``ON_A_PART``'s sentence of what it holds itself. With no ``here`` the table's own words
+    stand, and no box of ``ON_TRAINING_ALONE`` is named."""
     if key is None or (here is None and key in ON_TRAINING_ALONE):
         return ""
+    if (key, here) in ON_A_PART:
+        return ON_A_PART[(key, here)]
     entry = CONTROL.get(key)
     if isinstance(entry, tuple):
         place, text = entry
