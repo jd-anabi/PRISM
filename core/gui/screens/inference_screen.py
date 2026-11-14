@@ -69,6 +69,8 @@ CHAIN_CANNOT_TAKE_TEXT = "{} stopped at {}: {}."
 CONTINUE_CANNOT_TEXT = "{} cannot start: {}."
 CONTINUE_PRIOR_GONE = "the prior it was trained with is no longer in Records"
 CONTINUE_BOUNDS_GONE = "the bounds file {} is no longer there"
+CONTINUE_PARENT_GONE = "the posterior it narrows is no longer in Records"
+CONTINUE_OBSERVATION_GONE = "the observation it was trained around is no longer in Records"
 
 
 @dataclass(frozen=True)
@@ -693,6 +695,67 @@ class InferenceScreen(QWidget):
         self.posterior_panel.to_the_form()
         return loads
 
+    def continue_round(self, offer, where: str = "home") -> "LoadChain | None":
+        """"Continue from batch N", or "Fit again on the saved simulations", for the narrowing round of the run
+        ``offer`` names, after a reopening, as Training's ``continue_from`` is: its history read again; what its chain
+        would find gone (its prior, its bounds file, the posterior it narrows, its observation) said under the
+        Narrowing round step's heading before anything is let go; asked first when the session holds a record; then step
+        1 applied with the model and the options the round was started with, the forms filled from its settings once the
+        model stands (its own fit's settings reach the round's form under its heading), its bounds file selected, and
+        its prior, the posterior it narrows and its observation loaded by their own steps' loads; once the observation
+        is loaded, the round's page set to continue: its level and its directions the run's, the name and the note blank
+        with the earlier name as the hint, the main button the offer's, and the next round handed the policy that must
+        continue. The chain is handed back; None when nothing started."""
+        from core.artifacts import default_store
+        from ..run import history
+        if controller().is_live() or offer is None or not offer.run:
+            return None
+        self.clear_notice()
+        record = history.read(controller().folder() / f"{offer.run}.json") or {}
+        settings_ = record.get("settings")
+        if not isinstance(settings_, dict) or not all(isinstance(settings_.get(key), str) and settings_.get(key)
+                                                      for key in ("model", "bounds", "parent_posterior",
+                                                                  "observation")):
+            return None
+        model = settings_["model"]
+        gone = self._continue_problems(model, settings_["bounds"], settings_.get("prior"))
+        for kind, key, said in (("posterior", "parent_posterior", CONTINUE_PARENT_GONE),
+                                ("observation", "observation", CONTINUE_OBSERVATION_GONE)):
+            try:
+                default_store().get(kind, settings_[key])
+            except Exception:                # noqa: BLE001 -- deleted, torn, or never named
+                gone.append(said)
+        if gone:
+            self.set_notice("narrowing", CONTINUE_CANNOT_TEXT.format(offer.button, "; and ".join(gone)))
+            if where == "home":
+                self.navigate.emit("inference", "narrowing")
+                self.tsnpe_panel.to_the_form()
+            return None
+        other = FIT_AGAIN_OTHER if offer.kind == "fit_again" else CONTINUE_OTHER
+        if not self._lets_go(CONTINUE_TITLE.format(offer.button), other):
+            return None
+        rows = settings_.get("rows") if isinstance(settings_.get("rows"), list) else []
+        values = {(window_plans.HEADING_OF["narrowing"], row["name"]): row.get("value") for row in rows
+                  if isinstance(row, dict) and isinstance(row.get("name"), str)}
+        source = window_plans.PlanSource("run", str(record.get("name") or offer.run), None, "", controller().now(),
+                                         values, ident=offer.run)
+        options = settings_.get("options") if isinstance(settings_.get("options"), dict) else {}
+        options = {**options, "chi_mode": settings_.get("chi_mode") is True}
+        units = options.get("units_override")
+        options["units_override"] = (tuple(str(unit) for unit in units) if isinstance(units, list)
+                                     else units if isinstance(units, str) and units else None)
+
+        def fill() -> None:
+            self.config_panel.fill_with(source)
+
+        loads = self.load_chain(model, options, settings_["bounds"], settings_.get("prior"),
+                                posterior=settings_["parent_posterior"], observation=settings_["observation"],
+                                fill=fill, press=offer.button, where="narrowing")
+        loads.finished.connect(lambda: self.tsnpe_panel.continue_run(offer, settings_))
+        self.navigate.emit("inference", "narrowing")
+        self.tsnpe_panel.to_the_form()
+        return loads
+
     def resume_kept(self, ident: str) -> "LoadChain | None":
         """"Resume" for the kept training ``ident``, from Home, the Training step's list or a past view: what stops it
         said on its row before anything is read; a name asked for when its record holds none, or when another posterior
@@ -963,7 +1026,8 @@ class InferenceScreen(QWidget):
                                          pending=self.pending_shown, checks=self.checks_summary(),
                                          observation_on_offer=self.tsnpe_panel.observation_on_offer(),
                                          label=record_words.label_of, retrying=status.state == "retrying",
-                                         kept=continuing.for_the_steps(self._offers))
+                                         kept=continuing.for_the_steps(self._offers),
+                                         kept_round=continuing.for_the_round(self._offers))
         self.states_changed.emit(self._states)
 
     def step_states(self) -> tuple:

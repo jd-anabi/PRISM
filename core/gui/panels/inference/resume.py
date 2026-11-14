@@ -29,8 +29,8 @@ NO_MODEL_TEXT = "Its model, {}, is no longer one PRISM can train."
 def read_offers(store, folder) -> tuple:
     """What a reopened window can offer, read now: the kept trainings of ``store`` (none read when the store lists no
     kept training), the run history in ``folder``, each simulation set's own count, read from the set, each kept
-    training's prior as a sentence names it, and whether a kept narrowing round's parent posterior is itself narrowed,
-    each record read once. The one reading of these; its caller never asks while a run is live. What cannot be read
+    training's prior as a sentence names it, and a kept narrowing round's observation and parent posterior the same
+    way, each record read once. The one reading of these; its caller never asks while a run is live. What cannot be read
     offers nothing, and nothing raises."""
     from types import SimpleNamespace
     from core.SBI import fit_state, training_checkpoint
@@ -54,28 +54,19 @@ def read_offers(store, folder) -> tuple:
         return done if isinstance(done, int) and not isinstance(done, bool) else None
 
     labels: dict = {}
-    narrowed: dict = {}
 
-    def prior_label(ident: str):
-        if ident not in labels:
+    def label(kind: str, ident: str):
+        if (kind, ident) not in labels:
             try:
-                manifest = store.get("prior", ident)
-                labels[ident] = record_words.phrase_of("prior", SimpleNamespace(kind="prior", name=manifest.name,
-                                                                                manifest=manifest))
-            except Exception:                # noqa: BLE001 -- a prior no longer in Records is said so
-                labels[ident] = None
-        return labels[ident]
-
-    def parent_narrowed(ident: str) -> bool:
-        if ident not in narrowed:
-            try:
-                narrowed[ident] = (store.get("posterior", ident).body or {}).get("truncation") is not None
-            except Exception:                # noqa: BLE001 -- a parent that cannot be read asks for no acceptance
-                narrowed[ident] = False
-        return narrowed[ident]
+                manifest = store.get(kind, ident)
+                labels[kind, ident] = record_words.phrase_of(kind, SimpleNamespace(kind=kind, name=manifest.name,
+                                                                                   manifest=manifest))
+            except Exception:                # noqa: BLE001 -- a record no longer in Records is said so
+                labels[kind, ident] = None
+        return labels[kind, ident]
 
     return continuing.offers(runs, kept, records_root=str(store.root), set_batches=set_batches,
-                             prior_label=prior_label, parent_narrowed=parent_narrowed)
+                             prior_label=lambda ident: label("prior", ident), label=label)
 
 
 def _input(kept, key: str) -> "tuple[Path, str | None] | None":

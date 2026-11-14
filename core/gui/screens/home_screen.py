@@ -17,7 +17,6 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QSi
 from .. import chain, design, fonts, keys, style
 from ..reported import reported
 from ..run import ends
-from ..run.view import SelectableLines
 from ..widgets.message_row import MessageRow
 from ..widgets.page import Columns, Page, PageHead, Sentence
 from ..widgets.rule_table import Column, RuleTable, StateCell, TextCell
@@ -198,13 +197,6 @@ class HomeScreen(QWidget):
         # the next step: its heading over a rule, a sentence, and the main button
         self.next_heading = SectionHead("")
         self._next_sentence = Sentence()
-        # A command set apart under the sentence (a kept narrowing round's): on lines of its own, in the fixed-width
-        # face, selectable, so that it is copied whole and nothing of the sentence with it, as the Training step's list
-        # sets it.
-        self.next_command = SelectableLines()
-        self.next_command.setFont(fonts.fixed())
-        self.next_command.setFocusPolicy(Qt.StrongFocus)
-        self.next_command.setVisible(False)
         self.next_button = style.set_class(_MainButton(), cls="primary")
         self.next_button.clicked.connect(self._next_pressed)
         # beside the button that takes the offer of a run whose end has not been seen: the way to its page
@@ -226,7 +218,6 @@ class HomeScreen(QWidget):
         lines.addWidget(self.notice)
         lines.addWidget(self.next_heading)                         # step with no sentence keeps no room for one
         lines.addWidget(self._next_sentence)
-        lines.addWidget(self.next_command)
         lines.addLayout(buttons)
 
         # the first opening: two buttons, each with its sentence beside it
@@ -336,8 +327,6 @@ class HomeScreen(QWidget):
         self.next_heading.set_text(self._next.heading)
         self._next_sentence.set_text(self._next.sentence)
         self._next_sentence.setVisible(bool(self._next.sentence))
-        self.next_command.setText(self._next.command)
-        self.next_command.setVisible(bool(self._next.command))
         self.next_button.setText(style.access_key(self._next.button))
         self.next_link.setText(self._next.link or "")
         self.next_link.setVisible(bool(self._next.link))

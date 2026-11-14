@@ -47,6 +47,7 @@ from ...widgets.labeled_inputs import FloatField, IntField
 from ...widgets.result_region import NextStep
 from .base import training_spec
 from .help_text import HELP
+from .posterior_tab import EARLIER_NAME_TEXT
 from .step_page import StepPage
 
 TITLE = "Narrowing round"
@@ -140,6 +141,7 @@ class TSNPEPanel(StepPage):
         self._handed = None                  # the parent posterior and the observation the last round was handed
         self._call = None                    # what the last round was dispatched with, for its start again
         self._bodies: dict = {}              # the body of the observation chosen at the last reading, by its id
+        self._continuing = None              # the offer a "Continue from batch N" set the page to, until a round starts
         self.obs_picker = StorePicker("observation", parent=self, keeps_selection=True, hint=CHOOSE_OBSERVATION,
                                       row_filter=self._of_this_kind)
         self.obs_picker.combo.currentIndexChanged.connect(self._picked)
@@ -282,7 +284,9 @@ class TSNPEPanel(StepPage):
 
     # ── what a page answers ──
     def main_words(self) -> str:
-        return ROUND_START_WORDS
+        """"Start the narrowing round"; while the page is set to continue a round's simulation set, the offer's own
+        words."""
+        return self._continuing.button if self._continuing is not None else ROUND_START_WORDS
 
     def in_use_words(self) -> tuple:
         """What the round would be drawn from: the posterior in use, by its label."""
@@ -397,8 +401,10 @@ class TSNPEPanel(StepPage):
             memory = f"{memory} {ends.last_run_sentence(self._last, self._measured)}"
         names = [fact for fact in (self._names.name_fact(), self._names.note_fact()) if fact]
         field_facts = [*observation_facts, *(Fact("err", line, SETTING_BLOCKS) for line, _said in found.values())]
+        continuing = self._continuing
+        continued = continuing.batch if continuing is not None and continuing.kind == "continue" else None
         return round_facts(needs=needs, uses=uses, prior_own=prior_own or None, simulations=simulations,
-                           checks=self._pre_run(), fit="never" if self._never() else "saved", how_long=how_long,
+                           continuing_from=continued, checks=self._pre_run(), fit="never" if self._never() else "saved", how_long=how_long,
                            memory=memory, others_pending=self._others_pending(), name_facts=names,
                            field_facts=field_facts, plan_lines=self.plan_lines())
 
@@ -540,17 +546,35 @@ class TSNPEPanel(StepPage):
         observation chosen and the budget are remembered. True when its run was started."""
         names = self._names
         call = dict(knobs)
-        call.update(resume="auto", new_run=new_run, name=names.name_value(), note=names.note_value(),
-                    if_name_taken="unnamed")
+        call.update(resume="require" if self._continuing is not None else "auto", new_run=new_run,
+                    name=names.name_value(), note=names.note_value(), if_name_taken="unnamed")
         self._call = (cfg, posterior, prior, observation, knobs)
         started = self.dispatch(orchestrator.tsnpe_round, cfg, posterior, prior, observation, provide_fig_sink=True,
                                 on_result=self._on_round, **call)
         if started:
+            self._continuing = None
             self._handed = (posterior, observation)
             model = getattr(getattr(getattr(self._screen, "session", None), "draft", None), "model", None)
             put_many([(OBSERVATION_KEY, self.obs_picker.key()), (NUM_RUNS_KEY, str(knobs["num_runs"])),
                       (RUN_SIZE_KEY, str(knobs["run_size_cap"]))] + self._screen.last_used(model))
         return started
+
+    def continue_run(self, offer, settings_: dict) -> None:
+        """The round's form filled from its history, for "Continue from batch N" or "Fit again on the saved
+        simulations": the region's level and its directions the run's, the name and the note blank, the earlier run's
+        name as the hint, the main button the offer's, and the next round handed the policy that must continue; the
+        page then read."""
+        rows = self.form.rows
+        for key, name in (("hpd_level", "level"), ("n_directions", "directions")):
+            value = settings_.get(name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                rows[key].set_value(value)
+        self._continuing = offer
+        self._names.name.clear()
+        self._names.note.clear()
+        earlier = settings_.get("name") if isinstance(settings_.get("name"), str) else ""
+        self._names.set_hint(EARLIER_NAME_TEXT.format(earlier) if earlier else "")
+        self.read_facts()
 
     def _refusal(self, exc) -> None:
         """A refusal, as every page tells one; but the stage's refusal of a new simulation set beside a saved one a

@@ -8596,6 +8596,83 @@ def test_continue_passes_the_must_continue_policy_and_asks_no_consent(store, tmp
     assert all_asked() == [], "the press asked a question"
 
 
+def _a_failed_round(store, tmp_path, held, observed, *, batches=236) -> dict:
+    """A narrowing round of the records folder in use that failed at 09:00 on 3 October, its history in the test's
+    folder of runs, its simulation set in the test's store holding ``batches`` of its 10,000, its settings those the
+    round's page hands: the model and its options, master.txt, the prior and the posterior of ``held`` and the
+    observation ``observed``, its level and directions, its name and note, and two of its fit's settings."""
+    from tests._fixtures import write_history, write_simulation_set
+    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "round"}, batches,
+                                  complete=batches >= 10_000)
+    rows = [{"step": "narrowing", "name": name, "label": "", "value": value, "origin": "", "plan": None, "usual": None}
+            for name, value in (("num_runs", 400), ("hidden_features", 64))]
+    given = {"model": "NADROWSKI", "chi_mode": False,
+             "options": {"chi_mode": False, "reparam_rotate": False, "units_override": None},
+             "bounds": "master.txt", "prior": held.prior, "parent_posterior": held.posterior, "observation": observed,
+             "level": 0.99, "directions": 3, "name": "retrain_round1", "note": "a note", "rows": rows}
+    return write_history(tmp_path / "runs", id="20261003T030211-narrowing-round", word="Narrowing round",
+                         name="retrain_round1", place=["inference", "narrowing"], records_root=str(store.root),
+                         started=_at(3, 3, 2, 11), ended=_at(3, 9, 0), outcome="failed", acknowledged=True,
+                         simulation_set={"folder": str(folder), "batches": 10_000, "at_start": 0, "at_end": 5},
+                         settings=given)
+
+
+def test_continue_fills_the_rounds_form_and_passes_the_must_continue_policy(store, tmp_path, monkeypatch):
+    """A narrowing round that failed with its set unfinished, after a reopening: Home offers "Continue from batch 236";
+    the press applies step 1, loads the prior, the posterior it narrows and its observation, and, once step 1 stands,
+    fills the round's form from its history through the plan's fill, under the round's own heading: its fit's
+    settings, its level and its directions; the name and the note blank with the earlier name as the hint; the main
+    button "Continue from batch 236" and the simulations fact saying so. The round then started hands the stage the
+    policy that must continue and no consent to a new set, and asks nothing."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import all_asked, forget_asked
+    from tests._fixtures import _nad_cfg, write_observation
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+        kind="observation", id=ref, name="cell_b", manifest=None))
+    monkeypatch.setattr(orchestrator, "training_preview", lambda *args, **kwargs: SimpleNamespace(width=8))
+    _a_failed_round(store, tmp_path, held, observed)
+    rounds = StandIn(word="Narrowing round")
+    monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    assert (home.next_heading.label.text(), home.next_button.text()) == (
+        "Next: continue the narrowing round", "&Continue from batch 236"), home.next_heading.label.text()
+    home.next_button.click()
+    inference = window.part("inference")
+    turn_until(app, lambda: inference.loads is not None and not inference.loads.is_going()
+               and not controller().is_live())
+    _settle(app, inference)
+    assert inference.loads.why == "", inference.loads.why
+    page = inference.tsnpe_panel
+    assert inference.current_step() == "narrowing" and inference.session.observation.id == observed
+    rows = page.form.rows
+    assert [rows[key].value() for key in ("num_runs", "hidden_features", "hpd_level", "n_directions")] == [
+        400, 64, 0.99, 3]
+    assert (inference.plan_source.kind, inference.plan_source.ident) == ("run", "20261003T030211-narrowing-round")
+    assert (page.names.name_value(), page.names.note_value()) == ("", "")
+    assert page.names.hint.text().replace("​", "") == "The earlier run was named retrain_round1."
+    page.read_facts()
+    assert page.foot.main_button.text().replace("&", "") == "Continue from batch 236"
+    assert any(row.sentence.plain_text() == "Information. Continues this round's simulation set from batch 236."
+               for row in page.foot.facts.rows()), [row.sentence.plain_text() for row in page.foot.facts.rows()]
+    page.names.name.setText("retrain_round2")
+    page.names.check_now()
+    page.read_facts()
+    forget_asked()
+    page.foot.main_button.click()
+    assert rounds.started.wait(5), page.foot.reason.text()
+    rounds.release(SimpleNamespace(kind="posterior", id="20261008T150000", name="retrain_round2", manifest=None))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    _args, kwargs = rounds.calls[-1]
+    assert (kwargs["resume"], kwargs["new_run"], kwargs["level"], kwargs["n_directions"], kwargs["num_runs"]) == (
+        "require", False, 0.99, 3, 400), kwargs
+    assert all_asked() == [], "the press asked a question"
+
+
 @pytest.mark.parametrize("cause", ["bounds edited", "bounds gone", "bounds renamed in its capitals", "units gone",
                                    "units changed", "typed limits with a forcing section", "prior deleted",
                                    "card gone", "a library changed", "model gone"])
@@ -8941,35 +9018,6 @@ def test_a_kept_training_another_program_writes_reaches_home_at_its_next_opening
                                                                          "&Resume")
     window.go_to("inference", "training")
     assert [offer.kept for offer in page.kept_offers()] == [kept] and page.kept_block.isVisibleTo(page)
-
-
-def test_a_kept_rounds_command_is_listed_in_the_fixed_face_and_a_tab_stop(store, tmp_path, monkeypatch):
-    """A kept narrowing round is listed with the command that resumes it, in the fixed-width face, selectable and a
-    stop of the Tab key after the heading's buttons, and no Resume; "Delete" stands beside it."""
-    from core.gui import fonts
-    held = _a_launch_before(store, tmp_path, monkeypatch)
-    kept = _a_kept_training(store, held, name="round_1", region={"lo": [0.0]})
-    window, _home = _home_of_last_time(tmp_path)
-    window.go_to("inference", "training")
-    page = window.part("inference").posterior_panel
-    row = _row_of(page, kept)
-    command = row["command"]
-    assert command.text().startswith(f"python -m core tsnpe --resume-fit {kept} ")
-    from core.gui.run.view import SelectableLines
-    assert (command.font().family(), bool(command.focusPolicy() & Qt.TabFocus), isinstance(command, SelectableLines)) \
-        == (fonts.fixed().family(), True, True)
-    assert not row["resume"].isVisibleTo(page.kept_block) and row["delete"].isVisibleTo(page.kept_block)
-    assert not row["uses"].isVisibleTo(page.kept_block), "a kept round's row says it uses its settings, with no Resume"
-    assert page.region_stops()[:3] == [command, row["resume"], row["delete"]]
-    start = page.head.findChildren(QPushButton)[-1]
-    at, chain = start.nextInFocusChain(), []
-    while at is not start and len(chain) < 500:
-        chain.append(at)
-        at = at.nextInFocusChain()
-    first = page.form.first_control()
-    assert command in chain and row["delete"] in chain and first in chain, "the round's row is no stop of the Tab key"
-    assert chain.index(command) < chain.index(row["delete"]) < chain.index(first), (
-        "the round's row does not come between the heading and the form")
 
 
 def _set_of(tmp_path, batches, *, complete=False):
@@ -9839,29 +9887,6 @@ def test_the_rail_keeps_a_kept_training_when_parameter_inference_opens_at_anothe
 
 
 # ── Home's presses, the kept round's command, the load view's order ──
-def test_home_sets_a_kept_rounds_command_apart_in_the_fixed_face(store, tmp_path, monkeypatch):
-    """A kept narrowing round after a reopening: Home's sentence ends where the command begins, and the command stands
-    on lines of its own under it, in the fixed-width face, selectable and a stop of the Tab key, as the Training step's
-    list sets it; with no round to offer, no command stands."""
-    from core.gui import fonts
-    from core.gui.run.view import SelectableLines
-    held = _a_launch_before(store, tmp_path, monkeypatch)
-    window, home = _home_of_last_time(tmp_path)
-    assert not home.next_command.isVisibleTo(home) and home.next_command.text() == ""
-    window.close()
-    kept = _a_kept_training(store, held, name="round_1", region={"lo": [0.0]})
-    window, home = _home_of_last_time(tmp_path)
-    command, sentence = home.next_command, home._next_sentence.plain_text()
-    assert home.next_heading.label.text() == "Next: resume the narrowing round"
-    assert sentence.endswith("It is resumed from the command line until its page offers it:"), sentence
-    assert "python -m core" not in sentence, "the command stands inside the sentence"
-    assert command.text().startswith(f"python -m core tsnpe --resume-fit {kept} ") and command.isVisibleTo(home)
-    assert (isinstance(command, SelectableLines), command.font().family(), bool(command.focusPolicy() & Qt.TabFocus)) \
-        == (True, fonts.fixed().family(), True)
-    layout = home._next_block.layout()
-    assert layout.indexOf(command) == layout.indexOf(home._next_sentence) + 1, "the command is not under the sentence"
-
-
 def test_the_load_view_lists_the_saved_posteriors_before_the_kept_trainings(store, tmp_path, monkeypatch):
     """The kept trainings stand under what the step holds while a training is set up, beside the choice to start one;
     in the load view, which is for the saved posteriors, they stand after them, on the page and in the Tab key's

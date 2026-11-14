@@ -54,7 +54,7 @@ from ...reported import reported
 from ...run import ends, history
 from ...run.controller import controller
 from ...run.model import TYPED_EPOCHS_TEXT, RunSpec
-from ...run.view import SelectableLines, WrappedWords
+from ...run.view import WrappedWords
 from ...step_facts import (CANCEL, CONTINUING, FIT_RULES, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
                            Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
                            narrowed_question, new_set_question, new_training_question, of_this_model,
@@ -557,9 +557,9 @@ class PosteriorPanel(StepPage):
             self._lists_wait = False
 
     def kept_offers(self) -> tuple:
-        """The kept trainings the list shows, as the screen last read them, newest first."""
-        return tuple(offer for offer in (getattr(self._screen, "offers", tuple)() or ())
-                     if offer.kind in ("resume", "round"))
+        """The kept trainings the list shows, as the screen last read them, newest first: ordinary trainings alone, a
+        kept narrowing round standing on its own page."""
+        return tuple(offer for offer in (getattr(self._screen, "offers", tuple)() or ()) if offer.kind == "resume")
 
     def redraw(self) -> None:
         """What every page draws, then the list of kept trainings as last read."""
@@ -567,8 +567,8 @@ class PosteriorPanel(StepPage):
         self._draw_the_kept()
 
     def _draw_the_kept(self) -> None:
-        """One row for each kept training: its label, what it says, why it cannot be resumed or the command that resumes
-        a kept narrowing round, then "Resume" and "Delete"; a kept training a live run of this window trains reads
+        """One row for each kept training: its label, what it says, why it cannot be resumed, then "Resume" and
+        "Delete"; a kept training a live run of this window trains reads
         "running" and offers nothing. Reads nothing; rows made again only when the list's trainings change, and the Tab
         key's order then with them."""
         offers, live = self.kept_offers(), controller().is_live()
@@ -613,13 +613,6 @@ class PosteriorPanel(StepPage):
         parts = {"row": row, "label": label, "sentence": sentence, "why": why, "uses": uses}
         for part in (label, sentence, uses, why):
             lines.addWidget(part)
-        if offer.command:
-            command = SelectableLines()
-            command.setFont(fonts.fixed())
-            command.setText(offer.command)
-            command.setFocusPolicy(Qt.StrongFocus)
-            lines.addWidget(command)
-            parts["command"] = command
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         parts["resume"] = QPushButton(RESUME_WORDS)
@@ -633,10 +626,10 @@ class PosteriorPanel(StepPage):
         return parts
 
     def region_stops(self) -> list:
-        """The list's own stops, in its order: each row's command, then its two buttons."""
+        """The list's own stops, in its order: each row's two buttons."""
         stops = []
         for _offer, parts in self._kept_rows:
-            stops += [part for part in (parts.get("command"), parts["resume"], parts["delete"]) if part is not None]
+            stops += [parts["resume"], parts["delete"]]
         return stops
 
     def delete_pressed(self, ident: str) -> None:

@@ -6040,3 +6040,38 @@ def test_a_remembered_recording_is_put_back_once_and_never_over_a_box_emptied(tm
             screen.refresh_gates()
             page.read_facts()
         assert box.text() == "", "a box the person emptied was filled again"
+
+
+# ── a kept narrowing round ──
+def _kept_rounds(store, *, passes=41, name="retrain_round1", **more) -> str:
+    """A kept narrowing round in ``store``, its parents a prior, a simulation set, the posterior it narrows and the
+    observation it trains around, by ids of their own: its id."""
+    from tests._fixtures import build_fit_record, region_dict
+    return build_fit_record(store, passes=passes, posterior_name=name, region=region_dict(),
+                            parents={"prior": "20261002T101500", "simulation": "7c1e09aa2f31",
+                                     "parent_posterior": "20261002T120000", "observation": "20261002T130000"},
+                            **more)
+
+
+def test_the_training_steps_list_holds_no_round(tmp_path, monkeypatch):
+    """A kept narrowing round after a reopening is offered on the Narrowing round step alone: the Training step's list
+    of kept trainings holds the ordinary ones, and its state says nothing of the round; the round's step says it. The
+    table's sentence for a training to resume stays the Training step's."""
+    from core.artifacts import ArtifactStore, default_store, use_store
+    from core.gui import fields
+    from tests._fixtures import build_fit_record, build_window
+    from tests._runs import Clock, at, controller_on
+    qt_app()
+    with use_store(ArtifactStore(tmp_path / "Artifacts")):
+        controller_on(tmp_path, Clock(at(8, 12, 4)))
+        ordinary = build_fit_record(default_store(), passes=3, posterior_name="retrain_1")
+        kept = _kept_rounds(default_store())
+        window = build_window()
+        screen = window.part("inference")
+        screen.read_offers()
+        assert {offer.kept: (offer.kind, offer.step) for offer in screen.offers()} == {
+            ordinary: ("resume", "training"), kept: ("round", "narrowing")}
+        assert [offer.kept for offer in screen.posterior_panel.kept_offers()] == [ordinary]
+        assert [offer.kept for offer, _parts in screen.posterior_panel._kept_rows] == [ordinary]
+        assert "narrowing" not in screen.step_states()[2].detail.lower()
+        assert fields.CONTROL["resume_fit"] == "Look at the kept trainings in step 3, Training."

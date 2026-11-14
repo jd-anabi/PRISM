@@ -556,8 +556,9 @@ class MainWindow(QMainWindow):
         inference = self._built.get("inference")
         if inference is not None:
             return inference.step_states()
-        return chain.step_states(SbiSession(), label=record_words.label_of,
-                                 kept=continuing.for_the_steps(getattr(self, "_offers", ())))
+        offered = getattr(self, "_offers", ())
+        return chain.step_states(SbiSession(), label=record_words.label_of, kept=continuing.for_the_steps(offered),
+                                 kept_round=continuing.for_the_round(offered))
 
     def _home_facts(self) -> HomeFacts:
         """What Home states, read now: Parameter inference's session and its six steps as last worked out (before
@@ -598,13 +599,17 @@ class MainWindow(QMainWindow):
         loads what was in use last time, as Home last read it. The person stays on Home, under the wait cursor while
         Parameter inference is built and step 1 applied; each load then shows at the rail's foot. Home is drawn again as
         step 1 is applied, and reads again at each load's end, as at every run's. "continue_run" and "resume" take the
-        offer Home's next step names (``offer_pressed``). Nothing while a run is live, with nothing read, or for an action
-        this window does not know."""
+        offer Home's next step names (``offer_pressed``), and so does "continue_round" for a narrowing round's;
+        "open_round" opens the Narrowing round page on the kept round Home names, resuming nothing. Nothing while a run
+        is live, with nothing read, or for an action this window does not know."""
         if controller().is_live():
             return
-        if action in ("continue_run", "resume"):
-            home = self._built.get("home")
-            self.offer_pressed(getattr(getattr(home, "next", None), "offer", None), where="home")
+        offered = getattr(getattr(self._built.get("home"), "next", None), "offer", None)
+        if action in ("continue_run", "resume", "continue_round"):
+            self.offer_pressed(offered, where="home")
+            return
+        if action == "open_round":
+            self.open_kept_round(offered)
             return
         picks = self._picks
         if action != "continue_with_these" or getattr(picks, "model", None) is None:
@@ -626,14 +631,21 @@ class MainWindow(QMainWindow):
         else:
             self._states_changed(self._step_states())
 
+    def open_kept_round(self, offer) -> None:
+        """Home's "Open Narrowing round" for a kept round: the Narrowing round page opened, resuming nothing. Nothing
+        while a run is live, or for no offer."""
+        if controller().is_live() or offer is None:
+            return
+        self.go_to("inference", "narrowing")
+
     def offer_pressed(self, offer, where: str = "training") -> None:
-        """An offer taken, from Home's button (``where`` "home") or a past view's, which stands on the Training step.
-        For a training of this launch whose page still offers it, that page opened and its own button pressed. Else
+        """An offer taken, from Home's button (``where`` "home") or a past view's, which stands on the offer's own step.
+        For a run of this launch whose page still offers it, that page opened and its own button pressed. Else
         "Continue from batch N" or "Fit again" fills the forms from the run's history and continues it, what stops it
-        said under the Training step's heading and, pressed on a past view, on that view, and "Resume" resumes the kept
-        training on its own record, each through Parameter inference, which opens at the Training step. A past view says
-        only what its own press set: what an earlier press left there goes. Nothing while a run is live, or for no
-        offer."""
+        said under its step's heading and, pressed on a past view of the Training step, on that view, and "Resume"
+        resumes the kept training on its own record, each through Parameter inference, which opens at the offer's step:
+        Training, or the Narrowing round for a round's. A past view says only what its own press set: what an earlier
+        press left there goes. Nothing while a run is live, or for no offer."""
         if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
                                                                                           "resume"):
             return
@@ -649,6 +661,10 @@ class MainWindow(QMainWindow):
             return
         inference = self.part("inference")
         if not isinstance(inference, InferenceScreen):
+            return
+        if getattr(offer, "step", "training") == "narrowing":
+            if offer.kind != "resume":
+                inference.continue_round(offer, where="home" if where == "home" else "narrowing")
             return
         if offer.kind == "resume":
             inference.resume_kept(offer.kept)

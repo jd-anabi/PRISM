@@ -901,12 +901,65 @@ def test_a_resumable_kept_training_makes_step_three_unfinished_with_no_prior():
     assert (state.marker, state.detail) == ("done", "retrain")
 
 
+def test_a_kept_round_makes_step_six_unfinished_before_its_needs():
+    """A kept narrowing round that can be resumed turns step 6 to "Unfinished" after the epoch it holds, and a round
+    to continue after the batch its set holds, before what the step needs (a posterior, a prior, an observation), since
+    the press puts its own in use; it can start; step 3 is not touched by it, and step 6 holding a narrowed posterior
+    says that first."""
+    from types import SimpleNamespace
+    for kept, want in ((_offer("round", kept="k", epoch=41, step="narrowing"),
+                        ("Narrowing round kept after epoch 41", "Unfinished: epoch 41")),
+                       (_offer("continue", run="r", batch=236, step="narrowing"),
+                        ("Simulations saved to batch 236", "Unfinished: batch 236"))):
+        for session in (_session(), _session(**_MODEL)):
+            states = chain.step_states(session, kept_round=kept)
+            state = states[5]
+            assert (state.marker, state.detail, state.rail_words, state.can_start, state.done) == (
+                "half", *want, True, False), (kept.kind, state)
+            assert states[2].marker != "half", "a kept round made step 3 unfinished"
+    for kind, held in (("round", dict(epoch=41)), ("continue", dict(batch=236))):
+        state = chain.step_states(_session(**_MODEL), kept=_offer(kind, step="narrowing", **held))[2]
+        assert state.marker != "half", kind
+    narrowed = SimpleNamespace(name="retrain_round1", posterior=SimpleNamespace(truncation=object()))
+    state = chain.step_states(_session(**{**_TRAINED, "posterior": narrowed}),
+                              kept_round=_offer("round", kept="k", epoch=41, step="narrowing"))[5]
+    assert state.marker == "done", state
+
+
+def test_home_picks_a_kept_round_in_its_order():
+    """A kept round is one of the offers Home takes by their age: the newest offer that can be taken stands first,
+    a kept round's like any other, above what was in use last time and the step in hand; one that cannot be resumed is
+    passed over."""
+    last = SimpleNamespace(model="NADROWSKI", chi_mode=False, bounds=None, prior=None, posterior=None, plan=None,
+                           prior_words="", posterior_words="")
+    session = _session()
+    states = chain.step_states(session)
+    kept_round = _offer("round", kept="k", epoch=41, label="retrain_round1", step="narrowing")
+    training = _offer("continue", run="r", batch=236)
+    assert chain.next_step(session, states, picks=last, offers=(kept_round, training)).action == "open_round"
+    assert chain.next_step(session, states, picks=last, offers=(training, kept_round)).action == "continue_run"
+    refused = _offer("round", kept="k", epoch=41, step="narrowing", why_not="its code has changed")
+    assert chain.next_step(session, states, picks=last, offers=(refused,)).action == "continue_with_these"
+
+
+def test_an_offers_action_is_read_from_its_kind_and_its_step():
+    """What a button that takes an offer does is read from the offer's kind and the step whose page takes it, never
+    from its kind alone: a kept training resumes, a kept round opens its page, a round's history continues the round,
+    and a training's continues the training; anything else no button takes."""
+    for kind, step, want in (("resume", "training", "resume"), ("continue", "training", "continue_run"),
+                             ("fit_again", "training", "continue_run"), ("round", "narrowing", "open_round"),
+                             ("continue", "narrowing", "continue_round"), ("fit_again", "narrowing", "continue_round"),
+                             ("stopped", "training", None), ("stopped", "narrowing", None),
+                             ("round", "training", None), ("resume", "narrowing", None)):
+        assert chain.action_of(_offer(kind, step=step)) == want, (kind, step)
+
+
 def test_home_names_the_newest_offer_above_what_was_in_use_last_time():
     """The newest offer that can be taken stands above "Continue with these" and the step in hand: a training to
-    continue, a set to fit again, a kept training to resume by its name, a kept narrowing round with its command and
-    the step that lists it, an unnamed one by Records' label read as part of the heading; a training stopped with its
-    set unfinished, and a kept training that cannot be resumed, are passed over, so Home stays ordinary after a
-    stop."""
+    continue, a set to fit again, a kept training to resume by its name, a kept narrowing round by its name, opened on
+    the step that lists it with no command, a narrowing round to continue, an unnamed one by Records' label read as part
+    of the heading; a training stopped with its set unfinished, and a kept training that cannot be resumed, are passed
+    over, so Home stays ordinary after a stop."""
     last = SimpleNamespace(model="NADROWSKI", chi_mode=False, bounds=None, prior=None, posterior=None, plan=None,
                            prior_words="", posterior_words="")
     session = _session()
@@ -921,13 +974,16 @@ def test_home_names_the_newest_offer_above_what_was_in_use_last_time():
             (_offer("resume", kept="k", epoch=41, label="retrain_3"), ("Next: resume the training retrain_3",
                                                                        "what the resume says", "Resume", "inference",
                                                                        "training", "resume")),
-            (_offer("round", kept="k", command="python -m core tsnpe --resume-fit k"),
-             ("Next: resume the narrowing round", "what the round says", "Open Training", "inference", "training",
-              None))):
+            (_offer("round", kept="k", epoch=41, label="retrain_round1", step="narrowing"),
+             ("Next: resume the narrowing round retrain_round1", "what the round says", "Open Narrowing round",
+              "inference", "narrowing", "open_round")),
+            (_offer("continue", run="r", batch=236, step="narrowing"),
+             ("Next: continue the narrowing round", "what the continue says", "Continue from batch 236", "inference",
+              "narrowing", "continue_round"))):
         found = chain.next_step(session, states, picks=last, offers=(offer,))
         assert (found.heading, found.sentence, found.button, found.part, found.page, found.action) == want, offer.kind
         assert found.offer is offer and found.link is None
-        assert found.command == ("python -m core tsnpe --resume-fit k" if offer.kind == "round" else ""), offer.kind
+        assert not hasattr(found, "command"), "Home's next step still sets a command apart"
     unnamed = _offer("resume", kept="k", epoch=41, label="Unnamed unfinished training, 3 Oct 2026, 01:00", named=False)
     assert chain.next_step(session, states, picks=last, offers=(unnamed,)).heading == (
         "Next: resume the unnamed unfinished training, 3 Oct 2026, 01:00"), "an unnamed one's heading is no sentence"

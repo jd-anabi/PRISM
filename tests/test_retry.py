@@ -1474,9 +1474,10 @@ def _kept(ident, *, state="stopped unexpectedly", can_resume=True, why_not=None,
                    why_not=why_not, stopped_on_purpose=on_purpose, stopped_at=None, stop_reason=reason)
 
 
-def _offered(histories=(), kept=(), *, sets=None, root=_ROOT, narrowed=()):
+def _offered(histories=(), kept=(), *, sets=None, root=_ROOT):
     """The offers of ``histories`` and ``kept``, each set holding what ``sets`` says by its folder's name (none: no
-    set), the posteriors ``narrowed`` names narrowed; and the folders' names whose count was read."""
+    set), the prior, the parent posterior and the observation of a kept round named as Records would; and the folders'
+    names whose count was read."""
     import os
     from core.gui import continuing
     read, sets = [], sets or {}
@@ -1486,10 +1487,12 @@ def _offered(histories=(), kept=(), *, sets=None, root=_ROOT, narrowed=()):
         read.append(name)
         return sets.get(name)
 
+    names = {("prior", "20261002T101500"): "the prior retrain_prior",
+             ("posterior", "20261002T120000"): "the posterior retrain_posterior",
+             ("observation", "20261002T130000"): "the observation cell_b"}
     found = continuing.offers(histories, kept, records_root=root, set_batches=counted,
-                              prior_label=lambda ident: ("the prior retrain_prior" if ident == "20261002T101500"
-                                                         else None),
-                              parent_narrowed=lambda ident: ident in narrowed)
+                              prior_label=lambda ident: names.get(("prior", ident)),
+                              label=lambda kind, ident: names.get((kind, ident)))
     return found, read
 
 
@@ -1602,32 +1605,95 @@ def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
                                       "Its fit is finished; resuming writes the posterior without training again.")
 
 
-def test_a_kept_round_is_listed_with_its_command_and_no_resume():
-    """A kept narrowing round offers the command line that resumes it, which the tool's own parser takes, naming the
-    kept training, the bounds file, the parent posterior, the observation and the kind of observation as its record
-    holds them, the processor when it trained there, and the acceptance of a parent posterior that is itself narrowed
-    when it is; Home names it, the steps' state does not."""
+#: A kept narrowing round's parents, as its record names them.
+_ROUND_PARENTS = {"prior": "20261002T101500", "simulation": "7c1e09aa2f31", "parent_posterior": "20261002T120000",
+                  "observation": "20261002T130000"}
+#: A narrowing round's settings as its run hands its history: what its Continue loads and fills.
+_ROUND_SETTINGS = {**_SETTINGS, "parent_posterior": "20261002T120000", "observation": "20261002T130000",
+                   "level": 0.99, "directions": 3,
+                   "rows": [{"step": "narrowing", "name": "num_runs", "label": "Batches", "value": 400,
+                             "origin": "changed from the usual", "plan": None, "usual": 5000}]}
+
+
+def test_a_kept_round_is_offered_with_resume_and_no_command():
+    """A kept narrowing round is offered on its own step, the Narrowing round's, with "Resume", as a kept training is,
+    and no command line anywhere: its sentence in a round's words names how it stopped and when, its best loss, the
+    observation it trains around, the posterior it was narrowed from, its simulation set and its prior, and that a
+    resume reads the set back first. The steps' state of Training says nothing of it; the round's says it, and Home
+    names it."""
+    from datetime import datetime
     from core.gui import continuing
+    from core.gui.texts import date_text
     kept = _kept("20261003T130500", region={"lo": [0.0]}, config={"chi_mode": False, "device": "cpu"},
+                 saved="2026-10-03T10:12:00+00:00", passes=41, name="retrain_round1",
                  inputs={"bounds": {"path": "Bounds/nadrowski/master weak.txt", "sha256": "0" * 64}},
-                 parents={"prior": "p", "simulation": "s", "parent_posterior": "20261002T120000",
-                          "observation": "20261002T130000"})
+                 parents=_ROUND_PARENTS)
     found, _read = _offered((), [kept])
     offer, = found
-    assert (offer.kind, offer.button, continuing.for_home(found), continuing.for_the_steps(found)) == (
-        "round", "Open Training", offer, None)
-    assert offer.command == ('python -m core tsnpe --resume-fit 20261003T130500 --bounds "Resources/Bounds/nadrowski/'
-                             'master weak.txt" --posterior 20261002T120000 --observation 20261002T130000 --no-chi '
-                             '--device cpu'), offer.command
-    args, refused = _parsed(offer.command)
-    assert refused == "" and (args.resume_fit, args.posterior, args.observation) == (
-        "20261003T130500", "20261002T120000", "20261002T130000"), refused
-    assert offer.sentence.endswith("It is resumed from the command line until its page offers it: ")
-    assert not args.accept_truncated
-    (narrowed,), _read = _offered((), [kept], narrowed=("20261002T120000",))
-    args, refused = _parsed(narrowed.command)
-    assert narrowed.command.endswith(" --no-chi --accept-truncated --device cpu") and refused == "" and (
-        args.accept_truncated is True), (narrowed.command, refused)
+    assert (offer.kind, offer.step, offer.button, offer.why_not) == ("round", "narrowing", "Resume", "")
+    assert (continuing.for_home(found), continuing.for_the_steps(found), continuing.for_the_round(found)) == (
+        offer, None, offer)
+    saved = date_text(datetime.fromisoformat("2026-10-03T10:12:00+00:00").astimezone())
+    assert offer.sentence == (
+        f"It stopped unexpectedly after epoch 41, last saved {saved}. Best validation loss -3.10, 2 epochs ago. It "
+        "trains around the observation cell_b, narrowed from the posterior retrain_posterior, on the simulation set "
+        "7c1e09aa2f31 and the prior retrain_prior. Resuming first reads the simulation set back, about four minutes at "
+        "full size."), offer.sentence
+    assert not hasattr(offer, "command") and not hasattr(continuing, "round_command")
+    assert "--resume-fit" not in repr(found)
+    gone, _read = _offered((), [_kept("20261003T130500", region={"lo": [0.0]},
+                                      parents={**_ROUND_PARENTS, "observation": "o9", "parent_posterior": "p9"})])
+    assert "around an observation no longer in Records, narrowed from a posterior no longer in Records" in (
+        gone[0].sentence), gone[0].sentence
+
+
+def test_a_rounds_history_offers_continue_from_batch_n():
+    """A narrowing round that failed, or was not seen to end, with its set unfinished and settings that name its bounds
+    file, the posterior it narrows and its observation, offers "Continue from batch N" on its own step, N the set's own
+    count whatever the history's counts say; its set whole, "Fit again"; Home names it in a round's words."""
+    from core.gui import continuing
+    for outcome in ("failed", "not seen to end"):
+        found, read = _offered([_history("20261003T120000-narrowing-round", 3, outcome, word="Narrowing round",
+                                         settings=_ROUND_SETTINGS)], sets={"eda5c2a1e468": 236})
+        offer, = found
+        assert (offer.kind, offer.step, offer.batch, offer.button) == (
+            "continue", "narrowing", 236, "Continue from batch 236"), outcome
+        assert offer.sentence.startswith("The narrowing round narrowing round_3 ") and offer.sentence.endswith(
+            "The simulations up to batch 236 are saved."), offer.sentence
+        assert continuing.for_the_round(found) is offer and continuing.for_the_steps(found) is None
+        assert read == ["eda5c2a1e468"]
+    whole, _read = _offered([_history("20261003T120000-narrowing-round", 3, "failed", word="Narrowing round",
+                                      settings=_ROUND_SETTINGS)], sets={"eda5c2a1e468": 10_000})
+    assert [(offer.kind, offer.step, offer.button) for offer in whole] == [
+        ("fit_again", "narrowing", "Fit again on the saved simulations")]
+
+
+@pytest.mark.parametrize("settings", [None, {key: value for key, value in _ROUND_SETTINGS.items()
+                                             if key != "parent_posterior"},
+                                      {key: value for key, value in _ROUND_SETTINGS.items() if key != "observation"}],
+                         ids=["no settings", "no parent posterior", "no observation"])
+def test_a_round_run_before_its_settings_were_kept_is_offered_no_continue(settings):
+    """A narrowing round whose history keeps no settings, or settings that name no parent posterior or no observation,
+    as a round run before its page handed them, is offered nothing to press: Home says how it ended."""
+    found, _read = _offered([_history("20261003T120000-narrowing-round", 3, "failed", word="Narrowing round",
+                                      settings=settings)], sets={"eda5c2a1e468": 236})
+    assert found == ()
+
+
+def test_each_word_offers_from_its_own_newest_run():
+    """The newest training and the newest narrowing round each offer by the same rule, apart: a training started after
+    a round that failed leaves the round's offer standing; a later run of the same word leaves the earlier nothing."""
+    from core.gui import continuing
+    round_ = _history("20261003T120000-narrowing-round", 3, "failed", word="Narrowing round", settings=_ROUND_SETTINGS)
+    training = _history("20261005T120000-training", 5, "failed", folder="0a1b2c3d4e5f")
+    found, _read = _offered([round_, training], sets={"eda5c2a1e468": 236, "0a1b2c3d4e5f": 700})
+    assert [(offer.kind, offer.step, offer.batch) for offer in found] == [("continue", "training", 700),
+                                                                          ("continue", "narrowing", 236)]
+    assert (continuing.for_the_steps(found).step, continuing.for_the_round(found).step) == ("training", "narrowing")
+    later = _history("20261006T120000-narrowing-round", 6, "finished", word="Narrowing round",
+                     settings=_ROUND_SETTINGS)
+    found, _read = _offered([round_, training, later], sets={"eda5c2a1e468": 236, "0a1b2c3d4e5f": 700})
+    assert [(offer.kind, offer.step) for offer in found] == [("continue", "training")]
 
 
 def test_of_two_trainings_started_in_one_second_the_later_is_the_newest():

@@ -6432,8 +6432,8 @@ def test_a_chain_whose_first_link_raises_ends_and_raises(tmp_path):
 
 def _kept_many(store, count=12):
     """``count`` kept trainings in ``store``, each that can be resumed (its set whole, its code, constants and libraries
-    this process's): the first named with a name of more than sixty characters, the second a narrowing round whose
-    command names a bounds file by a long path. Their ids."""
+    this process's): the first named with a name of more than sixty characters, each made from a bounds file of a long
+    path. Their ids."""
     from types import SimpleNamespace
     from core.artifacts import write_fit_manifest
     from core.SBI import fit_state
@@ -6444,7 +6444,7 @@ def _kept_many(store, count=12):
         identity = {"simulation": {"kept": at}, "batches": 4, "settings": {}, "code": fit_state.loaded_code(),
                     "constants": fit_state.constants(), "libraries": fit_state.libraries(), "network": "0" * 16}
         body = {**_fit_body(passes=at + 1, posterior_name=_LONG_NAME if at == 0 else f"retrain_{at}",
-                            identity=identity), "region": {"lo": [0.0]} if at == 1 else None}
+                            identity=identity), "region": None}
         cfg = SimpleNamespace(model="NADROWSKI", sources={"bounds": _LONG_BOUNDS})
         path = store.new_fit_dir()
         path.mkdir(parents=True)
@@ -6457,9 +6457,8 @@ def _kept_many(store, count=12):
 
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_list_of_kept_trainings_fits_its_column_at_the_windows_least_size(factor, tmp_path, monkeypatch, store):
-    """The Training step listing twelve kept trainings, one named with more than sixty characters and one a narrowing
-    round whose command names a long path, at the window's least size, at the ordinary text size and at one and a half
-    times it: no row, sentence or command is wider than the step's column, each wrapping inside a long name or path
+    """The Training step listing twelve kept trainings, one named with more than sixty characters, at the window's least
+    size, at the ordinary text size and at one and a half times it: no row or sentence is wider than the step's column, each wrapping inside a long name or path
     where it must, and each as tall as its lines; the step asks for no more width than without the list; the Tab key,
     from the heading's last button, reaches each "Resume" and "Delete", and each comes whole into the body's view, the
     last row's among them; and with a run live from that page, the run's page fits its column as it does on every
