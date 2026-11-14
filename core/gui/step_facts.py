@@ -1071,6 +1071,8 @@ NETWORK_HELD_TEXT = "The posterior in use was trained at {} by {}."
 NETWORK_DIFFERS_TEXT = "The posterior in use was trained at {} by {}; this round trains {} by {}."
 ROTATION_REUSED_TEXT = "Rotation: the posterior's own is reused."
 CHANGED_TO_TEXT = "Changed to the observation just made, {}. Before: {}."
+#: Under the list while an observation a next step carried waits for the step's next reading of its list.
+CARRIED_TEXT = "The observation carried here, {}, is chosen once this step reads its list again."
 CANNOT_BE_USED_TEXT = "Cannot be used: this posterior was narrowed around another observation"
 CANNOT_BE_USED_BLOCKS = "the observation cannot be used"
 ROUND_USES_TEXT = "Posterior {} and its prior {}; observation {}{}."

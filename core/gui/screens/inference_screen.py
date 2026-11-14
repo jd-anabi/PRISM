@@ -933,8 +933,8 @@ class InferenceScreen(QWidget):
 
     def refresh_gates(self):
         """Run every step's own gate, which greys the buttons of a step that cannot start yet (no step is ever
-        disabled as a whole), then work out the six steps' states again. The states come after the gates: the
-        narrowing round's list of observations, which its state reads, is refreshed by its gate."""
+        disabled as a whole), then work out the six steps' states again. The states come after the gates; the narrowing
+        round's list of observations, which its state reads, is listed by the round's own reading, never by a gate."""
         for panel in self.panels():
             panel.refresh_local_gates()
         self.recompute_states()

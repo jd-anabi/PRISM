@@ -5530,12 +5530,13 @@ def test_an_inference_name_taken_meanwhile_empties_the_observations_name_and_say
 
 # ── the sixth step, the narrowing round ──
 @contextlib.contextmanager
-def _sixth_step(tmp_path, monkeypatch, *, narrowed=False, network=(256, 10)):
+def _sixth_step(tmp_path, monkeypatch, *, narrowed=False, network=(256, 10), chi=False):
     """The narrowing round in a whole window in sight, off the screen, on the test's own clock and store: the first step
     applied; a real Nadrowski configuration of the master bounds file and a prior of it in use; two observations,
     cell_a and cell_b, of other digests; a posterior trained with that prior at ``network`` held, narrowed around cell_a
-    with ``narrowed``; the observation loaded at the press a stand-in of the one chosen; the round's stage a stand-in
-    run; the page read: (window, screen, page, the stand-in run, the observations' ids by name)."""
+    with ``narrowed``; of the frequency response with ``chi``; the observation loaded at the press a stand-in of the one
+    chosen; the round's stage a stand-in run; the page read: (window, screen, page, the stand-in run, the observations'
+    ids by name)."""
     from core import orchestrator
     from core.artifacts import ArtifactStore, default_store, use_store
     from tests._fixtures import _nad_cfg, _prior_artifact, write_observation
@@ -5543,7 +5544,7 @@ def _sixth_step(tmp_path, monkeypatch, *, narrowed=False, network=(256, 10)):
     with use_store(ArtifactStore(tmp_path / "Artifacts")):
         window, screen, first = _shown_first_step(tmp_path)
         _apply(first)
-        cfg = _nad_cfg()
+        cfg = _nad_cfg(chi_mode=True) if chi else _nad_cfg()
         prior = default_store().load_prior(cfg, _prior_artifact(default_store(), cfg, name="retrain_prior").id)
         made = {name: write_observation(default_store(), cfg, name=name, digest=mark * 16)
                 for name, mark in (("cell_a", "a"), ("cell_b", "b"))}
@@ -5681,7 +5682,8 @@ def test_the_rounds_shared_rows_read_as_trainings_and_are_held_to_the_same_rules
 
 def test_a_new_observation_moves_the_list_and_says_so(tmp_path, monkeypatch):
     """An observation an inference makes moves the round's list to it once that run has ended, never while it is live;
-    the line under the list says which it replaced."""
+    the line under the list says which it replaced, through every later reading, and goes once the person picks
+    another observation."""
     from tests._runs import StandIn, start_run
     with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, made):
         page.obs_picker.restore_key(made["cell_a"])
@@ -5694,12 +5696,17 @@ def test_a_new_observation_moves_the_list_and_says_so(tmp_path, monkeypatch):
         assert page.obs_picker.key() == made["cell_b"]
         line = page.form.rows["observation"].line
         assert (line.kind, line.words) == ("warn", "Changed to the observation just made, cell_b. Before: cell_a.")
+        page.read_facts()
+        assert page.form.rows["observation"].line.words.startswith("Changed to"), "a reading took the line away"
+        page.obs_picker.combo.setCurrentIndex(page.obs_picker.combo.findData(made["cell_a"]))
+        page.redraw()
+        assert not page.form.rows["observation"].line.says(), "the line outlived the person's own pick"
 
 
 def test_the_observations_a_narrowed_posterior_cannot_use_are_greyed_with_their_reason(tmp_path, monkeypatch):
     """With a posterior narrowed around cell_a in use, cell_b, of another digest, is listed greyed with why, and chosen
-    all the same it is said under the list and greys the start; cell_a stays choosable, so one is on offer. The rows are
-    read through the list's own data, no item of it held."""
+    all the same it is said under the list and greys the start; cell_a stays choosable, with the list's own tip, so one
+    is on offer. The rows are read through the list's own data, no item of it held."""
     from PySide6.QtCore import Qt
     with _sixth_step(tmp_path, monkeypatch, narrowed=True) as (_window, _screen, page, _run, made):
         combo = page.obs_picker.combo
@@ -5710,7 +5717,8 @@ def test_the_observations_a_narrowed_posterior_cannot_use_are_greyed_with_their_
 
         assert not choosable(at_b) and combo.itemData(at_b, Qt.ItemDataRole.ToolTipRole) == (
             "Cannot be used: this posterior was narrowed around another observation.")
-        assert choosable(at_a) and combo.itemData(at_a, Qt.ItemDataRole.ToolTipRole) is None
+        assert choosable(at_a) and combo.itemData(at_a, Qt.ItemDataRole.ToolTipRole).startswith(made["cell_a"]), (
+            "the list's own tip of a usable row was taken away")
         assert page.observation_on_offer()
         combo.setCurrentIndex(at_b)
         page.names.name.setText("retrain_round1")
@@ -5897,3 +5905,106 @@ def test_a_rounds_expected_epochs_are_said_as_the_last_narrowing_round_of_its_ki
     assert controller_module._expected(store, {"model": "NADROWSKI", "observation": "chi", "narrowed": True}) == (
         40, "about 40 epochs: the last narrowing round of this kind, retrain_round1, ran 40")
     assert controller_module._expected(store, {"model": "NADROWSKI", "observation": "chi", "narrowed": False}) is None
+
+
+def test_a_failed_pre_run_check_asks_before_the_round_loads_or_starts_anything(tmp_path, monkeypatch):
+    """After the audit of the prior in use read "Failed", "Start the narrowing round" asks one question first, "Cancel"
+    preselected, before the observation is loaded or anything is dispatched: "Cancel" starts nothing; "Start the
+    narrowing round anyway" loads the observation and dispatches the round once."""
+    from core.artifacts import ArtifactStore
+    from tests._runs import at
+    with _sixth_step(tmp_path, monkeypatch, chi=True) as (window, screen, page, run, made):
+        loads = []
+        held = ArtifactStore.load_observation
+        monkeypatch.setattr(ArtifactStore, "load_observation",
+                            lambda store, cfg, ref: (loads.append(ref), held(store, cfg, ref))[1])
+        _an_audit(screen, created=at(3, 14, 40), masked_fraction=0.5)
+        window._store_changed()
+        _ready_round(page, made)
+        forget_asked()
+        choose(monkeypatch, default=True)
+        page._main_clicked()
+        question = asked()
+        assert (question.title, question.answers, question.default) == (
+            "Start the narrowing round although a check failed?", ("Start the narrowing round anyway", "Cancel"),
+            "Cancel"), question
+        assert (loads, run.calls, len(all_asked())) == ([], [], 1), "the round loaded or started before its question"
+        forget_asked()
+        choose(monkeypatch, words="Start the narrowing round anyway")
+        page._main_clicked()
+        assert run.started.wait(5), page.foot.reason.text()
+        assert (loads, len(run.calls), len(all_asked())) == ([made["cell_a"]], 1, 1), (loads, run.calls)
+        _round_ends(run)
+
+
+def test_a_carried_observation_not_listed_yet_is_held_and_chosen_at_the_next_reading(tmp_path, monkeypatch):
+    """While a run is live a next step's observation is not looked for in the store: the page lists nothing, holds the
+    id and says under the list that it is chosen once the step reads its list again; when the run has ended the round,
+    in sight, reads, chooses it, and the line goes."""
+    from core.artifacts import default_store
+    from tests._fixtures import write_observation
+    from tests._runs import StandIn, start_run
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, made):
+        page.obs_picker.restore_key(made["cell_a"])
+        stand_in = StandIn(word="Other run")
+        start_run(screen.prior_panel, stand_in)
+        carried = write_observation(default_store(), screen.session.cfg, name="cell_c", digest="c" * 16)
+        listed, real = [], page.obs_picker.refresh
+        monkeypatch.setattr(page.obs_picker, "refresh", lambda: (listed.append(1), real())[1])
+        page.take_carried({"observation": carried})
+        line = page.form.rows["observation"].line
+        assert (listed, page.obs_picker.key()) == ([], made["cell_a"]), "the store was listed while a run was live"
+        assert (line.kind, line.words) == (
+            "info", f"The observation carried here, {carried}, is chosen once this step reads its list again."), (
+            line.kind, line.words)
+        _round_ends(stand_in, payload=object())
+        assert page.obs_picker.key() == carried and not page.form.rows["observation"].line.says()
+
+
+def test_the_round_lets_go_of_what_it_was_started_with_once_it_is_over(tmp_path, monkeypatch):
+    """The objects a round was started with are kept only for the question the stage's refusal of a new simulation set
+    asks: let go at the end of a run that was not refused before anything was spent, and once that question is
+    answered."""
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._runs import turn_until
+    with _sixth_step(tmp_path, monkeypatch) as (_window, _screen, page, run, made):
+        _ready_round(page, made)
+        page._main_clicked()
+        assert run.started.wait(5), page.foot.reason.text()
+        assert page._call is not None
+        _round_ends(run)
+        assert page._call is None, "the objects of a round that ran were kept"
+        page.names.name.setText("retrain_round2")
+        count = len(run.calls)
+        page._main_clicked()
+        turn_until(qt_app(), lambda: len(run.calls) > count, 5.0)
+        forget_asked()
+        choose(monkeypatch, default=True)
+        run.fail(Refusal("A saved simulation set one setting away exists: n_runs is 40 there and 5000 here.",
+                         field="new_run"))
+        turn_until(qt_app(), lambda: not controller().is_live() and all_asked(), 10.0)
+        assert all_asked()[-1].title == "Start the narrowing round beside a saved simulation set?"
+        assert page._call is None, "the objects were kept after the question was answered"
+
+
+def test_the_lengths_the_posterior_was_trained_on_come_from_its_record(tmp_path, monkeypatch):
+    """The line under the recording length names the lengths the posterior in use was trained on, from its record, in
+    the configuration's unit of time; a record that holds none names the usual range. A length above the longest is
+    said to need the posterior to extrapolate, from the same lengths."""
+    from core import config
+    with _fifth_step(tmp_path, monkeypatch) as (_window, screen, page, _runs):
+        per_second = float(screen.session.cfg.get_unit_conversion_factor("s"))
+        for record, (low, high) in (({"t_min_exp": 2.0 * per_second, "t_max_exp": 30.0 * per_second}, (2, 30)),
+                                    ({}, (config.T_MIN_EXP_S, config.T_MAX_EXP_S))):
+            screen.session.posterior.manifest.config = record
+            screen.refresh_gates()                  # as a posterior coming into use has it
+            page.form.rows["t_obs"].widget.setText(f"{high * 1.5:g}")
+            page.read_facts()
+            assert page.trained_line.plain_text() == f"The posterior was trained on lengths from {low:g} to {high:g} s."
+            said = [row.sentence.plain_text() for row in page.foot.facts.rows()]
+            assert [one for one in said if "extrapolate" in one and f"{high:g} s" in one], (record, said)
+            page.form.rows["t_obs"].widget.setText(f"{(low + high) / 2:g}")
+            page.read_facts()
+            assert not [one for one in (row.sentence.plain_text() for row in page.foot.facts.rows())
+                        if "extrapolate" in one], record

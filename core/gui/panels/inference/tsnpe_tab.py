@@ -32,7 +32,8 @@ from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import put_many
 from ...run import ends, history
 from ...run.controller import controller
-from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, CHANGED_TO_TEXT, CHECK_THIS_WORDS,
+from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, CARRIED_TEXT, CHANGED_TO_TEXT,
+                           CHECK_THIS_WORDS,
                            DIRECTIONS_TEXT, FIT_RULES, NETWORK_DIFFERS_TEXT, NETWORK_HELD_TEXT, NEW_SET_ROUND_TEXT,
                            NEW_SET_ROUND_TITLE, NO_OBSERVATION_WORDS, NO_PRIOR_WORDS, REGION_TEXT, REGION_WARN_BELOW,
                            ROTATION_REUSED_TEXT, ROUND_CAME_FROM_TEXT, ROUND_IN_USE_TEXT, ROUND_KEPT_TEXT,
@@ -126,6 +127,7 @@ class TSNPEPanel(StepPage):
         self._history_read = False
         self._trained_with = ""              # the label of the prior the posterior in use was trained with
         self._followed = None                # the observation in use the list last moved to, by its id
+        self._carried = None                 # an observation a next step carried, chosen at the next reading
         self._changed = ""                   # what the line under the list says of an observation it was moved to
         self._remembered = ""                # the observation the last round started with
         self._made = None                    # the posterior a round of this page returned, until its run has ended
@@ -134,6 +136,7 @@ class TSNPEPanel(StepPage):
         self._bodies: dict = {}              # the body of the observation chosen at the last reading, by its id
         self.obs_picker = StorePicker("observation", parent=self, keeps_selection=True, hint=CHOOSE_OBSERVATION,
                                       row_filter=self._of_this_kind)
+        self.obs_picker.combo.currentIndexChanged.connect(self._picked)
         form = self.form
         form.add("observation", self.obs_picker.combo, help_text=HELP["tsnpe_obs"])
         form.add("hpd_level", FloatField(truncate.DEFAULT_HPD), usual=truncate.DEFAULT_HPD, help_text=HELP["tsnpe_hpd"])
@@ -200,7 +203,8 @@ class TSNPEPanel(StepPage):
     def _grey(self) -> None:
         """The observations the posterior in use cannot be used on, greyed in the list with why. Each row is told through
         the list's own data, its flags under the role its items keep them in, and no item of the list is held: the list
-        deletes its items as it lists the store again, and a handle kept on one would outlive it."""
+        deletes its items as it lists the store again, and a handle kept on one would outlive it. A row the round can
+        use keeps the list's own tip: the list is listed afresh before each greying."""
         combo = self.obs_picker.combo
         for at in range(combo.count()):
             ident = combo.itemData(at)
@@ -208,7 +212,8 @@ class TSNPEPanel(StepPage):
                 continue
             usable = self._usable(str(ident))
             combo.setItemData(at, (_CHOOSABLE if usable else Qt.ItemFlag.NoItemFlags).value, _FLAGS_ROLE)
-            combo.setItemData(at, None if usable else CANNOT_BE_USED_TEXT + ".", Qt.ItemDataRole.ToolTipRole)
+            if not usable:
+                combo.setItemData(at, CANNOT_BE_USED_TEXT + ".", Qt.ItemDataRole.ToolTipRole)
 
     def observation_on_offer(self) -> bool:
         """Whether the list holds an observation the round can be drawn around, as the last reading found them."""
@@ -235,9 +240,16 @@ class TSNPEPanel(StepPage):
                          if before and before != ident else "")
         self.form.rows["observation"].kept = False
 
+    def _picked(self, _index) -> None:
+        """The list's choice moved: the line of a pick the window made goes once another observation is chosen. A
+        relisting that keeps the choice says nothing, so the line stands through the page's readings."""
+        if self._changed and self.obs_picker.key() != self._followed:
+            self._changed = ""
+
     def take_carried(self, carries) -> None:
         """What a next step carries here: the observation it names, chosen in the list. Nothing is asked: the round holds
-        nothing of its own to let go."""
+        nothing of its own to let go. One the list does not hold is looked for in the store at once, unless a run is
+        live; one not found then is held, said under the list, and chosen at the step's next reading of its list."""
         ident = carries.get("observation") if hasattr(carries, "get") else None
         if not ident:
             return
@@ -246,7 +258,9 @@ class TSNPEPanel(StepPage):
             self._grey()
         if self.obs_picker.combo.findData(ident) >= 0:
             self.obs_picker.restore_key(ident)
-            self._changed = ""
+            self._changed, self._carried = "", None
+        else:
+            self._carried = str(ident)
         self.redraw()
 
     # ── what a page answers ──
@@ -340,6 +354,8 @@ class TSNPEPanel(StepPage):
         if key and not self._usable(key):
             rows["observation"].set_line("err", CANNOT_BE_USED_TEXT + ".")
             observation_facts.append(Fact("err", CANNOT_BE_USED_TEXT + ".", CANNOT_BE_USED_BLOCKS))
+        elif self._carried:
+            rows["observation"].set_line("info", CARRIED_TEXT.format(self._carried))
         else:
             rows["observation"].set_line("warn" if self._changed else "", self._changed)
         needs = [name for name, held in (("posterior", posterior), ("prior", prior), ("observation", key)) if not held]
@@ -403,6 +419,10 @@ class TSNPEPanel(StepPage):
             self.obs_picker.restore_key(ident or self._remembered)
             self.form.rows["observation"].kept = not ident and bool(self.obs_picker.key())
         self._follow_the_observation()
+        carried, self._carried = self._carried, None
+        if carried and self.obs_picker.combo.findData(carried) >= 0:
+            self.obs_picker.restore_key(carried)
+            self._changed = ""
         self._grey()
         key, self._bodies = self.obs_picker.key(), {}
         if key:
@@ -449,7 +469,10 @@ class TSNPEPanel(StepPage):
     def _run_ended(self, status) -> None:
         """A run has ended. One of this page's that returned its posterior: its result said. Then the reading, which
         lists the observations again and moves the list to the observation in use, which the controller's order makes
-        safe: no run is live by now."""
+        safe: no run is live by now. The objects the last start was handed go, but at a refusal made before anything was
+        spent, whose question may start the same call again."""
+        if getattr(status, "outcome", None) is not None:
+            self._call = None
         made, self._made = self._made, None
         handed, self._handed = self._handed, None
         if made is not None:
@@ -515,11 +538,12 @@ class TSNPEPanel(StepPage):
     def _refusal(self, exc) -> None:
         """A refusal, as every page tells one; but the stage's refusal of a new simulation set beside a saved one a
         setting away is a question, the stage's own sentence in it: "Start the narrowing round" dispatches the same call
-        again with the consent and the objects already loaded; "Cancel", preselected, starts nothing."""
+        again with the consent and the objects already loaded; "Cancel", preselected, starts nothing. Answered, the
+        objects go, but those a new start holds."""
         if getattr(exc, "field", None) != "new_run" or self._call is None or controller().is_live():
             super()._refusal(exc)
             return
-        cfg, posterior, prior, observation, knobs = self._call
+        (cfg, posterior, prior, observation, knobs), self._call = self._call, None
         sentence = f"{getattr(exc, 'message', None) or exc} {NEW_SET_ROUND_TEXT}"
         if ask(self, NEW_SET_ROUND_TITLE, sentence, CANCEL, ROUND_START_WORDS):
             self._start(cfg, posterior, prior, observation, knobs, new_run=True)
