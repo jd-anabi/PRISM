@@ -1,5 +1,39 @@
 # PRISM — state
 
+**Last updated:** 2026-11-13, evening (20:46 by the clock; the weekly bar 91 %, resetting on 15 November at 04:00 UTC):
+STAGE 5'S TASK 10-11, INFERENCE AND THE NARROWING ROUND ON THE STEP PAGE, IS COMPLETE. "Parameter inference" is final:
+no page of the old frame is left (`BasePanel` has no subclass, kept for the code audit).
+
+- **The build** (one Opus builder from `stage-5/briefs/task-10-11-builder-dispatch.md`, R1 to R12, a checkpoint after
+  Task 10's part): Task 10 `caae583`, `5940587`, `ab6e97c`, `3514e52`; Task 11 `2c03d6a`, `98a9962`, `9891b2e`,
+  `932a417`, `8039797` (the round greys its observations without holding the list's items: a crash Qt made from a
+  `QStandardItem` held across a rebuild); the fix round `c8c1d57`, `e57d5b4`, `43780fb`, `a1afb27`, `ff4e28f` (J1 to
+  J9); `d09411f` (a test that gave two refusals to one press); `7c75891` (Inference joins THE FIRM REQUIREMENT's width
+  test, which the old frame's retirement had left without it — found by the controller, missed by both readers and the
+  re-read; the guide names the tests that hold it). Every change under `core/gui/`; the engine closed; the no-control set
+  16 to 14. Departures 478 (Inference's end and stop sentences the shared ones) and 479 ("on this page" only where the
+  thing is): `202846a`. The code audit's list gains item 17 (what the old frame left behind).
+- **Its review:** reader one (sonnet) CLEAN, 3 Minor; reader two (opus) 3 Important, 7 Minor, confirmed by its runs; the
+  gate on `8039797` RED (one Records sentence) and the real-screen run one stale expectation; one fix round, the re-read
+  CLEAN; the fresh gate on `ff4e28f` RED (a test fault, `d09411f`); the gap in the firm requirement (`7c75891`).
+- **The gates on `7c75891`:** the fast gate 4100 passed, 14 skipped, 3 deselected, 47 min 0 s (4117 collected; not
+  certified quiet); the real-screen run 14 passed on `ff4e28f` (the two later commits touch no display test or start-up
+  path); `Artifacts/` 428 entries, the listing identical; `PRISM.ini` unchanged. The carried-over list: 18 rows closed
+  naming their successors, 61 born, 1913 rows, missing 0.
+- **Measured:** about 5 points (86 % to 91 %): the builder 2.1 M tokens in all over its parts and fixes, the readers
+  0.16 M and 0.32 M, the re-read 0.10 M.
+- **Carried:** to Task 12-13, the round's "Continues … from batch N." (passed by Task 13's Continue); to the last review,
+  the three-rule values grid, the keyboard to the result's first next step, a held carried observation overriding a
+  pick, the `sbitest` files a test writes into the real `Resources/`. For the owner's list at the exit: the Checks' cell
+  lists open empty until a cell is chosen in Inference (the old tab chose its first file).
+
+NEXT: Task 12-13 (plans fill every step; a kept round after a reopening), from
+`.superpowers/sdd/2026-10-06-window-redesign/stage-5/briefs/task-12-13-builder-dispatch.md` (R1 to R11, a checkpoint
+after Task 12's part); then the stage's last review (three readers), which waits for the reset of 15 November since it
+would cross the bar's end; Task 14; the code audit; the retrain; one last stage.
+
+What follows is the head as the afternoon of 13 November left it:
+
 **Last updated:** 2026-11-13, afternoon (13:31 by the clock; the weekly bar 86 %, resetting on 15 November at 04:00
 UTC): STAGE 5'S TASK 8-9, THE TIMING OF A SHORT FIT, THE CARD TEST AND THE COMPARISON AFTER SIMULATING, IS COMPLETE, in
 the same chat, started at 09:28 on the owner's word ("please stop insisting to wait for the reset when we have like 18%
