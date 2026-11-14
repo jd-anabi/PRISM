@@ -445,7 +445,8 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
     and the kind of observation as step 1 is applied; the bounds file, the model it came into use with and the prior as a
     prior's run returns it; the batches and the simulations per batch as a training starts, as the text of their boxes;
     the posterior as a training's run returns it; the mode, the cell file with its model or the recordings, and the
-    driven recordings as an inference starts; the observation, the batches and the simulations per batch as a narrowing
+    driven recordings as an inference starts; the observation as an inference's run returns it; the observation, the
+    batches and the simulations per batch as a narrowing
     round starts, and its posterior as its run returns it; and at each of these moments the plan last used with the
     model and when, blank with no plan in use. Nothing is written as a choice is made or a button is pressed before a run
     starts, nor as a plan is filled; and closing writes the window's size and place and what Records keeps, never a key
@@ -535,7 +536,9 @@ def test_the_written_keys_are_exactly_the_remembered_table(tmp_path, monkeypatch
                            SimpleNamespace(kind="inference", id="20261008T140001", name="", manifest=None, path=None,
                                            results={})))
         turn_until(app, lambda: not controller().is_live(), 10.0)
-        assert at_the_moment() == [], "an inference's end wrote what it started with again"
+        assert at_the_moment() == ["inference_tsnpe/observation", *plans], (
+            "an inference's end wrote what it started with again, or not the observation that came into use")
+        assert st.settings().value("inference_tsnpe/observation") == "20261008T140000"
         narrowed = screen.tsnpe_panel
         observed = write_observation(default_store(), screen.session.cfg, name="cell_b")
         monkeypatch.setattr(ArtifactStore, "load_observation", lambda store, cfg, ref: SimpleNamespace(

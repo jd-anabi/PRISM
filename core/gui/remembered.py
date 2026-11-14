@@ -36,6 +36,10 @@ PRIOR_KEY = "inference_prior/prior"
 #: page's list of saved posteriors at the next launch; and the batches and the simulations per batch of the training
 #: started last, written as the text of their boxes once its run has been started.
 POSTERIOR_KEY = "inference_posterior/posterior"
+#: The observation that came into use last, by its id: written as an inference's run returns it, as a load puts it in
+#: use and as a narrowing round starts with it; put back as the choice of the round's list of observations at the next
+#: launch, and loaded by Home's "Continue with these".
+OBSERVATION_KEY = "inference_tsnpe/observation"
 NUM_RUNS_KEY = "inference_posterior/num_runs"
 RUN_SIZE_KEY = "inference_posterior/run_size_cap"
 #: What an inference started with, written once its run has been started and put back as choices at the next launch:
@@ -96,8 +100,8 @@ class Picks:
     name; the kind of observation, True for the frequency response and False for the kind the bounds file sets, None
     when the file holds no truth value; the bounds file, as step 2's list names it in the model's own folder; the saved
     prior and the saved posterior, by their ids, each with the words a sentence names it by ("the prior retrain_prior",
-    "the unnamed posterior, 1 Oct 2026, 22:29"); and the plan last used with the model, by its name as the folder of
-    plans lists it."""
+    "the unnamed posterior, 1 Oct 2026, 22:29"); the saved observation, by its id, with its words ("the observation
+    cell_b"); and the plan last used with the model, by its name as the folder of plans lists it."""
     model: "str | None" = None
     chi_mode: "bool | None" = None
     bounds: "str | None" = None
@@ -106,6 +110,8 @@ class Picks:
     plan: "str | None" = None
     prior_words: str = ""
     posterior_words: str = ""
+    observation: "str | None" = None
+    observation_words: str = ""
 
 
 def _manifest(store, kind: str, ident: str):
@@ -168,10 +174,11 @@ def remembered_picks(*, store, plans_folder=None) -> Picks:
     stands and its record, made for that model on that very file, can be read; the posterior that came into use last,
     while the prior stands and its record, which can be read, names that prior as the one it was trained with, is of the
     kind of observation applied and, of the frequency response, was trained with the slots and the lock-in limit the
-    press applies (the plan's, else the usual ones), as its load compares them; and the plan last used with the model,
-    while its file is there and has no problem. A bounds file remembered with no model, as an older PRISM wrote it, is
-    the model's. Nothing is written, and nothing is read but the settings file, the model's folder of bounds files, two
-    records' manifests and one plan file."""
+    press applies (the plan's, else the usual ones), as its load compares them; the observation that came into use
+    last, while the posterior stands and its record, which can be read, is of the kind of observation applied; and the
+    plan last used with the model, while its file is there and has no problem. A bounds file remembered with no model, as an older PRISM wrote it, is
+    the model's. Nothing is written, and nothing is read but the settings file, the model's folder of bounds files,
+    three records' manifests and one plan file."""
     from core import registry
     from core.Helpers import file_manager
     from .panels.inference.prior_tab import recorded_file
@@ -199,5 +206,10 @@ def remembered_picks(*, store, plans_folder=None) -> Picks:
             and ((manifest.body or {}).get("mode") == "chi") == (kind is True)
             and _conditioned_as_applied(manifest, used)):
         posterior, posterior_words = ident, _words_of("posterior", manifest)
+    observation, observation_words = None, ""
+    ident = settings.get_str(qs, OBSERVATION_KEY, "")
+    manifest = _manifest(store, "observation", ident) if posterior and ident else None
+    if manifest is not None and ((manifest.body or {}).get("mode") == "chi") == (kind is True):
+        observation, observation_words = ident, _words_of("observation", manifest)
     return Picks(model, kind, bounds, prior, posterior, None if used is None else used.name, prior_words,
-                 posterior_words)
+                 posterior_words, observation, observation_words)

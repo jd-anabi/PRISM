@@ -7829,8 +7829,9 @@ def test_the_press_during_a_run_reads_nothing_and_changes_nothing(store, tmp_pat
 def test_step_one_applied_by_code_refuses_what_its_press_refuses(store, tmp_path, monkeypatch):
     """Step 1 applied by code, asking nothing: a model the list does not hold, and one parameter inference cannot take,
     answer False and apply nothing, the form's model as it was; a value the rules refuse is told as the press tells
-    it, and nothing is applied; a units file that cannot be read is told by its name, and nothing is applied. A chain
-    asked for with an observation is refused, for that link is not built yet."""
+    it, and nothing is applied; a units file that cannot be read is told by its name, and nothing is applied. An
+    observation handed with no posterior to load before it is no link of the chain: its load follows the
+    posterior's."""
     from tests._dialogs import all_asked, forget_asked
     _a_launch_before(store, tmp_path, monkeypatch)
     window, _home = _home_of_last_time(tmp_path)
@@ -7853,8 +7854,10 @@ def test_step_one_applied_by_code_refuses_what_its_press_refuses(store, tmp_path
     said = [(one.title, one.sentence.startswith(f"The units file {gone.name} cannot be read: ")) for one in all_asked()]
     assert said == [("Check your inputs", True)], all_asked()
     assert inference.session.draft is None
-    with pytest.raises(ValueError, match="no observation"):
-        inference.load_chain("NADROWSKI", {"chi_mode": False}, None, None, observation=object())
+    loaded = []
+    monkeypatch.setattr(inference.tsnpe_panel, "load_observation", lambda ident: loaded.append(ident) or True)
+    inference.load_chain("NADROWSKI", {"chi_mode": False}, None, None, observation="o1")
+    assert loaded == [], "an observation was loaded with no posterior loaded before it"
 
 
 def test_a_press_by_code_with_no_model_of_last_time_builds_nothing(store, tmp_path):
@@ -7960,6 +7963,35 @@ def test_one_press_applies_step_one_and_loads_the_prior_and_the_posterior(store,
         remembered.MODEL_KEY: "NADROWSKI", remembered.KIND_KEY: "false", remembered.BOUNDS_KEY: "master.txt",
         remembered.BOUNDS_MODEL_KEY: "NADROWSKI", remembered.PRIOR_KEY: held.prior,
         remembered.POSTERIOR_KEY: held.posterior, remembered.LAST_USED_KEY.format("nadrowski"): ""}
+
+
+def test_continue_with_these_brings_back_the_observation(store, tmp_path, monkeypatch):
+    """The observation that came into use last time, while the posterior of last time stands, is named last in Home's
+    sentence, and the one press loads it after the posterior, as the chain's third link: the narrowing round's own load
+    of it on the configuration in use, a run that only loads and writes no history, which puts it in use. One of
+    another kind of observation than the one applied is not named, and nothing loads it."""
+    from core.artifacts import ArtifactStore
+    from core.gui import remembered
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+    from tests._fixtures import _nad_cfg, write_observation
+    observed = write_observation(store, _nad_cfg(), name="cell_b", mode="spontaneous")
+    held = _a_launch_before(store, tmp_path, monkeypatch, **{remembered.OBSERVATION_KEY: observed})
+    _the_loads(monkeypatch, store, held)
+    loaded = []
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: loaded.append((cfg, ref)) or (
+        SimpleNamespace(kind="observation", id=ref, name="cell_b", manifest=None)))
+    window, home = _home_of_last_time(tmp_path)
+    assert home._next_sentence.plain_text() == f"{_LAST_TIME}, the observation cell_b{_UNTIL_PRESSED}"
+    _press_continue(window, home)
+    inference = window.part("inference")
+    assert inference.loads.why == "" and [ref for _cfg, ref in loaded] == [observed], (inference.loads.why, loaded)
+    assert loaded[0][0] is inference.session.cfg and inference.session.observation.id == observed
+    spec = TSNPEPanel.run_spec(inference.tsnpe_panel, ArtifactStore.load_observation, store, None, observed)
+    assert (spec.word, spec.loads_only, spec.keeps_files) == ("Observation load", True, False)
+    assert not (tmp_path / "runs").exists() or list((tmp_path / "runs").iterdir()) == [], "a load wrote a history"
+    other = write_observation(store, _nad_cfg(chi_mode=True), name="cell_c", mode="chi")
+    remembered.put(remembered.OBSERVATION_KEY, other)
+    assert remembered.remembered_picks(store=store).observation is None
 
 
 @pytest.mark.parametrize("kind, plan", [(True, None), (True, _ZZ_LAST), (False, _ZZ_LAST)],

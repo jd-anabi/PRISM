@@ -547,9 +547,13 @@ class InferenceScreen(QWidget):
         self.refresh_gates()
 
     def take_observation(self, observation) -> None:
-        """An observation has come back from an inference's run: it comes into use, and the gates and the states are
-        worked out once. Called while the run is still live, so it writes the session and nothing else reads."""
+        """An observation has come back from an inference's run or a load: it comes into use, it is remembered as the
+        observation last in use, and the gates and the states are worked out once. Called while the run is still live,
+        so it writes the session and nothing else reads."""
         self.session.observation = observation
+        ident = getattr(observation, "id", None)
+        picks = [(remembered.OBSERVATION_KEY, ident)] if isinstance(ident, str) and ident else []
+        remembered.put_many(picks + self.last_used(getattr(getattr(self.session, "draft", None), "model", None)))
         self.refresh_gates()
 
     # ── a sentence a press leaves ──
@@ -759,16 +763,15 @@ class InferenceScreen(QWidget):
         """Step 1 applied with ``model`` and ``options``, asking nothing (``ConfigPanel.apply_quietly``, which calls
         ``fill`` once the model stands on the form), ``bounds_file`` then selected in step 2's list when one is named,
         and the saved ``prior`` loaded by step 2's own "Load this prior", then, once it has returned its record, the saved
-        ``posterior`` by step 3's: a chain of loads, started and handed back. A load that does not start or does not
-        finish ends the chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while
-        another goes, starts nothing, and the chain stops at once. An observation's link is not built yet. ``candidate``
+        ``posterior`` by step 3's, then, once that has returned its record, the saved ``observation`` by the narrowing
+        round's load: a chain of loads, started and handed back. A load that does not start or does not finish ends the
+        chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while another goes,
+        starts nothing, and the chain stops at once. ``candidate``
         is the configuration the prior is loaded with, when the caller holds one (a kept training's, rebuilt from its
         record), else step 2 builds its own. With ``press``, the words of the button that asked for the chain, a chain
         that stops before its end says so under the heading of ``where``, the place the press opened ("home", or a
         step's key), naming the step it stopped at and what was not loaded, until the next press or run; and for a model
         step 1 cannot take, which its page never shows, why."""
-        if observation is not None:
-            raise ValueError("a chain of loads takes no observation yet")
         loads = LoadChain(self)
         going = self.loads is not None and self.loads.is_going()
         if not going:
@@ -795,13 +798,17 @@ class InferenceScreen(QWidget):
             if posterior:
                 links.append(at("training", "posterior", posterior,
                                 lambda: self.posterior_panel.load_record(posterior)))
+                if observation:
+                    links.append(at("narrowing", "observation", observation,
+                                    lambda: self.tsnpe_panel.load_observation(observation)))
         loads.start(links)
         return loads
 
     def _record_named(self, kind: str, ref) -> str:
-        """A saved prior or posterior as a sentence names it, by its label in its step's list: "the prior
+        """A saved prior, posterior or observation as a sentence names it, by its label in its step's list: "the prior
         retrain_prior"; "the prior" alone when the list does not hold it."""
-        picker = self.prior_panel.prior_picker if kind == "prior" else self.posterior_panel.post_picker
+        picker = {"prior": self.prior_panel.prior_picker, "posterior": self.posterior_panel.post_picker,
+                  "observation": self.tsnpe_panel.obs_picker}[kind]
         found = picker.combo.findData(ref)
         label = picker.combo.itemText(found) if found >= 0 else ""
         return f"the {kind} {label}".rstrip() if label else f"the {kind}"
@@ -824,7 +831,8 @@ class InferenceScreen(QWidget):
         last used, read and checked again now, filled into the forms once the model stands, keeping the values put back
         from last time and asking nothing, the press being the person's own; step 1 applied with the model, the kind of
         observation remembered and the plan's other settings of that step, every other at its usual value; then the
-        bounds file selected and the prior and the posterior loaded, each by its own step. A plan gone, or with
+        bounds file selected and the prior, the posterior and the observation loaded, each by its own step's load. A
+        plan gone, or with
         problems, since Home read it is left out, and the rest goes on. The chain of loads is handed back. While a run
         is live it reads nothing, neither the plan nor its folder, changes nothing, and hands back a chain that stops at
         once. When it would set a choice made on the forms and not applied (step 1's model, kind, rotation, units or
@@ -851,8 +859,8 @@ class InferenceScreen(QWidget):
             if not ask(self, CONTINUE_WITH_TITLE, CONTINUE_WITH_TEXT, KEEP_WHAT_IS_THERE, CONTINUE_WITH_WORDS,
                        items=replaced):
                 return None
-        return self.load_chain(picks.model, options, picks.bounds, picks.prior, picks.posterior, fill=fill,
-                               press=CONTINUE_WITH_WORDS, where="home")
+        return self.load_chain(picks.model, options, picks.bounds, picks.prior, picks.posterior,
+                               getattr(picks, "observation", None), fill=fill, press=CONTINUE_WITH_WORDS, where="home")
 
     def _continuing_replaces(self, model, options: dict, source) -> tuple:
         """What "Continue with these" would set that a person chose on the forms and did not apply, or that was put

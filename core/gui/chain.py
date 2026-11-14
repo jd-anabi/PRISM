@@ -337,16 +337,18 @@ def _offered(offer) -> Next:
 
 def last_time_sentence(picks) -> str:
     """What was in use last time, in one sentence, by the names the window shows, exactly what one press applies and
-    loads: the model, the kind of observation the press applies with it, the bounds file, the prior, the posterior and
-    the plan, each left out when ``picks`` holds none (read by its attributes: ``model``, ``chi_mode``, ``bounds``,
-    ``prior`` with ``prior_words``, ``posterior`` with ``posterior_words``, ``plan``). A kind that could not be read is
+    loads: the model, the kind of observation the press applies with it, the bounds file, the prior, the posterior, the
+    observation and the plan, each left out when ``picks`` holds none (read by its attributes: ``model``, ``chi_mode``,
+    ``bounds``, ``prior`` with ``prior_words``, ``posterior`` with ``posterior_words``, ``observation`` with
+    ``observation_words``, ``plan``). A kind that could not be read is
     applied as the bounds file's, and named so."""
     said = [f"the model {model_label(picks.model)}",
             _FREQUENCY_RESPONSE if getattr(picks, "chi_mode", None) is True else _SET_BY_THE_FILE]
     bounds = getattr(picks, "bounds", None)
     if bounds:
         said.append("the bounds file " + str(bounds).replace("\\", "/"))
-    for record, words in (("prior", "prior_words"), ("posterior", "posterior_words")):
+    for record, words in (("prior", "prior_words"), ("posterior", "posterior_words"),
+                          ("observation", "observation_words")):
         if getattr(picks, record, None) and getattr(picks, words, ""):
             said.append(getattr(picks, words))
     if getattr(picks, "plan", None):

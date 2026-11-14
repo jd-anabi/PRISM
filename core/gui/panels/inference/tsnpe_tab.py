@@ -22,16 +22,17 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 
 from core import config, orchestrator
-from core.artifacts import default_store
+from core.artifacts import ArtifactStore, default_store
 from core.artifacts.store import MANIFEST
 from core.refusals import Refusal, require_at_least, require_between
 from core.SBI import truncate
 
 from ... import check_lineage, plans, record_words, settings
 from ...memory_limit import computer, limit_words, memory_limit_in_force
-from ...remembered import put_many
+from ...remembered import OBSERVATION_KEY, put_many
 from ...run import ends, history
 from ...run.controller import controller
+from ...run.model import RunSpec
 from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, CARRIED_TEXT, CHANGED_TO_TEXT,
                            CHECK_THIS_WORDS,
                            DIRECTIONS_TEXT, FIT_RULES, NETWORK_DIFFERS_TEXT, NETWORK_HELD_TEXT, NEW_SET_ROUND_TEXT,
@@ -54,11 +55,14 @@ SENTENCE = ("Trains a second posterior for one observation only: the prior is cu
             "posterior estimation, TSNPE). The result is valid only near that observation.")
 CHOOSE_OBSERVATION = "Choose an observation"
 STOP_WORDS = "Stop the narrowing round…"
+#: The run of an observation's load, a link of a chain of loads.
+LOAD_WORD = "Observation load"
+STOP_LOADING = "Stop loading"
 EPOCHS = "epochs"
 #: The words beside the main button while a field breaks its rule.
 SETTING_BLOCKS = "a setting cannot be used"
-#: What the settings file keeps of a round, written once a round has started with them.
-OBSERVATION_KEY = "inference_tsnpe/observation"
+#: What the settings file keeps of a round, written once a round has started with them; the observation too, under the
+#: key of the observation last in use.
 NUM_RUNS_KEY = "inference_tsnpe/num_runs"
 RUN_SIZE_KEY = "inference_tsnpe/run_size_cap"
 #: The fit's settings a round reads, a training's own and under its rules, in the order the stage checks them.
@@ -561,10 +565,29 @@ class TSNPEPanel(StepPage):
         if ask(self, NEW_SET_ROUND_TITLE, sentence, CANCEL, ROUND_START_WORDS):
             self._start(cfg, posterior, prior, observation, knobs, new_run=True)
 
+    def load_observation(self, ident: str) -> bool:
+        """Load the saved observation ``ident`` on the configuration in use, as a chain's link: a run that only loads,
+        keeping no history and no file, its record put in use as it returns. True when its run was started; nothing
+        while a run is live or with no configuration in use."""
+        cfg = self._held()[0]
+        if cfg is None or not ident or controller().is_live():
+            return False
+        return self.dispatch(ArtifactStore.load_observation, default_store(), cfg, ident,
+                             on_result=self._observation_loaded)
+
+    def _observation_loaded(self, observation) -> None:
+        """The observation's load returned its record, while its run is still live: it comes into use through the
+        screen's one way in; the list moves to it at the reading after the run's end."""
+        self._screen.take_observation(observation)
+
     def run_spec(self, fn, *args, **kwargs):
         """A narrowing round: a training of its own, on the region, so its run is a training's, narrowed; its first
         total of unusable driven recordings compared with the audit of the prior in use that counted as it starts, as
-        the screen last read the checks; its history keeps what it was started with."""
+        the screen last read the checks; its history keeps what it was started with. An observation's load only
+        loads."""
+        if fn is ArtifactStore.load_observation:
+            return RunSpec(LOAD_WORD, _PLACE, stop_button=STOP_LOADING, loads_only=True, keeps_files=False,
+                           stop_asks=False)
         if fn is not orchestrator.tsnpe_round:
             return super().run_spec(fn, *args, **kwargs)
         rows = self._pre_run_rows()

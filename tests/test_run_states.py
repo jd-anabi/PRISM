@@ -1431,6 +1431,7 @@ _DISPATCHES = {("core/gui/panels/inference/infer_tab.py", "InferPanel", "orchest
                ("core/gui/panels/inference/posterior_tab.py", "PosteriorPanel", "orchestrator.build_posterior"),
                ("core/gui/panels/inference/prior_tab.py", "PriorPanel", "orchestrator.build_prior"),
                ("core/gui/panels/inference/tsnpe_tab.py", "TSNPEPanel", "orchestrator.tsnpe_round"),
+               ("core/gui/panels/inference/tsnpe_tab.py", "TSNPEPanel", "ArtifactStore.load_observation"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "orchestrator.validate_calibration"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_band"),
                ("core/gui/panels/inference/validate_tab.py", "ValidatePanel", "probes.probe_mask"),
@@ -1806,6 +1807,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
     run's places are the window's own."""
     import ast
     from core import config, orchestrator
+    from core.artifacts import ArtifactStore
     from core.diagnostics import ablation, identifiability, probes, sbc
     from core.gui import check_scratch
     from core.gui.panels.inference import check_forms
@@ -1893,6 +1895,9 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
         "narrowing round": (inference.tsnpe_panel, orchestrator.tsnpe_round, (cfg, None, None, None), {},
                             ("Narrowing round", ("inference", "narrowing"), "Stop the narrowing round…",
                              ("posterior", "simulation", "fit"), no, yes, yes, yes)),
+        "observation loaded": (inference.tsnpe_panel, ArtifactStore.load_observation, (None, cfg, "o1"), {},
+                               ("Observation load", ("inference", "narrowing"), "Stop loading", (), yes, no, no,
+                                no)),
     }
     specs = {}
     for kind, (panel, fn, args, kwargs, row) in kinds_of.items():
