@@ -439,8 +439,8 @@ What the window remembers, and why, is in
   of the form. A page that cut the run's page off at a narrow window would hide the stop button of a
   run that costs hours. Guard: `BasePanel._fit_the_form` for the older pages, the step page's own
   layout for the rebuilt. Pinned by
-  `tests/test_run_states.py::test_nothing_of_the_run_page_is_hidden_under_the_form_at_any_width` and
-  `tests/test_run_states.py::test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width`.
+  `tests/test_run_states.py::test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width` and
+  `tests/test_run_states.py::test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling`.
 - **Enter presses the button that shows the focus ring, and never repeats.** A held Enter that
   landed on "Stop" would stop a run, and one that landed on a question's default would answer it.
   Guard: `MainWindow.keyPressEvent` ignores a repeat and presses only a push button with the ring,

@@ -5617,7 +5617,7 @@ def _the_most_rows_in_error(page) -> None:
 
 @pytest.mark.parametrize("step", ["the stand-in", "Prior", "Training", "a list beside its detail",
                                   "a list with its detail in its place", "the Checks list beside a check",
-                                  "the Checks list with a check in its place", "the Narrowing round"])
+                                  "the Checks list with a check in its place", "the Narrowing round", "Inference"])
 @pytest.mark.parametrize("factor, room", [(1.0, _LARGE_SCREEN), (1.5, _LARGE_SCREEN), (1.5, _SMALL_SCREEN)],
                          ids=["text 1.0", "text 1.5", "text 1.5 on a small screen"])
 def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room, step, tmp_path):
@@ -5625,8 +5625,9 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     At every width a window of the text size at hand can have, the run's page and then a past run's stand whole inside
     the window with nothing over them, what stands hidden behind them in the page's stack not widening it, with the
     longest main button a page has and a block for the run beside the form: on a stand-in page, and on the Prior page,
-    the Training page and the Narrowing round, each with its fold open and a name typed; and on a list with a detail
-    open, beside it at the
+    the Training page and the Narrowing round, each with its fold open and a name typed; on Inference in its longest
+    form, your own recordings of a frequency response, twelve driven recordings, one in error, its fold open and its
+    names typed; and on a list with a detail open, beside it at the
     opening width or in its place at the least, which the run's page hides as it stood; and on the Checks list with the
     page of its check of the most rows open, its fold open and a row in error, beside it or in its place the same way.
     The window is made as narrow as it can be and as
@@ -5644,9 +5645,10 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     listed = step.startswith("a list") or checks
     in_its_place = step in ("a list with its detail in its place", "the Checks list with a check in its place")
     place = ("inference", "prior") if step == "Prior" else ("inference", "checks") if listed else (
-        _ROUND if step == "the Narrowing round" else ("inference", "training"))
+        _ROUND if step == "the Narrowing round" else ("inference", "infer") if step == "Inference" else (
+            "inference", "training"))
     word = "Prior build" if step == "Prior" else "Check" if checks else (
-        "Narrowing round" if step == "the Narrowing round" else "Training")
+        "Narrowing round" if step == "the Narrowing round" else "Inference" if step == "Inference" else "Training")
     past = f"20261001T090000-{place[1]}"
     with text_size(factor), _the_look(False):
         _controller_on(tmp_path, Clock(_at(9, 18, 0)))
@@ -5671,6 +5673,12 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
             host = window.part("inference").tsnpe_panel
             host.form.fold.set_open(True)
             host.names.name.setText("retrain_round1")
+        elif step == "Inference":
+            from tests.test_pages import _twelve_driven_recordings_one_in_error
+            host = window.part("inference").infer_panel
+            _twelve_driven_recordings_one_in_error(host)
+            host.form.fold.set_open(True)
+            host.names.name.setText("retrain_inf")
         else:
             host = window.part("inference").posterior_panel
             host.form.fold.set_open(True)
