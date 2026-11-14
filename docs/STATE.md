@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-11-13, night (23:55 by the clock; the weekly bar 93 %, resetting on 15 November at 04:00 UTC,
+**Last updated:** 2026-11-13, night (23:54 by the clock; the weekly bar 93 %, resetting on 15 November at 04:00 UTC,
 extra usage switched on): STAGE 5'S TASK 12-13 IS BUILT AND REVIEWED; ITS FIX ROUND IS OWED. The chat that began on 12
 November at 14:59 hands over here by the usage rule, at a clean state. The hand-off prompt for the next chat is
 `docs/superpowers/prompts/2026-11-13-window-redesign-stage-5-from-task-12-13-fix-round.md`.
