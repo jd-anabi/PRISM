@@ -7218,9 +7218,9 @@ def test_enter_presses_the_button_that_shows_the_ring(tmp_path, monkeypatch):
 
 def test_enter_on_a_driven_recordings_remove_button_asks_when_the_row_holds_something(tmp_path, monkeypatch):
     """STANDING. Enter on the ring of a driven recording's remove button presses it as a click does: a row that holds
-    nothing goes at once, asking nothing; one that holds a file or a frequency typed asks first, "Remove this driven
-    recording?", with "Keep it" preselected, so that Enter on the question keeps the row and what was typed in it, and
-    only the other answer removes it. Enter keeps pressing the ringed button wherever it stands."""
+    nothing goes at once, asking nothing; one that holds a file or a frequency typed, or a frequency alone, asks first,
+    "Remove this driven recording?", with "Keep it" preselected, so that Enter on the question keeps the row and what
+    was typed in it, and only the other answer removes it. Enter keeps pressing the ringed button wherever it stands."""
     from types import SimpleNamespace
     from core.gui.panels.inference_tabs import InferPanel
     from core.gui.session import SbiSession
@@ -7258,7 +7258,19 @@ def test_enter_on_a_driven_recordings_remove_button_asks_when_the_row_holds_some
                 ("Remove this driven recording?", "The file and the frequency typed in this row go with it.",
                  "Keep it", "Keep it")], (answer, asked)
             assert table.rows() == [typed] and typed.value() == ("C:/recordings/driven_0.npy", 12.5), answer
+        frequency = table.add_row()
+        frequency.hz.setText("4.5")
+        QApplication.processEvents()
+        choose(monkeypatch, default=True)
+        forget_asked()
+        _ring_on(table.remove_button(frequency))
+        QTest.keyClick(table.remove_button(frequency), Qt.Key_Return)
+        assert [said.title for said in all_asked()] == ["Remove this driven recording?"], "a frequency alone went unasked"
+        assert table.rows() == [typed, frequency] and frequency.value() == (None, 4.5)
         choose(monkeypatch, words="Remove it")
+        _ring_on(table.remove_button(frequency))
+        QTest.keyClick(table.remove_button(frequency), Qt.Key_Return)
+        assert table.rows() == [typed]
         _ring_on(button)
         QTest.keyClick(button, Qt.Key_Return)
         assert table.rows() == [], "the other answer did not remove the row"

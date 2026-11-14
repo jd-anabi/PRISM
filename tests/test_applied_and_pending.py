@@ -5988,6 +5988,19 @@ def test_the_round_lets_go_of_what_it_was_started_with_once_it_is_over(tmp_path,
         assert page._call is None, "the objects were kept after the question was answered"
 
 
+def test_the_inferences_run_names_the_kind_of_observation_apart_from_any_observation(tmp_path, monkeypatch):
+    """An inference's run hands its history the kind of observation it reads under its own key: "observation" names an
+    observation's id in every history, a narrowing round's among them."""
+    from core.gui.run.controller import controller
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, runs):
+        _ready(page, tmp_path, mode="simulated")
+        page._main_clicked()
+        assert runs["simulated"].started.wait(5), page.foot.reason.text()
+        held = controller().model.spec.settings
+        assert held["observation_kind"] == page.kind() and "observation" not in held, held
+        _run_ends(runs["simulated"])
+
+
 def test_the_lengths_the_posterior_was_trained_on_come_from_its_record(tmp_path, monkeypatch):
     """The line under the recording length names the lengths the posterior in use was trained on, from its record, in
     the configuration's unit of time; a record that holds none names the usual range. A length above the longest is
@@ -6008,3 +6021,22 @@ def test_the_lengths_the_posterior_was_trained_on_come_from_its_record(tmp_path,
             page.read_facts()
             assert not [one for one in (row.sentence.plain_text() for row in page.foot.facts.rows())
                         if "extrapolate" in one], record
+
+
+def test_a_remembered_recording_is_put_back_once_and_never_over_a_box_emptied(tmp_path, monkeypatch):
+    """The spontaneous recording remembered for the kind of observation the posterior in use reads is put back once,
+    the first time the page knows that kind; a box the person has emptied since stays empty at every later gate."""
+    from core.gui import settings as st
+    from core.gui.remembered import SPONT_KEYS
+    qs = st.settings()
+    qs.setValue(SPONT_KEYS["chi"], str(tmp_path / "spont.npy"))
+    qs.sync()
+    with _fifth_step(tmp_path, monkeypatch, chi=True) as (_window, screen, page, _runs):
+        page.modes.set_value("recordings")
+        box = page.form.rows["recording_spont"].widget.edit
+        assert box.text().endswith("spont.npy"), box.text()
+        box.setText("")
+        for _ in range(2):
+            screen.refresh_gates()
+            page.read_facts()
+        assert box.text() == "", "a box the person emptied was filled again"

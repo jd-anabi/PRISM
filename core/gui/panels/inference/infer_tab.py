@@ -329,6 +329,7 @@ class InferPanel(StepPage):
         self._typed_from = None              # the cell file the values typed by hand were last filled from
         self._planned: dict = {}             # what the planner read of each driven recording: what it held, its line
         self._remembered: dict = {}          # what the last inference started with, as the settings file gave it back
+        self._put_back_for: set = set()      # the kinds of observation whose recordings were put back once
         self._cell_looked = False            # whether a reading has listed the cell files of the model in use yet
         self._made = None                    # the two records a run of this page returned, until the run has ended
         self._handed = None                  # the names and the note this page's last inference was handed
@@ -802,7 +803,7 @@ class InferPanel(StepPage):
                  "value": _plain(self.form.rows[key].value()), "usual": _plain(self.form.rows[key].usual())}
                 for key in keys]
         return {"model": _plain(getattr(draft, "model", None) or getattr(cfg, "model", None)),
-                "observation": _plain(self.kind()), "mode": self.mode(),
+                "observation_kind": _plain(self.kind()), "mode": self.mode(),
                 "posterior": _plain(getattr(posterior, "id", None)), "prior": _plain(getattr(prior, "id", None)),
                 "typed_by_hand": self.mode() == "simulated" and self.typed_tick.isChecked(),
                 "name": self._names.name_value(), "observation_name": self._names.other_value(),
@@ -838,9 +839,13 @@ class InferPanel(StepPage):
         return pairs + self._screen.last_used(self._model())
 
     def _put_back(self) -> None:
-        """The recordings remembered for the kind of observation the posterior in use reads, into the rows still blank:
-        a row typed into is never overwritten."""
+        """The recordings remembered for the kind of observation the posterior in use reads, into the rows still blank,
+        once for each kind, the first time the page knows it: a row typed into is never overwritten, nor one emptied
+        since."""
         rows, kind = self.form.rows, self.kind()
+        if kind is None or kind in self._put_back_for:
+            return
+        self._put_back_for.add(kind)
         for key, remembered in (("recording_spont", SPONT_KEYS.get(kind)), ("recording_forced", FORCED_KEY)):
             path = self._remembered.get(remembered or "", "")
             if path and not rows[key].widget.edit.text().strip():
