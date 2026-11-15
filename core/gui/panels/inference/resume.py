@@ -27,6 +27,9 @@ NO_MODEL_TEXT = "Its model, {}, is no longer one PRISM can train."
 #: What stops a kept narrowing round's Resume besides: the posterior it narrows, or its observation, gone.
 PARENT_GONE_TEXT = "The posterior it narrows, {}, is no longer in Records."
 OBSERVATION_GONE_TEXT = "The observation it was trained around is no longer in Records."
+#: The same, for a record that names neither.
+NO_PARENT_TEXT = "Its record names no posterior it narrows."
+NO_OBSERVATION_TEXT = "Its record names no observation it was trained around."
 
 
 def read_offers(store, folder) -> tuple:
@@ -131,11 +134,14 @@ def round_problems(kept, *, device, store) -> tuple[str, ...]:
     """What stops the Resume of the kept narrowing round ``kept`` before anything is read, each a sentence: what stops a
     training's (``resume_problems``), then the posterior it narrows and the observation it was trained around gone
     from Records, each by the id its record names; the posterior named by that id, which is all that is known of a
-    record that is gone."""
+    record that is gone. A record that names no such id says so."""
     found = list(resume_problems(kept, device=device, store=store))
     parents = getattr(kept, "parents", None) or {}
     for kind, key in (("posterior", "parent_posterior"), ("observation", "observation")):
         ref = parents.get(key)
+        if not isinstance(ref, str) or not ref:
+            found.append(NO_PARENT_TEXT if kind == "posterior" else NO_OBSERVATION_TEXT)
+            continue
         try:
             store.get(kind, ref)
         except Exception:                    # noqa: BLE001 -- deleted, torn, or never named

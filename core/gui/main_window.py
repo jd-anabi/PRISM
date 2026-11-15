@@ -657,7 +657,7 @@ class MainWindow(QMainWindow):
             # A training of this launch whose page still holds its own call: its page opened and its own button pressed,
             # the exact call into the session as it stands, with nothing applied, loaded or asked again.
             self._open_run(offer.run)
-            if offer.kind == "resume":
+            if offer.kind in ("resume", "round"):
                 held.resume_training(offer.run)
             else:
                 held.continue_run(offer.run)

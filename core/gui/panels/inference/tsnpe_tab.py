@@ -763,8 +763,10 @@ class TSNPEPanel(StepPage):
             self._refusal(refused)
             return
         kept = self._matching_kept(knobs) if self._continuing is None else None
+        # The new round takes the kept one's name only when it is named as the kept one would name its posterior.
+        takes_name = kept is not None and kept.named and self._names.name_value() == kept.label
         if kept is not None and not ask(self, *new_round_question(KEPT_ROUND_TEXT.format(
-                kept.label, texts.number_text(kept.epoch or 0)))):
+                kept.label, texts.number_text(kept.epoch or 0)), takes_name=takes_name)):
             return
         rows = self._pre_run_rows()
         failed = None if rows is None else check_lineage.pre_run_question(rows, start=self.main_words())

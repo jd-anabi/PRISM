@@ -8823,6 +8823,37 @@ def test_a_continue_fills_only_the_forms_its_run_reads(which, store, tmp_path, m
     assert (row.value(), row.kept, draws.value()) == (123, True, 777), (row.value(), row.kept, draws.value())
 
 
+@pytest.mark.parametrize("gone", ["the posterior it narrows", "its observation"])
+def test_a_rounds_continue_whose_records_are_gone_says_so_and_lets_nothing_go(gone, store, tmp_path, monkeypatch):
+    """A narrowing round's "Continue from batch 236" whose posterior it narrows, or whose observation, is no longer in
+    Records: said under the Narrowing round step's heading, the step shown with its form, and nothing is asked,
+    applied, loaded or let go."""
+    from tests._fixtures import _nad_cfg, write_observation
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    prior_load, _posterior_load = _the_loads(monkeypatch, store, held)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    _a_failed_round(store, tmp_path, held, observed)
+    window, home = _home_of_last_time(tmp_path)
+    inference = window.part("inference")
+    session = inference.session
+    if gone == "the posterior it narrows":
+        store.delete("posterior", held.posterior, force=True)
+        why = "the posterior it narrows is no longer in Records"
+    else:
+        store.delete("observation", observed, force=True)
+        why = "the observation it was trained around is no longer in Records"
+    window.go_to("home")
+    assert home.next_button.text() == "&Continue from batch 236", home.next_button.text()
+    home.next_button.click()
+    page = inference.tsnpe_panel
+    said = f"Continue from batch 236 cannot start: {why}."
+    assert (window.current_place(), inference.notice_on("narrowing")) == (("inference", "narrowing"), said), (
+        inference.notice_on("narrowing"))
+    assert (page.notice.sentence.plain_text(), page.notice.isVisibleTo(page)) == (said, True)
+    assert (all_asked(), inference.loads, inference.session is session, inference.session.draft, prior_load.calls) == (
+        [], None, True, None, []), "something was asked, applied, loaded or let go"
+
+
 @pytest.mark.parametrize("cause", ["bounds edited", "bounds gone", "bounds renamed in its capitals", "units gone",
                                    "units changed", "typed limits with a forcing section", "prior deleted",
                                    "card gone", "a library changed", "model gone"])
@@ -10085,6 +10116,42 @@ def test_a_kept_rounds_row_on_its_page_offers_resume_and_delete(store, tmp_path,
     assert store.list("fit") == [] and page._kept_rows == [] and not page.kept_block.isVisibleTo(page)
 
 
+@pytest.mark.parametrize("passes, said", [
+    (1, "The 1 epoch kept is deleted; the next narrowing round with these settings starts its fit from the first epoch."),
+    (0, "The epochs kept are deleted; the next narrowing round with these settings starts its fit from the first "
+        "epoch.")], ids=["one epoch", "epochs not counted"])
+def test_deleting_a_kept_round_says_the_epochs_it_deletes(passes, said, store, tmp_path, monkeypatch):
+    """"Delete" on a kept round's row says how many epochs it deletes: one in the singular, and none counted without a
+    number."""
+    from tests._dialogs import all_asked, forget_asked
+    _held, _kept = _a_kept_round_left(store, tmp_path, monkeypatch, passes=passes)
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "narrowing")
+    (_offer, parts), = window.part("inference").tsnpe_panel._kept_rows
+    forget_asked()
+    parts["delete"].click()
+    asked, = all_asked()
+    assert (asked.title, asked.sentence) == ("Delete this kept narrowing round?", said), asked.sentence
+
+
+def _scrolled_away(window, page) -> None:
+    """The round's page scrolled to the end of its body, then another step shown: its kept round's row out of sight."""
+    window.go_to("inference", "narrowing")
+    for _ in range(3):
+        QApplication.processEvents()
+    bar = page.scroller.verticalScrollBar()
+    assert bar.maximum() > 0, "the round's page does not scroll at this size"
+    bar.setValue(bar.maximum())
+    window.go_to("inference", "model")
+
+
+def _whole_in_view(page, part) -> bool:
+    """Whether the whole of ``part`` stands in the viewport of its page's body."""
+    viewport = page.scroller.viewport()
+    top = part.mapTo(viewport, QPoint(0, 0)).y()
+    return top >= 0 and top + part.height() <= viewport.height()
+
+
 def test_home_leads_to_a_kept_round_on_its_page(store, tmp_path, monkeypatch):
     """A kept narrowing round after a reopening: Home names it and offers "Open Narrowing round", which opens the
     Narrowing round step with the round's row in sight and the keyboard on its "Resume", and resumes nothing: no run
@@ -10101,14 +10168,17 @@ def test_home_leads_to_a_kept_round_on_its_page(store, tmp_path, monkeypatch):
     assert (home.next_heading.label.text(), home.next_button.text(), home.next.action) == (
         "Next: resume the narrowing round retrain_round1", "&Open Narrowing round", "open_round")
     with in_front(window):
+        inference = window.part("inference")
+        page = inference.tsnpe_panel
+        _scrolled_away(window, page)
+        window.go_to("home")
         home.next_button.click()
         for _ in range(5):
             QApplication.processEvents()
-        inference = window.part("inference")
-        page = inference.tsnpe_panel
         (offer, parts), = page._kept_rows
         assert inference.current_step() == "narrowing" and offer.kept == kept
         assert QApplication.focusWidget() is parts["resume"], QApplication.focusWidget()
+        assert _whole_in_view(page, parts["row"]), "the kept round's row is not in sight"
     assert started == [] and not controller().is_live() and inference.session.draft is None
     store.delete("fit", kept, force=True)
     inference.read_offers()

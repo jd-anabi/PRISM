@@ -1101,13 +1101,18 @@ NEW_ROUND_TITLE = "Start a new narrowing round beside a kept one?"
 KEPT_ROUND_TEXT = "The narrowing round {} was kept after epoch {} with these settings."
 NEW_ROUND_TEXT = ("Resume it from the list on this page to train on from there. A new round starts its fit from the "
                   "first epoch, leaves the kept one as it is, and takes its name.")
+#: The same, for a new round named otherwise than the kept one would name its posterior.
+NEW_ROUND_OWN_NAME_TEXT = ("Resume it from the list on this page to train on from there. A new round starts its fit from "
+                           "the first epoch and leaves the kept one as it is.")
 NEW_ROUND_OTHER = "Start a new round"
 
 
-def new_round_question(sentence: str) -> tuple[str, str, str, str]:
+def new_round_question(sentence: str, *, takes_name: bool = True) -> tuple[str, str, str, str]:
     """The question before a narrowing round started with the settings of a kept one, ``sentence`` naming it: its
-    title, its text, the safe answer, preselected, and the other."""
-    return NEW_ROUND_TITLE, f"{sentence} {NEW_ROUND_TEXT}", CANCEL, NEW_ROUND_OTHER
+    title, its text, the safe answer, preselected, and the other. The text says the new round takes the kept one's name
+    only when it does (``takes_name``): when the name typed is the name the kept round's posterior would take."""
+    return (NEW_ROUND_TITLE, f"{sentence} {NEW_ROUND_TEXT if takes_name else NEW_ROUND_OWN_NAME_TEXT}", CANCEL,
+            NEW_ROUND_OTHER)
 
 
 def round_uses(posterior: str, prior: str, observation: str, body) -> str:
