@@ -1191,14 +1191,15 @@ class ConfigPanel(StepPage):
         else:
             plans.fill_forms(screen, values, source)
 
-    def fill_with(self, source, *, keep_remembered: bool = False) -> bool:
+    def fill_with(self, source, *, keep_remembered: bool = False, headings=None) -> bool:
         """Fill every step with ``source``, a plan's (``plans.source_of``), as "Fill the forms from this plan" does
         and as Home's "Continue with these" does: the forms filled, then the list of plans read again and standing on
         the plan, which it holds as the plan shown, and the row drawn again, so that it says the plan shown is the plan
         in use. A source that is no plan (a run's settings, as "Continue from batch N" fills them) leaves the list on "No
-        plan". ``keep_remembered`` leaves a value put back from last time as it is. False, and nothing changed, while a
-        run is live."""
-        if not plans.fill_forms(self._screen, source.values, source, keep_remembered=keep_remembered):
+        plan", and fills the steps of ``headings`` alone, what that run reads. ``keep_remembered`` leaves a value put
+        back from last time as it is. False, and nothing changed, while a run is live."""
+        if not plans.fill_forms(self._screen, source.values, source, keep_remembered=keep_remembered,
+                                headings=headings):
             return False
         self._gone = None
         if source.kind != "plan":

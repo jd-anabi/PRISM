@@ -8692,6 +8692,137 @@ def test_continue_fills_the_rounds_form_and_passes_the_must_continue_policy(stor
     assert all_asked() == [], "the press asked a question"
 
 
+def _a_round_continued(store, tmp_path, monkeypatch):
+    """A narrowing round that failed with its set unfinished, after a reopening, its "Continue from batch 236" pressed on
+    Home and its chain of loads ended, the stage a stand-in run: (the launch's records, the window, its Parameter
+    inference, the round's page, the stand-in round, the event loop). The observation cell_c stands beside cell_b."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import _nad_cfg, write_observation
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    held.other = write_observation(store, _nad_cfg(), name="cell_c")
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+        kind="observation", id=ref, name="cell_b", manifest=None))
+    monkeypatch.setattr(orchestrator, "training_preview", lambda *args, **kwargs: SimpleNamespace(width=8))
+    _a_failed_round(store, tmp_path, held, observed)
+    rounds = StandIn(word="Narrowing round")
+    monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    assert inference.loads.why == "", inference.loads.why
+    return held, window, inference, inference.tsnpe_panel, rounds, app
+
+
+#: What the round's facts say while its page is set to continue its set.
+_CONTINUES = "Information. Continues this round's simulation set from batch 236."
+
+
+@pytest.mark.parametrize("change", ["another observation", "another level", "another posterior",
+                                    "step 1 applied again", "a round refused"])
+def test_continue_from_batch_n_is_let_go_once_what_the_round_continues_has_changed(change, store, tmp_path,
+                                                                                   monkeypatch):
+    """The round's page set to "Continue from batch 236" holds what the round was started on: the posterior it narrows,
+    its observation, its level, its directions and the session of the fill. Once the page holds another, the mode is
+    let go at the next drawing: the main button reads "Start the narrowing round", the simulations fact its usual
+    words, one sentence under the heading says what was let go and why, and the next press hands the policy that
+    starts or continues as it finds. A round started in the mode lets it go too: refused under the policy that must
+    continue, the page says the stage's sentence and the press that starts a new round, and the next press hands that
+    policy; nothing is said under the heading."""
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._dialogs import all_asked, forget_asked
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+    held, _window, inference, page, rounds, app = _a_round_continued(store, tmp_path, monkeypatch)
+
+    def facts():
+        return [row.sentence.plain_text() for row in page.foot.facts.rows()]
+
+    page.names.name.setText("retrain_round2")
+    page.names.check_now()
+    page.read_facts()
+    assert page.foot.main_button.text().replace("&", "") == "Continue from batch 236" and _CONTINUES in facts()
+    why = {"another observation": "another observation is chosen", "another level": "the region level was changed",
+           "another posterior": "another posterior is in use",
+           "step 1 applied again": "the model and options were applied again", "a round refused": None}[change]
+    if change == "another observation":
+        page.obs_picker.restore_key(held.other)
+    elif change == "another level":
+        page.form.rows["hpd_level"].set_value(0.95)
+    elif change == "another posterior":
+        another = _posterior_artifact(store, _nad_cfg(), name="zz_other", parents={"prior": held.prior})
+        inference.take_posterior(SimpleNamespace(kind="posterior", id=another.id, name="zz_other",
+                                                 manifest=store.get("posterior", another.id),
+                                                 posterior=SimpleNamespace(truncation=None)))
+    elif change == "step 1 applied again":
+        assert inference.config_panel.apply_quietly("NADROWSKI", {"chi_mode": False})
+    else:
+        stage = "resume='require' but there is no resumable cache at the round's folder."
+        rounds.fail(Refusal(stage, field="resume"))
+        forget_asked()
+        page.foot.main_button.click()
+        turn_until(app, lambda: len(rounds.calls) == 1 and not controller().is_live(), 10.0)
+        assert rounds.calls[-1][1]["resume"] == "require"
+        asked, = all_asked()
+        assert (asked.sentence, asked.beneath) == (
+            stage, "Press 'Start the narrowing round' on this page to start a new round from its first batch.")
+    page.read_facts()
+    assert page.foot.main_button.text().replace("&", "") == "Start the narrowing round" and _CONTINUES not in facts()
+    said = "" if why is None else f"Continuing this round from batch 236 was let go: {why}."
+    assert inference.notice_on("narrowing") == said, inference.notice_on("narrowing")
+    if said:
+        assert (page.notice.sentence.plain_text(), page.notice.isVisibleTo(page)) == (said, True)
+    if change == "step 1 applied again":
+        return                                   # no prior is in use: nothing starts
+    calls = len(rounds.calls)
+    rounds.release(SimpleNamespace(kind="posterior", id="20261008T150000", name="retrain_round2", manifest=None))
+    page.foot.main_button.click()
+    turn_until(app, lambda: len(rounds.calls) > calls and not controller().is_live(), 10.0)
+    assert rounds.calls[-1][1]["resume"] == "auto", rounds.calls[-1][1]
+
+
+@pytest.mark.parametrize("which", ["training", "narrowing round"])
+def test_a_continue_fills_only_the_forms_its_run_reads(which, store, tmp_path, monkeypatch):
+    """"Continue from batch N" fills, from its run's history, only the forms of what that run reads: Training's the
+    model's, the prior's and its own; a narrowing round's the model's, the prior's and the round's. Every other step's
+    form is left as it is: a value remembered from last time stands, and so does one typed in this launch."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.gui import remembered
+    from core.gui.panels.inference import tsnpe_tab
+    from tests._fixtures import _nad_cfg, write_observation
+    training = which == "training"
+    held = _a_launch_before(store, tmp_path, monkeypatch,
+                            **{(tsnpe_tab.NUM_RUNS_KEY if training else remembered.NUM_RUNS_KEY): "123"})
+    _the_loads(monkeypatch, store, held)
+    if training:
+        _a_failed_training(store, tmp_path, held)
+    else:
+        observed = write_observation(store, _nad_cfg(), name="cell_b")
+        monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+            kind="observation", id=ref, name="cell_b", manifest=None))
+        monkeypatch.setattr(orchestrator, "training_preview", lambda *args, **kwargs: SimpleNamespace(width=8))
+        _a_failed_round(store, tmp_path, held, observed)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    inference = window.part("inference")
+    other = inference.tsnpe_panel if training else inference.posterior_panel
+    own = inference.posterior_panel if training else inference.tsnpe_panel
+    assert (other.form.rows["num_runs"].value(), other.form.rows["num_runs"].kept) == (123, True)
+    draws = inference.infer_panel.plan_fields()["n_samples"]
+    draws.set_value(777)
+    home.next_button.click()
+    _settle(app, inference)
+    assert inference.loads.why == "", inference.loads.why
+    assert own.form.rows["num_runs"].value() == (7_000 if training else 400), "the run's own form was not filled"
+    row = other.form.rows["num_runs"]
+    assert (row.value(), row.kept, draws.value()) == (123, True, 777), (row.value(), row.kept, draws.value())
+
+
 @pytest.mark.parametrize("cause", ["bounds edited", "bounds gone", "bounds renamed in its capitals", "units gone",
                                    "units changed", "typed limits with a forcing section", "prior deleted",
                                    "card gone", "a library changed", "model gone"])

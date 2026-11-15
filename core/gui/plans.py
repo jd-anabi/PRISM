@@ -401,17 +401,21 @@ def origin(row, source: "PlanSource | None", *, kept: bool, heading: str) -> str
 
 
 # ── filling ──
-def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool = False) -> bool:
-    """Fill the forms of every step: every row each page hands through ``plan_fields`` takes the value ``values``
-    holds for it under the page's heading, else its usual value; a bounds file the values do not name is left as it is.
-    On Checks the rows are the calibration's, whichever check is open: no other check's form is filled.
-    With ``keep_remembered`` a row put back from the settings file and not touched since is left as it is. Nothing is
-    asked, nothing applied, nothing started, no record's pick changed, and no session replaced: the source is kept by
-    the screen, and the pages are drawn again. While a run is live nothing changes: False."""
+def fill_forms(screen, values: dict, source: PlanSource, keep_remembered: bool = False, *,
+               headings: "Sequence[str] | None" = None) -> bool:
+    """Fill the forms of every step, or of the steps of ``headings`` alone when they are named (what one step's run
+    reads, ``READS``): every row each page hands through ``plan_fields`` takes the value ``values`` holds for it under
+    the page's heading, else its usual value; a bounds file the values do not name is left as it is, and so is every
+    row of a step outside ``headings``. On Checks the rows are the calibration's, whichever check is open: no other
+    check's form is filled. With ``keep_remembered`` a row put back from the settings file and not touched since is left
+    as it is. Nothing is asked, nothing applied, nothing started, no record's pick changed, and no session replaced: the
+    source is kept by the screen, and the pages are drawn again. While a run is live nothing changes: False."""
     if controller().is_live():
         return False
     for page in screen.step_pages():
         heading = HEADING_OF.get(page.step)
+        if headings is not None and heading not in headings:
+            continue
         for name, row in page.plan_fields().items():
             if keep_remembered and row.kept:
                 continue

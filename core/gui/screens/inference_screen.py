@@ -693,7 +693,8 @@ class InferenceScreen(QWidget):
                                      else units if isinstance(units, str) and units else None)
 
         def fill() -> None:
-            self.config_panel.fill_with(source)
+            # What the training reads alone: every other step's form, its remembered values among it, stays as it is.
+            self.config_panel.fill_with(source, headings=window_plans.READS["training"])
 
         loads = self.load_chain(model, options, settings_["bounds"], settings_.get("prior"), fill=fill,
                                 press=offer.button, where="training")
@@ -707,8 +708,9 @@ class InferenceScreen(QWidget):
         ``offer`` names, after a reopening, as Training's ``continue_from`` is: its history read again; what its chain
         would find gone (its prior, its bounds file, the posterior it narrows, its observation) said under the
         Narrowing round step's heading before anything is let go; asked first when the session holds a record; then step
-        1 applied with the model and the options the round was started with, the forms filled from its settings once the
-        model stands (its own fit's settings reach the round's form under its heading), its bounds file selected, and
+        1 applied with the model and the options the round was started with, the forms of what a round reads filled from
+        its settings once the model stands (its own fit's settings reach the round's form under its heading; every other
+        step's form stays as it is), its bounds file selected, and
         its prior, the posterior it narrows and its observation loaded by their own steps' loads; once the observation
         is loaded, the round's page set to continue: its level and its directions the run's, the name and the note blank
         with the earlier name as the hint, the main button the offer's, and the next round handed the policy that must
@@ -753,7 +755,8 @@ class InferenceScreen(QWidget):
                                      else units if isinstance(units, str) and units else None)
 
         def fill() -> None:
-            self.config_panel.fill_with(source)
+            # What the round reads alone: every other step's form, its remembered values among it, stays as it is.
+            self.config_panel.fill_with(source, headings=window_plans.READS["narrowing"])
 
         loads = self.load_chain(model, options, settings_["bounds"], settings_.get("prior"),
                                 posterior=settings_["parent_posterior"], observation=settings_["observation"],

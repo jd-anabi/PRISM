@@ -93,6 +93,16 @@ DELETE_UNCOUNTED_TEXT = ("The epochs kept are deleted; the next narrowing round 
 KEEP_IT, DELETE_IT = "Keep it", "Delete it"
 #: How near a region's level a form's must be to be the kept round's.
 LEVEL_TOLERANCE = 1e-9
+#: Said under the heading when the page set to continue a round lets that go, what it let go and why.
+LET_GO_TEXT = "{} was let go: {}."
+CONTINUING_WORDS = "Continuing this round from batch {}"
+FITTING_AGAIN_WORDS = "Fitting this round again on the saved simulations"
+LET_GO_APPLIED = "the model and options were applied again"
+LET_GO_NO_POSTERIOR = "no posterior is in use"
+LET_GO_POSTERIOR = "another posterior is in use"
+LET_GO_OBSERVATION = "another observation is chosen"
+LET_GO_LEVEL = "the region level was changed"
+LET_GO_DIRECTIONS = "the directions narrowed were changed"
 # Where the window shows this step's runs: Parameter inference, its step Narrowing round.
 _PLACE = ("inference", "narrowing")
 # A list's row as it can be chosen, and the role under which the list's items keep their flags.
@@ -164,6 +174,8 @@ class TSNPEPanel(StepPage):
         self._call = None                    # what the last round was dispatched with, for its start again
         self._bodies: dict = {}              # the body of the observation chosen at the last reading, by its id
         self._continuing = None              # the offer a "Continue from batch N" set the page to, until a round starts
+        self._continued = None               # what that round was started on: the session of the fill, the posterior
+                                             # it narrows, its observation, its level and its directions
         self._resuming = None                # the kept round a Resume is starting, until its run is dispatched
         self._resumed_row = None             # the kept round whose Resume this page last started, until its run ends
         self._resumed_name = ""              # the name that Resume's posterior was to take, with it
@@ -327,9 +339,42 @@ class TSNPEPanel(StepPage):
         return tuple(offer for offer in (getattr(self._screen, "offers", tuple)() or ()) if offer.kind == "round")
 
     def redraw(self) -> None:
-        """What every page draws, then the list of kept narrowing rounds as last read."""
+        """What every page draws, then the list of kept narrowing rounds as last read. First, a page set to continue a
+        round lets that go once it holds something else than what the round was started on, and says under its heading
+        what it let go and why: the next press starts a round as any press does. Reads nothing."""
+        why = self._let_go_why()
+        if why:
+            offer, self._continuing, self._continued = self._continuing, None, None
+            what = (CONTINUING_WORDS.format(texts.number_text(offer.batch or 0)) if offer.kind == "continue"
+                    else FITTING_AGAIN_WORDS)
+            set_notice = getattr(self._screen, "set_notice", None)
+            if callable(set_notice):
+                set_notice(self.step, LET_GO_TEXT.format(what, why))      # every page drawn again, this one with them
         super().redraw()
         self._draw_the_kept()
+
+    def _let_go_why(self) -> str:
+        """Why the page set to continue a round can no longer continue it, the first that holds: step 1 applied again,
+        which replaced the session; the posterior it narrows no longer in use; another observation chosen; its region's
+        level or its directions changed on the form. "" while none holds, or the page is not set to continue. Reads
+        nothing."""
+        held = self._continued
+        if self._continuing is None or held is None:
+            return ""
+        session, parent, observation, level, directions = held
+        if getattr(self._screen, "session", None) is not session:
+            return LET_GO_APPLIED
+        posterior = self._held()[2]
+        if getattr(posterior, "id", None) != parent:
+            return LET_GO_NO_POSTERIOR if posterior is None else LET_GO_POSTERIOR
+        if self.obs_picker.key() != observation:
+            return LET_GO_OBSERVATION
+        now = self.form.rows["hpd_level"].value()
+        if level is not None and not (isinstance(now, (int, float)) and abs(now - level) <= LEVEL_TOLERANCE):
+            return LET_GO_LEVEL
+        if directions is not None and self.form.rows["n_directions"].value() != directions:
+            return LET_GO_DIRECTIONS
+        return ""
 
     def _draw_the_kept(self) -> None:
         """One row for each kept narrowing round: its label and how it stopped, what it says, what a Resume loads, why
@@ -748,7 +793,7 @@ class TSNPEPanel(StepPage):
         started = self.dispatch(orchestrator.tsnpe_round, cfg, posterior, prior, observation, provide_fig_sink=True,
                                 on_result=self._on_round, **call)
         if started:
-            self._continuing = None
+            self._continuing = self._continued = None
             self._handed = (posterior, observation)
             model = getattr(getattr(getattr(self._screen, "session", None), "draft", None), "model", None)
             put_many([(OBSERVATION_KEY, self.obs_picker.key()), (NUM_RUNS_KEY, str(knobs["num_runs"])),
@@ -814,18 +859,29 @@ class TSNPEPanel(StepPage):
     def continue_run(self, offer, settings_: dict) -> None:
         """The round's form filled from its history, for "Continue from batch N" or "Fit again on the saved
         simulations": the region's level and its directions the run's, the name and the note blank, the earlier run's
-        name as the hint, the main button the offer's, and the next round handed the policy that must continue; the
-        page then read."""
-        rows = self.form.rows
+        name as the hint, the list on the observation in use, the main button the offer's, and the next round handed the
+        policy that must continue; the page then read. The page holds what the round was started on, the session of
+        this fill with it, and lets the mode go once it holds another (``redraw``)."""
+        rows, held = self.form.rows, {}
         for key, name in (("hpd_level", "level"), ("n_directions", "directions")):
             value = settings_.get(name)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 rows[key].set_value(value)
-        self._continuing = offer
+                held[name] = value
         self._names.name.clear()
         self._names.note.clear()
         earlier = settings_.get("name") if isinstance(settings_.get("name"), str) else ""
         self._names.set_hint(EARLIER_NAME_TEXT.format(earlier) if earlier else "")
+        observation = settings_.get("observation")
+        if not controller().is_live():
+            self._follow_the_observation()
+            if observation and self.obs_picker.key() != observation:
+                # followed once before, and another chosen since: the round's own is chosen again
+                self.obs_picker.refresh()
+                self.obs_picker.restore_key(observation)
+        self._continuing = offer
+        self._continued = (getattr(self._screen, "session", None), settings_.get("parent_posterior"), observation,
+                           held.get("level"), held.get("directions"))
         self.read_facts()
 
     def _refusal(self, exc) -> None:
