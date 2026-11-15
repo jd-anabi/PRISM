@@ -150,6 +150,16 @@ def _conditioned_as_applied(manifest, plan) -> bool:
         return False                         # a record that holds no number for either is no posterior of these
 
 
+def _observation_loads(manifest, *, model: str, param_keys, kind) -> bool:
+    """Whether an observation's record passes what its load compares with the configuration the press makes, as far as
+    the records read say it: recorded for ``model``, over the parameters ``param_keys`` in their order (the prior's
+    picked, which the posterior picked was trained with), and of the kind of observation applied, the frequency
+    response (``kind`` True) or another."""
+    held, body = manifest.config or {}, manifest.body or {}
+    return (held.get("model") == model and list(held.get("param_keys") or []) == list(param_keys or [])
+            and (body.get("mode") == "chi") == (kind is True))
+
+
 def last_plan(model: str, name: str, *, plans_folder=None):
     """The plan ``name`` last used with ``model``, read and checked as step 1 reads a plan, in the model's folder of plans
     under ``plans_folder`` (the window's folder of plans unless one is handed), found without regard to case and named
@@ -175,10 +185,11 @@ def remembered_picks(*, store, plans_folder=None) -> Picks:
     while the prior stands and its record, which can be read, names that prior as the one it was trained with, is of the
     kind of observation applied and, of the frequency response, was trained with the slots and the lock-in limit the
     press applies (the plan's, else the usual ones), as its load compares them; the observation that came into use
-    last, while the posterior stands and its record, which can be read, is of the kind of observation applied; and the
-    plan last used with the model, while its file is there and has no problem. A bounds file remembered with no model, as an older PRISM wrote it, is
-    the model's. Nothing is written, and nothing is read but the settings file, the model's folder of bounds files,
-    three records' manifests and one plan file."""
+    last, while the posterior stands and its record, which can be read, would pass its load's comparison with the
+    configuration the press makes: recorded for that model, over the prior's parameters in their order, and of the kind
+    of observation applied; and the plan last used with the model, while its file is there and has no problem. A
+    bounds file remembered with no model, as an older PRISM wrote it, is the model's. Nothing is written, and nothing
+    is read but the settings file, the model's folder of bounds files, three records' manifests and one plan file."""
     from core import registry
     from core.Helpers import file_manager
     from .panels.inference.prior_tab import recorded_file
@@ -195,9 +206,11 @@ def remembered_picks(*, store, plans_folder=None) -> Picks:
         bounds = key
     ident = settings.get_str(qs, PRIOR_KEY, "")
     manifest = _manifest(store, "prior", ident) if bounds and ident else None
+    param_keys = None
     if (manifest is not None and (manifest.config or {}).get("model") == model
             and recorded_file((manifest.inputs or {}).get("bounds")) == PurePath(bounds).as_posix()):
         prior, prior_words = ident, _words_of("prior", manifest)
+        param_keys = (manifest.config or {}).get("param_keys")
     used = last_plan(model, settings.get_str(qs, LAST_USED_KEY.format(model.lower()), "").strip(),
                      plans_folder=plans_folder)
     ident = settings.get_str(qs, POSTERIOR_KEY, "")
@@ -209,7 +222,7 @@ def remembered_picks(*, store, plans_folder=None) -> Picks:
     observation, observation_words = None, ""
     ident = settings.get_str(qs, OBSERVATION_KEY, "")
     manifest = _manifest(store, "observation", ident) if posterior and ident else None
-    if manifest is not None and ((manifest.body or {}).get("mode") == "chi") == (kind is True):
+    if manifest is not None and _observation_loads(manifest, model=model, param_keys=param_keys, kind=kind):
         observation, observation_words = ident, _words_of("observation", manifest)
     return Picks(model, kind, bounds, prior, posterior, None if used is None else used.name, prior_words,
                  posterior_words, observation, observation_words)

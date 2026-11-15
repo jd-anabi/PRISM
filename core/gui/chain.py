@@ -306,8 +306,8 @@ def next_step(session, states, *, run=None, picks=None, offers=(), checks=None) 
                 return Next(f"Next: see the {what}", run.sentence, "See the result", part, page, run.run)
             own = next((offer for offer in offers if getattr(offer, "run", None) == run.run and _takes(offer)), None)
             if own is not None and run.outcome in ("failed", "not seen to end"):
-                return Next(f"Next: see what happened to the {what}", run.sentence, own.button, part, page, run.run,
-                            action=action_of(own), link=SEE_WHAT_HAPPENED, offer=own)
+                return Next(f"Next: see what happened to the {what}", run.sentence, _button_of(own), part, page,
+                            run.run, action=action_of(own), link=SEE_WHAT_HAPPENED, offer=own)
             return Next(f"Next: see what happened to the {what}", run.sentence,
                         "Go to the run" if run.outcome == "stopped" else SEE_WHAT_HAPPENED, part, page, run.run)
     offer = next((offer for offer in offers if _takes(offer)), None)
@@ -350,13 +350,19 @@ def _takes(offer) -> bool:
     return action_of(offer) is not None and not getattr(offer, "why_not", "")
 
 
+def _button_of(offer) -> str:
+    """The words of Home's button that takes ``offer``: the offer's own, but for a kept narrowing round, whose button
+    opens the round's page and resumes nothing there."""
+    return OPEN_ROUND_WORDS if getattr(offer, "kind", None) == "round" else offer.button
+
+
 def _offered(offer) -> Next:
     """Home's next step for the offer ``offer``."""
     action = action_of(offer)
     if offer.kind == "round":
         heading = (f"Next: resume the narrowing round {offer.label}" if getattr(offer, "named", True)
                    else "Next: resume the narrowing round")
-        return Next(heading, offer.sentence, OPEN_ROUND_WORDS, "inference", "narrowing", action=action, offer=offer)
+        return Next(heading, offer.sentence, _button_of(offer), "inference", "narrowing", action=action, offer=offer)
     if offer.step == "narrowing":
         return Next("Next: continue the narrowing round", offer.sentence, offer.button, "inference", "narrowing",
                     action=action, offer=offer)

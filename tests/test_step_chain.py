@@ -1011,6 +1011,20 @@ def test_the_next_step_of_a_failure_offers_the_button_and_a_link():
         found = chain.next_step(_session(), chain.step_states(_session()), run=status,
                                 offers=(_offer("continue", run="another", batch=5),))
         assert (found.button, found.link, found.action) == ("See what happened", None, None), outcome
+        # a kept training of that run stays its own Resume
+        kept = _offer("resume", run=run, kept="k", epoch=7, label="retrain_3")
+        found = chain.next_step(_session(), chain.step_states(_session()), run=status, offers=(kept,))
+        assert (found.button, found.action, found.link, found.offer) == ("Resume", "resume", "See what happened",
+                                                                         kept), outcome
+        # a kept narrowing round of a round's run opens its page and resumes nothing, as Home's button for one does
+        round_run = "20261003T030211-narrowing-round"
+        status = RunStatus(state=state, word="Narrowing round", name="retrain_round1", outcome=outcome, run=round_run,
+                           place=("inference", "narrowing"), sentence="It failed.")
+        kept = _offer("round", run=round_run, kept="k", epoch=41, label="retrain_round1", step="narrowing")
+        found = chain.next_step(_session(), chain.step_states(_session()), run=status, offers=(kept,))
+        assert (found.heading, found.button, found.action, found.link, found.page, found.offer) == (
+            "Next: see what happened to the narrowing round", "Open Narrowing round", "open_round",
+            "See what happened", "narrowing", kept), outcome
     for outcome, button in (("stopped", "Go to the run"), ("finished", "See the result")):
         status = RunStatus(state="ended", word="Training", outcome=outcome, run=run, place=("inference", "training"))
         found = chain.next_step(_session(), chain.step_states(_session()), run=status,

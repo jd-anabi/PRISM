@@ -7968,9 +7968,12 @@ def test_one_press_applies_step_one_and_loads_the_prior_and_the_posterior(store,
 def test_continue_with_these_brings_back_the_observation(store, tmp_path, monkeypatch):
     """The observation that came into use last time, while the posterior of last time stands, is named last in Home's
     sentence, and the one press loads it after the posterior, as the chain's third link: the narrowing round's own load
-    of it on the configuration in use, a run that only loads and writes no history, which puts it in use. One of
-    another kind of observation than the one applied is not named, and nothing loads it."""
+    of it on the configuration in use, a run that only loads and writes no history, which puts it in use. One its load
+    would refuse is not named, and nothing loads it: of another kind of observation than the one applied, recorded for
+    another model, or over the parameters in another order; nor one with no posterior of last time standing."""
+    import json
     from core.artifacts import ArtifactStore
+    from core.artifacts.store import MANIFEST
     from core.gui import remembered
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
     from tests._fixtures import _nad_cfg, write_observation
@@ -7992,6 +7995,20 @@ def test_continue_with_these_brings_back_the_observation(store, tmp_path, monkey
     other = write_observation(store, _nad_cfg(chi_mode=True), name="cell_c", mode="chi")
     remembered.put(remembered.OBSERVATION_KEY, other)
     assert remembered.remembered_picks(store=store).observation is None
+    for name, change in (("cell_d", lambda config: config.update(model="HOPF")),
+                         ("cell_e", lambda config: config.update(param_keys=config["param_keys"][::-1]))):
+        ident = write_observation(store, _nad_cfg(), name=name, mode="spontaneous")
+        path = store.path("observation", ident) / MANIFEST
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        change(manifest["config"])
+        path.write_bytes(json.dumps(manifest).encode("utf-8"))
+        remembered.put(remembered.OBSERVATION_KEY, ident)
+        assert remembered.remembered_picks(store=store).observation is None, name
+    remembered.put(remembered.OBSERVATION_KEY, observed)
+    assert remembered.remembered_picks(store=store).observation == observed
+    store.delete("posterior", held.posterior, force=True)
+    picks = remembered.remembered_picks(store=store)
+    assert (picks.prior, picks.posterior, picks.observation) == (held.prior, None, None), picks
 
 
 @pytest.mark.parametrize("kind, plan", [(True, None), (True, _ZZ_LAST), (False, _ZZ_LAST)],
