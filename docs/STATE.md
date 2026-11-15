@@ -1,5 +1,38 @@
 # PRISM — state
 
+**Last updated:** 2026-11-15, afternoon (15:30 by the clock; the weekly bar 2 %, resetting on 22 November at 04:00 UTC;
+extra usage switched on, nothing spent): STAGE 5'S TASK 12-13, PLANS FILLING EVERY STEP AND A KEPT NARROWING ROUND AFTER
+A REOPENING, IS COMPLETE. The chat started from
+`docs/superpowers/prompts/2026-11-13-window-redesign-stage-5-from-task-12-13-fix-round.md` goes on to the stage's last
+review.
+
+- **The fix round** (one fresh Opus builder from `stage-5/briefs/task-12-13-fix1-dispatch.md`, the rulings K1 to K10,
+  after reader two's listed faults were run, every gap confirmed): `24f7480` (the look's suite lists the fixed face's
+  callers as they stand), `8b2e815` (the round page reads nothing kept at a typing pause; a refused Resume is said on its
+  row alone and taken back at the next reading; no fix sentence on the round page points at step 3), `d755386` (Home
+  opens a kept round's page on a failure too, and names only an observation its chain would load), `486e985` (a round's
+  Continue is let go once its world changes; a Continue fills what its run reads, departure 480, plan `15970a2`),
+  `c915721` (a Resume's typed name pinned; the round's smaller words and legs). Every change under `core/gui/`; the
+  engine closed; no named training function touched.
+- **The re-read** (sonnet): K1 to K10 each done as ruled; 2 Important, 4 Minor. Ruled: the past view of a reopened round
+  offers no Resume (`core/gui/run/view.py:1196-1199`), with its two pins, CARRIED to the stage's last review's one fix
+  wave instead of a second fix round (one builder and one gate saved; on the owner's list); two guide sentences false
+  since Task 13's build (`getting-started.md` about :195-198, `architecture.md` about :295-296) to Task 14's guide pass.
+- **The gates on `c915721`:** the fast gate 4147 passed, 14 skipped, 3 deselected, 43 min 19 s (4164 collected; not
+  certified quiet); the real-screen run 14 passed; `Artifacts/` 428 entries, the listing identical; `PRISM.ini`
+  unchanged. The carried-over list: 7 rows closed naming their successors or why they went, 38 born, 1951 rows, missing 0.
+  A test gap found there: the retired wrap test's other half (a failure's long message within a narrow page) is pinned by
+  nothing; carried to the last review.
+- **Measured:** Task 12-13 about 4 points in all: the build and review 2 (91 % to 93 % before the reset), the fix round 2
+  (0 % to 2 %: the builder 0.56 M tokens, the fault runs 0.10 M, the re-read 0.12 M).
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: the stage's last review over `3adc659..c915721`, three readers from `stage-5/briefs/stage-5-final-review-dispatches.md`
+(its inputs `stage-5/reviews/stage-5-final-package.txt` and `stage-5-final-deferred-lines.txt` written), then one fix
+wave; Task 14 (the exit, with the owner: first the order); the code audit; the retrain from the window; one last stage.
+
+What follows is the head as the night of 13 November left it:
+
 **Last updated:** 2026-11-13, night (23:54 by the clock; the weekly bar 93 %, resetting on 15 November at 04:00 UTC,
 extra usage switched on): STAGE 5'S TASK 12-13 IS BUILT AND REVIEWED; ITS FIX ROUND IS OWED. The chat that began on 12
 November at 14:59 hands over here by the usage rule, at a clean state. The hand-off prompt for the next chat is
