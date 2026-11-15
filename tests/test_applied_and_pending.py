@@ -6109,13 +6109,82 @@ def test_the_kept_rounds_list_reads_once_and_never_while_a_run_is_live(store, tm
         assert [offer.kept for offer, _parts in page._kept_rows] == [kept]
 
 
+def test_the_round_pages_reading_after_the_typing_stops_reads_nothing_kept(store, tmp_path, monkeypatch):
+    """The reading the round page makes once the typing stops reads neither what is offered nor what the checks need,
+    as the Training page's does: typing makes no record. The kept trainings, the run histories the offers and the
+    checks read, and the checks' records are read at a showing of the page, and none of them at a typing pause."""
+    from core.gui import check_lineage
+    from core.gui.run import history
+    from core.SBI import fit_state
+    window, inference, page, _kept = _a_round_page_with_a_kept_round(store, tmp_path, monkeypatch)
+    read = {}
+    for home, name in ((fit_state, "kept_fits"), (history, "runs_of"), (check_lineage, "read_records")):
+        def counted(*args, _real=getattr(home, name), _name=name, **kwargs):
+            read[_name] = read.get(_name, 0) + 1
+            return _real(*args, **kwargs)
+        monkeypatch.setattr(home, name, counted)
+    page.form.rows["num_runs"].widget.setText("12")
+    assert page.isVisible() and page.read_timer.isActive(), "the typing started no reading"
+    page.read_timer.stop()
+    page.read_timer.timeout.emit()
+    assert read == {}, f"the reading after the typing stopped read {read}"
+    window.go_to("inference", "training")
+    inference.stale_store()
+    read.clear()
+    window.go_to("inference", "narrowing")
+    # the offers' and the checks' histories, once each
+    assert read == {"kept_fits": 1, "runs_of": 2, "read_records": 1}, read
+
+
+def test_a_refused_resume_is_taken_back_at_the_next_reading(store, tmp_path, monkeypatch):
+    """A Resume refused before anything is read (here the graphics card gone) says why on the kept round's row, with
+    "Delete" alone; a reading after the typing stops leaves it said; once the cause is lifted, the page's next reading
+    takes it back and the row offers "Resume" again."""
+    from types import SimpleNamespace
+    from core import config
+    from tests._fixtures import _nad_cfg, region_dict, write_observation
+    from tests.test_shell import _a_kept_training, _a_launch_before, _home_of_last_time
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    kept = _a_kept_training(store, held, name="retrain_round1", passes=41, region=region_dict(),
+                            config={"device": "cuda"}, parents={"parent_posterior": held.posterior,
+                                                                 "observation": observed})
+    monkeypatch.setattr(config, "detect_device", config.cpu_device)
+    window, _home = _home_of_last_time(tmp_path)
+    window.go_to("inference", "narrowing")
+    page = window.part("inference").tsnpe_panel
+    (_offer, parts), = page._kept_rows
+    parts["resume"].click()
+    (_offer, parts), = page._kept_rows
+    said = "It was trained on the graphics card; this computer has none now."
+    assert (page.said_on_row(kept), parts["why"].text()) == (said, said)
+    assert not parts["resume"].isVisibleTo(page.kept_block) and parts["delete"].isVisibleTo(page.kept_block)
+    page.form.rows["num_runs"].widget.setText("12")
+    page.read_timer.stop()
+    page.read_timer.timeout.emit()
+    assert page.said_on_row(kept) == said, "a reading after the typing stopped took the sentence back"
+    monkeypatch.setattr(config, "detect_device", lambda: SimpleNamespace(device=SimpleNamespace(type="cuda")))
+    page.read_facts()
+    (_offer, parts), = page._kept_rows
+    assert page.said_on_row(kept) == "" and not parts["why"].isVisibleTo(page.kept_block)
+    assert parts["resume"].isVisibleTo(page.kept_block), "the cause lifted, the row offers no Resume"
+
+
 def test_a_resume_refusal_is_said_on_the_row_that_was_pressed(store, tmp_path, monkeypatch):
     """A Resume the round refuses for its kept round (a race, a torn record, a process training it) is said on the row
-    that was pressed, in place of its "Resume", beside its "Delete", once the list is read again; the box says it too."""
+    that was pressed alone, in place of its "Resume", beside its "Delete", the list read again first: no box tells it,
+    and nothing is said at the head. Its name taken meanwhile by another process is said there the same way, in the
+    window's words, and the next Resume asks for another name. With no row pressed, the box and the head point at the
+    kept narrowing rounds on this page; and a Continue refused under the policy that must continue points at the press
+    that starts a new round from its first batch. Each sentence under a refusal is the window's own table's."""
+    from core.gui import fields
     from core.refusals import Refusal
+    from core.SBI import fit_state
     from tests._dialogs import forget_asked
-    _window, _inference, page, kept = _a_round_page_with_a_kept_round(store, tmp_path, monkeypatch)
-    (_offer, parts), = page._kept_rows
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+    _window, inference, page, kept = _a_round_page_with_a_kept_round(store, tmp_path, monkeypatch)
+    read, real = [], fit_state.kept_fits
+    monkeypatch.setattr(fit_state, "kept_fits", lambda *args, **kwargs: read.append(1) or real(*args, **kwargs))
     page._resumed_row = kept
     forget_asked()
     said = "The kept training is being trained by another process."
@@ -6123,7 +6192,40 @@ def test_a_resume_refusal_is_said_on_the_row_that_was_pressed(store, tmp_path, m
     (_offer, parts), = page._kept_rows
     assert page.said_on_row(kept) == said and parts["why"].text() == said
     assert not parts["resume"].isVisibleTo(page.kept_block) and parts["delete"].isVisibleTo(page.kept_block)
-    assert [one.sentence for one in all_asked()] == [said]
+    assert all_asked() == [] and page._head_fact is None, (all_asked(), page._head_fact)
+    assert len(read) == 1, "the list was not read again"
+    assert page._resumed_row is None
+    # no row pressed: the box, and the head, point at the list on this page
+    page.read_facts()
+    forget_asked()
+    page._refusal(Refusal(said, field="resume_fit"))
+    asked, = all_asked()
+    fix = "Look at the kept narrowing rounds on this page."
+    assert (asked.sentence, asked.beneath) == (said, fix) and fix == fields.fix_sentence("resume_fit", here="narrowing")
+    assert page._head_fact.sentence == f"{said} {fix}" and page.said_on_row(kept) == ""
+    assert fields.fix_sentence("resume_fit", here="training") == fields.CONTROL["resume_fit"]
+    # a Continue refused under the policy that must continue
+    page.read_facts()
+    forget_asked()
+    stage = "resume='require' but there is no resumable cache at the round's folder."
+    page._refusal(Refusal(stage, field="resume"))
+    asked, = all_asked()
+    fix = "Press 'Start the narrowing round' on this page to start a new round from its first batch."
+    assert (asked.sentence, asked.beneath) == (stage, fix) and fix == fields.fix_sentence("resume", here="narrowing")
+    assert page._head_fact.sentence == f"{stage} {fix}"
+    # the name taken meanwhile by another process
+    page.read_facts()
+    _posterior_artifact(store, _nad_cfg(), name="retrain_round1", parents={})
+    page._resumed_row, page._resumed_name = kept, "retrain_round1"
+    forget_asked()
+    page._refusal(Refusal("Another artifact is named retrain_round1.", field="name"))
+    (_offer, parts), = page._kept_rows
+    taken = "The name 'retrain_round1' is taken by another posterior. Choose another name."
+    assert (page.said_on_row(kept), parts["why"].text(), all_asked(), page._head_fact) == (taken, taken, [], None)
+    page.read_facts()
+    assert inference.resume_round(kept) is None
+    asked, = all_asked()
+    assert asked.title == "Name this narrowing round", asked.title
 
 
 def test_a_new_round_over_a_matching_kept_round_asks_first(tmp_path, monkeypatch):

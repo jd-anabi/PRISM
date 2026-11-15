@@ -49,7 +49,7 @@ from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, C
                            round_facts, round_how_long, round_uses)
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.ask import ask
-from ...widgets.form import NameAndNote, TickedField
+from ...widgets.form import NameAndNote, TickedField, name_words
 from ...widgets.labeled_inputs import FloatField, IntField
 from ...widgets.result_region import NextStep
 from .base import training_spec
@@ -166,7 +166,11 @@ class TSNPEPanel(StepPage):
         self._continuing = None              # the offer a "Continue from batch N" set the page to, until a round starts
         self._resuming = None                # the kept round a Resume is starting, until its run is dispatched
         self._resumed_row = None             # the kept round whose Resume this page last started, until its run ends
-        self._said_on_row: dict = {}         # what stops a kept round's Resume, by its id, until the list is read
+        self._resumed_name = ""              # the name that Resume's posterior was to take, with it
+        self._said_on_row: dict = {}         # what stops a kept round's Resume, by its id, until the page next reads
+                                             # what is offered
+        self._lists_wait = False             # the reading after the typing stops reads neither what is offered nor
+                                             # what the checks need
         self.obs_picker = StorePicker("observation", parent=self, keeps_selection=True, hint=CHOOSE_OBSERVATION,
                                       row_filter=self._of_this_kind)
         self.obs_picker.combo.currentIndexChanged.connect(self._picked)
@@ -598,17 +602,19 @@ class TSNPEPanel(StepPage):
 
     # ── the reading of the disk ──
     def read_disk(self) -> None:
-        """What the checks need, read by the screen; the observations listed again and, with a posterior narrowed around
-        one in use, each one's digest; the list moved to the observation in use; the label of the prior the posterior
-        was trained with; the training preview at the budget, for the simulations the round makes; and the run history:
-        the last run on this computer, and the pace of an epoch and the epochs of the last narrowing round of this
-        kind."""
+        """What the checks need and what is offered, read by the screen, the sentences said on the kept rounds' rows
+        taken back with it; the observations listed again and, with a posterior narrowed around one in use, each one's
+        digest; the list moved to the observation in use; the label of the prior the posterior was trained with; the
+        training preview at the budget, for the simulations the round makes; and the run history: the last run on this
+        computer, and the pace of an epoch and the epochs of the last narrowing round of this kind. The reading after
+        the typing stops reads neither what is offered nor what the checks need: typing makes no record."""
         screen = self._screen
-        if screen is not None and hasattr(screen, "read_checks"):
+        if not self._lists_wait and screen is not None and hasattr(screen, "read_checks"):
             screen.read_checks()
         cfg, prior, posterior = self._held()
         store = default_store()
-        if screen is not None and hasattr(screen, "read_offers"):
+        if not self._lists_wait and screen is not None and hasattr(screen, "read_offers"):
+            self._said_on_row = {}
             screen.read_offers()             # the kept rounds the list shows, read once at each reading
         self.obs_picker.refresh()
         self._digests_read = self._narrowed_digest() is not None
@@ -665,13 +671,23 @@ class TSNPEPanel(StepPage):
         rows, found = self.form.rows, self.problems()
         return {key: rows[key].value() for key in _FIT if key not in found and rows[key].value() is not None}
 
+    def _timer_fired(self) -> None:
+        """The reading after the typing stops reads no kept round and nothing the checks need: typing makes none."""
+        self._lists_wait = True
+        try:
+            super()._timer_fired()
+        finally:
+            self._lists_wait = False
+
     def _run_ended(self, status) -> None:
         """A run has ended. One of this page's that returned its posterior: its result said. Then the reading, which
         lists the observations again and moves the list to the observation in use, which the controller's order makes
-        safe: no run is live by now. The objects the last start was handed go, but at a refusal made before anything was
-        spent, whose question may start the same call again."""
+        safe: no run is live by now. The objects the last start was handed go, and the kept round whose Resume started
+        it, but at a refusal made before anything was spent, whose question may start the same call again and whose
+        sentence a Resume's row says."""
         if getattr(status, "outcome", None) is not None:
             self._call = None
+            self._resumed_row, self._resumed_name = None, ""
         made, self._made = self._made, None
         handed, self._handed = self._handed, None
         if made is not None:
@@ -749,6 +765,7 @@ class TSNPEPanel(StepPage):
         if None in (cfg, prior, posterior, observation) or controller().is_live():
             return False
         self._resuming, self._resumed_row = kept, kept.id
+        self._resumed_name = name or getattr(kept, "posterior_name", "") or ""
         try:
             started = self.dispatch(orchestrator.tsnpe_round, cfg, posterior, prior, observation,
                                     **resume.round_call(kept, name), if_name_taken="unnamed", provide_fig_sink=True,
@@ -758,11 +775,12 @@ class TSNPEPanel(StepPage):
         if started:
             self._handed = (posterior, observation)
         else:
-            self._resumed_row = None
+            self._resumed_row, self._resumed_name = None, ""
         return started
 
     def say_on_row(self, ident: str, sentence: str) -> None:
-        """Say ``sentence`` on the kept round's row, in place of its Resume, until the list is next read."""
+        """Say ``sentence`` on the kept round's row, in place of its Resume, until the page's next reading of what is
+        offered: a reading after the typing stops reads none."""
         self._said_on_row[ident] = sentence
         self.redraw()
 
@@ -811,17 +829,27 @@ class TSNPEPanel(StepPage):
         self.read_facts()
 
     def _refusal(self, exc) -> None:
-        """A refusal, as every page tells one; but the stage's refusal of a new simulation set beside a saved one a
+        """A refusal, as every page tells one; but a Resume of a kept round refused for that kept round or for its name
+        is said on the row that was pressed alone, and the stage's refusal of a new simulation set beside a saved one a
         setting away is a question, the stage's own sentence in it: "Start the narrowing round" dispatches the same call
         again with the consent and the objects already loaded; "Cancel", preselected, starts nothing. Answered, the
         objects go, but those a new start holds."""
-        if getattr(exc, "field", None) == "resume_fit" and self._resumed_row:
-            # A Resume refused (a race, a torn record, a process training it): said on the kept round's row, beside
-            # its "Delete", and the list read again.
-            said, row = str(getattr(exc, "message", None) or exc), self._resumed_row
+        row, name = self._resumed_row, self._resumed_name
+        self._resumed_row, self._resumed_name = None, ""
+        field = getattr(exc, "field", None)
+        if row and field in ("resume_fit", "name") and not controller().is_live():
+            # A Resume refused (a race, a torn record, a process training it, its name taken meanwhile): the list read
+            # again, and said on the kept round's row in place of its "Resume", beside its "Delete", the row in sight
+            # with the keyboard on it. A name taken is said in the window's words: the next Resume asks for another.
+            said = name_words("posterior", name) if field == "name" and name else str(
+                getattr(exc, "message", None) or exc)
             self._screen.read_offers()
-            self.say_on_row(row, said)
-        if getattr(exc, "field", None) != "new_run" or self._call is None or controller().is_live():
+            if any(offer.kept == row for offer in self.kept_offers()):
+                self.say_on_row(row, said)
+                if self.isVisible():
+                    self.show_kept(row)
+                return
+        if field != "new_run" or self._call is None or controller().is_live():
             super()._refusal(exc)
             return
         (cfg, posterior, prior, observation, knobs), self._call = self._call, None

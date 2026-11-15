@@ -198,14 +198,21 @@ ON_THIS_PAGE: dict[str, str] = {
                         "asks on this page.",
     "note": "Change it in 'Note' on this page.",
     "accept_other_observation": "Answer the question that the start button asks on this page.",
+    "resume_fit": "Look at the kept narrowing rounds on this page.",
 }
 #: The steps whose own question or box a sentence of ``ON_THIS_PAGE`` answers: on another page the table's sentence,
-#: which names the step, is said. The name and the note stand on the five steps that make a record.
+#: which names the step, is said. The name and the note stand on the five steps that make a record; the kept narrowing
+#: rounds are listed on the Narrowing round step, the kept trainings on Training, whose sentence is the table's.
 _RECORDED = ("prior", "training", "checks", "infer", "narrowing")
 ASKED_ON = {"new_run": ("training", "narrowing"), "accept_truncated": ("training",),
-            "accept_other_observation": ("infer",), "name": _RECORDED, "note": _RECORDED}
+            "accept_other_observation": ("infer",), "name": _RECORDED, "note": _RECORDED, "resume_fit": ("narrowing",)}
 #: What a part says of a setting it holds itself, where the table's sentence lists every place that holds it.
 ON_A_PART = {("note", "records"): f"Edit it in the Note box {_in('records')}."}
+#: What a step says of a refusal of its own run under a setting the table names on another step's form, which its page
+#: does not show: a narrowing round's "Continue from batch N" is refused under the policy that Training's "Continue or
+#: start new" sets, and on the round's page a press then starts a new round.
+ON_A_STEP = {("resume", "narrowing"): "Press 'Start the narrowing round' on this page to start a new round from its "
+                                      "first batch."}
 
 
 #: A saved simulation set's identity as a person reads it, row by row: the entries a row folds into its one line, what
@@ -395,12 +402,15 @@ def fix_sentence(key: str | None, here: str | None = None) -> str:
     box: ``"Set it in 'Batches' on this page."`` when the row stands there, and else
     ``"Set it in 'Batches' in step 3, Training, or step 6, Narrowing round."``; a sentence entry says what
     ``ON_THIS_PAGE`` gives for it, when it gives anything and the page is one ``ASKED_ON`` names for it, else the
-    table's own; a part says ``ON_A_PART``'s sentence of what it holds itself. With no ``here`` the table's own words
-    stand, and no box of ``ON_TRAINING_ALONE`` is named."""
+    table's own; a part says ``ON_A_PART``'s sentence of what it holds itself, and a step ``ON_A_STEP``'s of a refusal
+    of its own run under a setting its page does not show. With no ``here`` the table's own words stand, and no box of
+    ``ON_TRAINING_ALONE`` is named."""
     if key is None or (here is None and key in ON_TRAINING_ALONE):
         return ""
     if (key, here) in ON_A_PART:
         return ON_A_PART[(key, here)]
+    if (key, here) in ON_A_STEP:
+        return ON_A_STEP[(key, here)]
     entry = CONTROL.get(key)
     if isinstance(entry, tuple):
         place, text = entry

@@ -1773,11 +1773,43 @@ def test_a_rounds_resume_goes_through_the_narrowing_round_alone(store, tmp_path,
     handed = [given for fn, given in dispatched if fn is rounds]
     assert len(handed) == 1 and handed[0]["provide_fig_sink"] is True, handed
     assert all(call_args[3] is False for call_args, _kwargs in posterior_load.calls), "a Resume trained a posterior"
-    assert page._resumed_row == kept
+    assert page._resumed_row is None, "the row of a Resume whose run has ended is still held"
     routed = []
     monkeypatch.setattr(InferenceScreen, "resume_round", lambda self, ident: routed.append(ident))
     inference.resume_kept(kept)
     assert routed == [kept] and len(posterior_load.calls) == 1, "a kept round went the way of a training"
+
+
+def test_a_resume_the_round_refuses_is_said_on_its_row_once_its_run_has_ended(store, tmp_path, monkeypatch):
+    """A kept round's Resume that the round refuses before anything is spent, for that kept round: its run ends, and
+    the refusal, which comes after the end, is said on the row that was pressed alone, beside its "Delete", with no
+    box and nothing at the head; the page holds that row no longer."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.gui.run.controller import controller
+    from core.refusals import Refusal
+    from tests._dialogs import forget_asked
+    from tests._runs import StandIn, turn_until
+    from tests.test_shell import _the_loads
+    held, kept, _observed, _window, inference = _a_kept_round(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+        kind="observation", id=ref, name="cell_b", manifest=None))
+    said = "The kept training is being trained by another process."
+    rounds = StandIn(word="Narrowing round")
+    rounds.fail(Refusal(said, field="resume_fit"))
+    monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+    app = qt_app()
+    forget_asked()
+    loads = inference.resume_round(kept)
+    turn_until(app, lambda: not loads.is_going() and rounds.started.is_set() and not controller().is_live(), 10.0)
+    page = inference.tsnpe_panel
+    turn_until(app, lambda: page.said_on_row(kept) != "", 5.0)
+    (_offer, parts), = page._kept_rows
+    assert parts["why"].text() == said and not parts["resume"].isVisibleTo(page.kept_block)
+    assert parts["delete"].isVisibleTo(page.kept_block)
+    assert all_asked() == [] and page._head_fact is None, (all_asked(), page._head_fact)
+    assert page._resumed_row is None
 
 
 def test_resume_loads_the_parent_the_prior_and_the_observation_by_their_ids_first(store, tmp_path, monkeypatch):
