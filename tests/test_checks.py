@@ -506,16 +506,18 @@ def _expected_never(states) -> dict:
     still = sum(1 for state in states if state not in ("Passed", "never"))
     opened = ("" if not still else "Inference can be run now; 1 deciding check is still open." if still == 1
               else f"Inference can be run now; {still} deciding checks are still open.")
+    quoted = [f"'{name}'" for name in never]                 # each set off; "or" before the last
+    named = f"{', '.join(quoted[:-1])} or {quoted[-1]}" if len(quoted) > 1 else "".join(quoted)
     if failed:
         sentence = "Failed: " + ", ".join(failed) + "."
     elif closer:
         sentence = "Look closer: " + ", ".join(closer) + "."
     elif opened and never:
-        sentence = f"{opened} No run can pass {', '.join(never)} for this posterior."
+        sentence = f"{opened} No run can pass {named} for this posterior."
     elif opened:
         sentence = opened
     elif never:
-        sentence = f"Inference can be run now; no run can pass {', '.join(never)} for this posterior."
+        sentence = f"Inference can be run now; no run can pass {named} for this posterior."
     else:
         sentence = "This posterior has passed every deciding check."
     second = (f"{len(failed)} failed" if failed else f"{len(closer)} to look closer at" if closer
@@ -602,6 +604,26 @@ def test_the_headlines_sentence_is_the_first_that_applies():
     assert sentence(six) == "This posterior has passed every deciding check."
     assert sentence(["Does not apply"] * 3 + ["Passed"] * 3, chi=False) == (
         "This posterior has passed every deciding check that applies to it.")
+
+
+def test_a_check_no_run_can_pass_is_set_off_in_quotes_where_the_sentence_names_it():
+    """The headline's sentence names a deciding check that no run can pass for the posterior in use in passing, set off
+    in quotes as the window sets off a name inside a sentence, so that the sentence reads: one alone, two joined by
+    "or", three with commas and "or" before the last. The checks that failed or need a closer look stand after a colon,
+    where a name reads, as they did."""
+    def sentence(states):
+        return check_lineage.headline(_with_never(states), held=_held())[1]
+
+    assert sentence(["Passed", "Passed", "Passed", "Passed", "never", "Not run yet"]) == (
+        "Inference can be run now; 1 deciding check is still open. No run can pass 'Use of each part of the input' "
+        "for this posterior.")
+    assert sentence(["Passed", "Passed", "Passed", "Passed", "never", "never"]) == (
+        "Inference can be run now; no run can pass 'Use of each part of the input' or 'Identifiability of the "
+        "posterior' for this posterior.")
+    assert sentence(["Passed", "Passed", "never", "Passed", "never", "never"]) == (
+        "Inference can be run now; no run can pass 'Unusable driven recordings: simulation set against the audit', "
+        "'Use of each part of the input' or 'Identifiability of the posterior' for this posterior.")
+    assert sentence(["Failed", "Passed", "never", "Failed", "never", "Passed"]) == "Failed: Frequency band, Calibration."
 
 
 def test_the_summarys_second_line_counts_the_first_that_applies():
@@ -2472,8 +2494,9 @@ def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
         summary = screen.checks_summary()
         assert (summary.passed, summary.of, summary.open, summary.cannot_pass) == (4, 6, False, 2)
         assert summary.headline == "4 of 6 deciding checks passed"
-        assert summary.sentence == ("Inference can be run now; no run can pass Unusable driven recordings: simulation "
-                                    "set against the audit, Use of each part of the input for this posterior.")
+        assert summary.sentence == ("Inference can be run now; no run can pass 'Unusable driven recordings: "
+                                    "simulation set against the audit' or 'Use of each part of the input' for this "
+                                    "posterior.")
         assert summary.second_line == "2 that no run can pass"
         checks = screen.step_states()[3]
         assert (checks.marker, checks.rail_words, checks.done) == ("warn", "Attention: 4 of 6 passed", False)

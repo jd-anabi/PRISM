@@ -70,6 +70,9 @@ ALL_PASSED_TEXT = "This posterior has passed every deciding check."
 ALL_THAT_APPLY_TEXT = "This posterior has passed every deciding check that applies to it."
 NO_RUN_PASSES_TEXT = "Inference can be run now; no run can pass {} for this posterior."
 OPEN_AND_NO_RUN_TEXT = "{} No run can pass {} for this posterior."
+#: A check's name inside a sentence that names it in passing, set off as the window sets off a name in a sentence; two
+#: or more are joined by commas, and "or" before the last.
+NAMED_IN_PASSING = "'{}'"
 #: The reasons a deciding check's row gives that no run can lift for the posterior in use: it was made without what
 #: the check reads.
 CANNOT_PASS_REASONS = (NO_SIMULATIONS_TEXT, NO_ROTATION_TEXT)
@@ -564,6 +567,12 @@ def _counts(found, held: Held) -> tuple[int, int, int]:
     return passed, len(DECIDING) - away, away
 
 
+def _in_passing(names: Sequence[str]) -> str:
+    """Checks' ``names`` as a sentence names them in passing: each set off, the last joined by "or"; "" for none."""
+    quoted = [NAMED_IN_PASSING.format(name) for name in names]
+    return " or ".join([", ".join(quoted[:-1]), quoted[-1]]) if len(quoted) > 1 else "".join(quoted)
+
+
 def headline(found: Sequence[CheckRow], *, held: Held) -> tuple[str, str]:
     """The headline over the deciding checks and the sentence under it, the first that applies."""
     passed, of, away = _counts(found, held)
@@ -583,7 +592,7 @@ def headline(found: Sequence[CheckRow], *, held: Held) -> tuple[str, str]:
         none_apply = sum(row.state == "Does not apply" for row in deciding)
         return said, THREE_DO_NOT_APPLY_TEXT if none_apply == 3 else OTHER_FOUR_TEXT
     still = len(_still_open(deciding, held))
-    never = ", ".join(entry(row.key).name for row in deciding if no_run_passes(row, held=held))
+    never = _in_passing([entry(row.key).name for row in deciding if no_run_passes(row, held=held)])
     opened = (ONE_OPEN_TEXT if still == 1 else SEVERAL_OPEN_TEXT.format(still)) if still else ""
     if opened and never:
         return said, OPEN_AND_NO_RUN_TEXT.format(opened, never)
