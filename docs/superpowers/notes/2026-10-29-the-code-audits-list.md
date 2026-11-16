@@ -575,3 +575,67 @@ From Task 6-7's fix round (the forms and runs of every check):
     the list deletes them; the round's list's rows are made by the toolkit itself, and a handle on one outlived it), but
     it is the one such handle left. Cure if wanted: remove the four leftovers with `BasePanel`'s last reader; set the
     Checks list's flags through the model's data, as the round now does.
+
+From the stage's last review and its one fix wave (15 November; the three seats' reports,
+`.superpowers/sdd/2026-10-06-window-redesign/stage-5/reviews/stage-5-final-review-product.md`, `-sorting.md` and
+`-tests.md`), what the review sorted to this list; lines as at the wave's last commit:
+18. **`core/SBI/pipeline.py:43`'s `sim_class` and the rest of what only removed code reads (departure 473, as the cut's
+    builder report names them).** Why: the cut removed and left the pruning to the audit, with the science fenced, and
+    the departure promised the list here. In the engine folders `pipeline.sim_class`, whose only caller was the live
+    simulation's runner; `core/cli.py`'s `parse_cell`, `cell_sources`, `resolve_bounds_for_cell` and
+    `_merge_vals_bounds` (no kept caller in `core/`; tests still call them); `core/registry.py`'s `freqs_per_batch`
+    parameter of `make_user_simulator` and `UserSimulator`'s frequency packing; `core/refusals.py`'s `require_below`;
+    `core/gui/widgets/figure_stack.py`'s `FigureStack.png_path`; `core/gui/plot_watcher.py`'s `watch_dir`;
+    `core/gui/panels/base_panel.py`'s `insert_result_widget`, `_fit_the_form` and `_run_page_beside`;
+    `core/gui/run/model.py`'s `LEAVES_OUT` (now empty), the stage counted by a reading's i/n, the unfiled end of a run
+    that keeps no file, `provide_stream`/`on_chunk`, `own_view` and `set_count`; `core/gui/theming.py`'s
+    `active_appearance` and `theme_changed` (no listener); `core/gui/widgets/page_names.py`'s `PageNames`;
+    `GAP["rail_rest"]`, `StorePicker.row_filter`, `config_args`'s `name_help`, `keys.PAGES` (now empty) and
+    `main_window._PAGES`; `core/Helpers/labels.py`'s `GUI_HTML` entries for the removed pages' labels (n_freqs,
+    M_ensemble, the two grids); and the five packages only removed code used, still pinned in `requirements.txt`
+    (pyqtgraph, imageio, imageio-ffmpeg, h5py, pandas). Kept on purpose: `LEGACY_DIRS = ("crossval",)` and
+    `ends._RECORDS`'s word for "fdt" (old histories name it). Unread already before the cut: `config.CUDA_MEM_FRACTION`,
+    `PYTORCH_ALLOC_CONF_DEFAULT`/`_ENV` and `UNIQUE_FREQS`.
+19. **`core/gui/run/view.py:17-18`, `core/gui/screens/inference_screen.py:172` and `:220-221`,
+    `core/gui/widgets/adaptive_stack.py:7-8`, `core/gui/widgets/field_row.py:3-4`: comments and docstrings that
+    describe the window as it was (seat one's Minor 4).** Why: each names a page rebuilt or removed in this stage, so
+    a reader is sent to what is not there; comments only. The run page's module docstring says a failure's page shows
+    "the command line it names on a line of its own" (item 20 is the slot); the screen's class docstring says "each
+    other panel saves its own settings group" (since the stage every step remembers at its own moments and nothing is
+    written at closing), and its stack's comment that "Validate is one label and one button, Infer in chi mode is
+    10-25 rows"; the stack's module docstring names the Infer tab's two-row and K+3-row pages; `field_row.py`'s
+    names `_ChiRangeRow` ("inference: lo/hi multipliers"), which went with `rows.py`.
+20. **`core/gui/run/view.py:714-719` and `:587-589`: the run page's unused command slot, and `SelectableLines` (carried
+    item 9; seat three's M-10).** Why: since the last command a page set off went, no caller hands a command
+    (`show_failure`'s `command=""` at `:982`, which `core/gui/run/controller.py:1275` never passes), so the slot
+    (`command_line`, built and set at `:717-719`, `:742`, `:910`, `:993`, arranged at `:1214`, a Tab stop at `:973`) is
+    dead and hidden, two tests holding it empty; `SelectableLines = _Lines` is read by `tests/test_run_states.py` alone
+    and its comment says it is "for a command a page sets off". `_Lines` itself stays: the failure's message is
+    selectable through it, which `tests/test_retry.py`'s long-message test now holds.
+21. **`core/gui/main_window.py:660`: `offer_pressed`'s branch that resumes a round of a run this launch still holds
+    (carried item 11).** Why: no press reaches it with a round: a past view is drawn only for a run the controller
+    neither holds nor offers on that page (`core/gui/run/controller.py`, `show_past`), and Home's round action opens
+    the round's page; the "round" admitted at `:652-653` is pinned by the past view's test
+    (`tests/test_shell.py`, `test_the_past_view_of_a_reopened_kept_round_offers_its_resume`).
+22. **`core/gui/panels/inference/tsnpe_tab.py:857`: a resumed round's history holds no directions (seat one's Minor
+    7).** Why: `_kept_settings` writes `"directions": None`, so a "Fit again on the saved simulations" offered later
+    from that history (the resumed round failed and its kept fit was deleted or became unresumable) leaves the form's
+    "Directions narrowed" as it stands and never compares it; with another number the region, and so the set, differ
+    and the round is refused under `resume` though its set is saved (three conditions together). Cure if wanted: read
+    the number asked from the kept record (`kept.config`) where it holds it, not from the region's `dims`, which can be
+    fewer (`core/SBI/truncate.py`).
+23. **`tests/test_pages.py:1140` and `tests/test_run_states.py:5622`: one helper's name, two set-ups (seat three's
+    M-5).** Why: both define `_the_most_rows_in_error` for the same "most rows" page, the first emptying the card
+    test's recording length with its fold as it stands, the second opening the fold first; a page added to one list is
+    set up otherwise in the other.
+24. **`tests/test_settings_persistence.py:918-951` and `tests/test_checks.py:3779-3821`: the guards against a widget
+    shown as a window of its own do not watch Inference's or the round's run end (seat three's M-6).** Why: the first
+    watches construction, the second the Checks page's reading and one check's run end; the two pages' results go
+    through the same `ResultRegion`, but what each makes itself at its run's end is watched by neither, and the stage
+    met this fault three times. Cure if wanted: one leg of each page's run end in the Checks guard's test (about 20
+    lines, about 2 s).
+25. **`core/gui/panels/inference/validate_tab.py:262`: the twelve check pages, with their forms, are built in Parameter
+    inference's constructor (seat three's real-time note 2).** Why: 38 ms of a 154 ms build of the screen, which about
+    a thousand tests build, so about 40 s a gate; building a check's page at its first opening would give most of it
+    back, against departure 445's rule that a check's page is made inside its list before it is opened (item 12's
+    guard): for the audit to weigh.
