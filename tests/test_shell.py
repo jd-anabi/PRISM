@@ -10186,6 +10186,39 @@ def test_home_leads_to_a_kept_round_on_its_page(store, tmp_path, monkeypatch):
     assert (home.next.action, home.next.offer.kept, home.next_button.text()) == ("resume", training, "&Resume")
 
 
+def test_the_past_view_of_a_reopened_kept_round_offers_its_resume(store, tmp_path, monkeypatch):
+    """The page of a narrowing round that failed in its fit, opened from "Last runs" after a reopening, offers "Resume
+    the training" for the round it kept, as Home and the round's list do, and neither "Discard" nor "Continue"; under
+    its sentence it says what a Resume loads and puts in use, in the words of the round's row. Its press is Home's, and
+    the window hands the kept round to Parameter inference's resume of a round."""
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import write_history, write_simulation_set
+    _held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
+    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "kept", "name": "retrain_round1"}, 4,
+                                  complete=True)                  # the kept round's own set, whole
+    run = "20261003T030211-narrowing-round"
+    write_history(tmp_path / "runs", id=run, word="Narrowing round", name="retrain_round1",
+                  place=["inference", "narrowing"], records_root=str(store.root), started=_at(3, 3, 2, 11),
+                  ended=_at(3, 9, 0), outcome="failed", acknowledged=True,
+                  simulation_set={"folder": str(folder), "batches": 4, "at_start": 0, "at_end": 4},
+                  settings=None, fit={"kept_id": kept})
+    window, _home = _home_of_last_time(tmp_path)
+    window._open_run(run)
+    page = window.part("inference").tsnpe_panel
+    past = page._past_view
+    assert past is not None and page.results.currentWidget() is past
+    assert (past.resume_button.isVisibleTo(past), past.discard_kept_button.isVisibleTo(past),
+            past.continue_button.isVisibleTo(past)) == (True, False, False), "the past view of the round offers no Resume"
+    (offer, parts), = page._kept_rows
+    assert (past.notice.text(), past.notice.isVisibleTo(past)) == (offer.loads, True) and offer.loads == (
+        "Resume loads the posterior zz_trained, its prior retrain_prior and the observation cell_b, and puts them in "
+        "use.") and parts["loads"].text() == offer.loads, "the past view does not say what the round's Resume loads"
+    resumed = []
+    monkeypatch.setattr(InferenceScreen, "resume_round", lambda screen, ident: resumed.append(ident))
+    past.resume_button.click()
+    assert resumed == [kept], "the past view's Resume did not reach the round's own resume"
+
+
 # ── Home's presses, the load view's order ──
 def test_the_load_view_lists_the_saved_posteriors_before_the_kept_trainings(store, tmp_path, monkeypatch):
     """The kept trainings stand under what the step holds while a training is set up, beside the choice to start one;

@@ -1014,11 +1014,16 @@ class RunView(QWidget):
     def offer_past(self, offer) -> None:
         """What the past view of a run offers after a reopening (``offer``, as ``core.gui.continuing.Offer`` holds it;
         None for nothing): "Continue from batch N" or "Fit again on the saved simulations", or "Resume the training"
-        with "Discard" beside it for the training the run kept. A press hands the offer to the window, as Home's button
-        does; "Discard" deletes the kept training. Until the page draws another run."""
+        with "Discard" beside it for the training the run kept; for a narrowing round it kept, "Resume the training"
+        alone, and under the page's sentence what that Resume loads and puts in use, as the round's row says it. A press
+        hands the offer to the window, as Home's button does; "Discard" deletes the kept training. Until the page draws
+        another run."""
         self._past_offer = offer if offer is not None and not getattr(offer, "why_not", "") else None
-        if getattr(self._past_offer, "kind", None) in ("continue", "fit_again"):
+        kind = getattr(self._past_offer, "kind", None)
+        if kind in ("continue", "fit_again"):
             self.continue_button.setText(self._past_offer.button)
+        if kind == "round" and getattr(self._past_offer, "loads", ""):
+            self.notice.setText(self._past_offer.loads)
         self._arrange()
 
     def refused(self, sentence: str) -> None:
@@ -1196,7 +1201,8 @@ class RunView(QWidget):
         past = getattr(self._past_offer, "kind", None) if self._mode == "past" and full else None
         continues = (self._mode == "ended" and full and self._continue_from is not None) or past in ("continue",
                                                                                                     "fit_again")
-        resumes = (self._mode == "ended" and full and self._resumable) or past == "resume"
+        # a kept narrowing round is resumed from here too, but deleted only on its row of the round's page, which asks
+        resumes = (self._mode == "ended" and full and self._resumable) or past in ("resume", "round")
         main = "" if keeps else "primary"        # while Keep is asked, Keep is the main button and Resume beside it
         if self.resume_button.property("cls") != main:
             style.set_class(self.resume_button, cls=main)
