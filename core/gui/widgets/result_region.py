@@ -8,6 +8,8 @@ The region reads nothing but the pictures a page hands it by their paths, which 
 it once its run has ended, never while a run is live. The words a page hands it it shows. It is hidden while it holds
 nothing, so that a page with no result has no gap where one would stand. A table shows every row, its
 numbers at the right, its headings across its width, its caption above it and its footnote below it in the small type.
+Its first column, which names its rows, keeps its widest word: where the region is narrower than the table, the table
+scrolls sideways inside a block of its own rather than crush that column.
 A picture is the figure the engine drew, shown as it is, light in both themes, and no wider than the page: it is made
 smaller, never larger.
 """
@@ -15,11 +17,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from .. import design, fonts, style
+from ..reported import reported
 from ..step_facts import LEADS, Fact, TableWords
 from .figure_stack import _FitLabel
 from .message_row import MessageRow
@@ -38,6 +42,68 @@ class NextStep:
     words: str
     step: str
     carries: Mapping = field(default_factory=dict)
+
+
+class _Sideways(QScrollArea):
+    """A result's ``table`` in a block of its own, made inside ``parent``: as wide as the region, and where that is
+    narrower than the least width the table keeps, its first column's words whole among it, the table scrolls sideways
+    inside the block, its bar under it. The block asks for no more width than the table's first column, so that a page
+    beside a list stays beside it; it is as tall as the table and, while it scrolls, its bar. While it scrolls it is a
+    stop of the Tab key, so that the keyboard can scroll it, as a page's own middle is."""
+
+    def __init__(self, table: RuleTable, parent=None) -> None:
+        super().__init__(parent)
+        self.table = table
+        # The frame is switched off at build: the sheet gives a line to a scrolling area that still has the frame it is
+        # born with.
+        self.setFrameShape(QFrame.NoFrame)
+        self.setWidgetResizable(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setWidget(table)
+        self.viewport().setAutoFillBackground(False)         # the table stands on the page's own ground
+        table.installEventFilter(self)
+        # A bound method, never a function that holds the block: connected to its own bar, such a function would keep
+        # a block with no parent alive after its last name is gone.
+        self.horizontalScrollBar().rangeChanged.connect(self._range_changed)
+        self._fit_height()
+
+    def scrolls(self) -> bool:
+        """Whether the table is wider than the block, so that it scrolls sideways."""
+        bar = self.horizontalScrollBar()
+        return bar.maximum() > bar.minimum()
+
+    def _height(self) -> int:
+        bar = self.horizontalScrollBar()
+        return self.table.sizeHint().height() + (bar.sizeHint().height() if self.scrolls() else 0)
+
+    def _fit_height(self) -> None:
+        if self.height() != self._height() or self.minimumHeight() != self._height():
+            self.setFixedHeight(self._height())
+
+    @reported()
+    def _range_changed(self, _low, _high):
+        """Hears the bar's range: while there is something to scroll, room for the bar under the table, and the block a
+        stop of the Tab key."""
+        self.setFocusPolicy(Qt.TabFocus if self.scrolls() else Qt.NoFocus)
+        self._fit_height()
+
+    @reported(False)
+    def eventFilter(self, watched, event):
+        """The table laid out again, its rows of another height: the block follows its height."""
+        if watched is self.table and event.type() in (QEvent.LayoutRequest, QEvent.Resize):
+            self._fit_height()
+        return super().eventFilter(watched, event)
+
+    @reported(QScrollArea.sizeHint)
+    def sizeHint(self):
+        return QSize(self.table.sizeHint().width(), self._height())
+
+    @reported(QScrollArea.minimumSizeHint)
+    def minimumSizeHint(self):
+        return QSize(self.table.view.least_width(0), self._height())
 
 
 class ResultRegion(QWidget):
@@ -70,6 +136,7 @@ class ResultRegion(QWidget):
         self._table_box.setContentsMargins(0, 0, 0, 0)
         box.addLayout(self._table_box)
         self.table: "RuleTable | None" = None
+        self.table_block: "_Sideways | None" = None     # the block the table scrolls sideways in
         self.footnote = self._small()
         box.addWidget(self.footnote)
         self._pictures = QVBoxLayout()
@@ -147,12 +214,13 @@ class ResultRegion(QWidget):
 
     def set_table(self, table: "TableWords | None") -> None:
         """Show ``table`` as a ruled table, or none: every row, the columns of numbers at the right, the headings across
-        the table's width, the caption above and the footnote below."""
-        if self.table is not None:
-            self._table_box.removeWidget(self.table)
-            self.table.hide()
-            self.table.deleteLater()
-            self.table = None
+        the table's width, the caption above and the footnote below; the first column at least as wide as its widest
+        word, the table scrolling sideways in its block where the region is narrower than it."""
+        if self.table_block is not None:
+            self._table_box.removeWidget(self.table_block)
+            self.table_block.hide()
+            self.table_block.deleteLater()             # the table with it
+            self.table = self.table_block = None
         self._table = table
         if table is not None:
             columns = [Column(title, width=None if at == 0 else "fit", right=at in table.right, wrap=at != 0)
@@ -160,10 +228,11 @@ class ResultRegion(QWidget):
             rows = [[TextCell(words, wrap=True) if at == 0 or row in table.headings or at not in table.right
                      else ValueCell(words)
                      for at, words in enumerate(cells)] for row, cells in enumerate(table.rows)]
-            self.table = RuleTable(columns, rows, selectable=False)
+            self.table = RuleTable(columns, rows, selectable=False, keeps_words=True)
             for row in table.headings:
                 self.table.view.setSpan(row, 0, 1, len(table.columns))
-            self._table_box.addWidget(self.table)
+            self.table_block = _Sideways(self.table, self)
+            self._table_box.addWidget(self.table_block)
         self.caption.setText(table.caption if table is not None else "")
         self.caption.setVisible(table is not None and bool(table.caption))
         self.footnote.setText(table.footnote if table is not None else "")
@@ -259,9 +328,11 @@ class ResultRegion(QWidget):
         return list(self._actions)
 
     def stops(self) -> list:
-        """What the Tab key stops at here: the lines' "Copy" while it is offered, then the next steps' buttons offered, in
-        their order, then the result's own buttons that can be pressed."""
-        return [*([self.copy_button] if self.lines.text() else []), *self.next_buttons[:len(self._steps)],
+        """What the Tab key stops at here: the table's block while it scrolls sideways, the lines' "Copy" while it is
+        offered, then the next steps' buttons offered, in their order, then the result's own buttons that can be
+        pressed."""
+        sideways = [self.table_block] if self.table_block is not None and self.table_block.scrolls() else []
+        return [*sideways, *([self.copy_button] if self.lines.text() else []), *self.next_buttons[:len(self._steps)],
                 *(button for button in self._actions if button.isEnabled())]
 
     def is_empty(self) -> bool:

@@ -2597,7 +2597,9 @@ def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_ste
     assert view.height() == view.horizontalHeader().height() + sum(view.rowHeight(row) for row in range(4))
     assert region.caption.text() == "Each parameter's interval." and region.caption.property("cls") == "small"
     assert region.footnote.property("cls") == "small"
-    assert region.caption.y() + region.caption.height() <= region.table.y() < region.footnote.y()
+    # the table stands in its own block, which scrolls it sideways where the region is narrower than the table
+    assert region.table.parentWidget() is region.table_block.viewport()
+    assert region.caption.y() + region.caption.height() <= region.table_block.y() < region.footnote.y()
     with pytest.raises(ValueError):
         TableWords(("a", "b"), (("1",),))
     with pytest.raises(ValueError):

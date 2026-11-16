@@ -379,12 +379,16 @@ class RuleView(QTableView):
     """The rows of a ruled table: ``columns`` are ``Column`` descriptions and each row a list of cell
     descriptions, one to a column. It is as tall as its header and its rows and has no scroll bar. With the
     keyboard focus shown it rings its current row, clear of a selected row's bar, and never the whole table.
-    Tab leaves it."""
+    Tab leaves it. With ``keeps_words`` the column that takes the room left is never narrower than its widest
+    word: the view's least width holds it, so that a block too narrow for the table scrolls rather than crush
+    it."""
 
-    def __init__(self, columns, *, selectable: bool = True, sortable: bool = False, parent=None):
+    def __init__(self, columns, *, selectable: bool = True, sortable: bool = False, keeps_words: bool = False,
+                 parent=None):
         columns = _checked_columns(columns)                  # refused before anything is built
         super().__init__(parent)
         self._columns = columns
+        self._keeps_words = bool(keeps_words)
         self._widths = [None] * len(columns)                 # None: the column that takes the room left
         self._focus_shown = False
         model = QStandardItemModel(0, len(columns), self)
@@ -493,10 +497,17 @@ class RuleView(QTableView):
         lead, gap = _pads(column, len(self._columns))
         return max(math.ceil(widest) + lead + gap, design.scaled(design.SIZE["table_section_least"]))
 
+    def least_width(self, column: int) -> int:
+        """The least width that holds every word of ``column`` whole, with the room the column keeps clear of its
+        words."""
+        return self._widest(column)
+
     def _fit_columns(self) -> None:
         """Give every column that has a width of its own that width, and the view its least width. A column that wraps
         gives up room, down to its widest word, while the column that takes the room left is narrower than its own
-        widest word; the view's least width counts such a column at its widest word."""
+        widest word; the view's least width counts such a column at its widest word, and the column that takes the
+        room left at its widest word too where the view keeps its words, else at the least a column that takes it
+        has."""
         header = self.horizontalHeader()
         for index, column in enumerate(self._columns):
             if column.width is not None:
@@ -504,10 +515,10 @@ class RuleView(QTableView):
         stretch_least = design.scaled(design.SIZE["table_stretch_least"])
         taken = sum(width for width in self._widths if width is not None)
         least = taken
+        left = next((index for index, width in enumerate(self._widths) if width is None), None)
+        want = stretch_least if left is None else max(stretch_least, self._widest(left))
         wraps = [index for index, column in enumerate(self._columns) if column.wrap and column.width is not None]
         if wraps:
-            left = next((index for index, width in enumerate(self._widths) if width is None), None)
-            want = stretch_least if left is None else max(stretch_least, self._widest(left))
             over = taken + want - self.width()
             for index in wraps:
                 floor = min(self._widths[index], self._widest(index))
@@ -518,7 +529,7 @@ class RuleView(QTableView):
         for index, width in enumerate(self._widths):
             if width is not None:
                 header.resizeSection(index, width)
-        self.setMinimumWidth(least + stretch_least)
+        self.setMinimumWidth(least + (want if self._keeps_words else stretch_least))
 
     def _column_width(self, column: int) -> int:
         """A column's width as it WILL be: the one that takes the room left is not yet resized when the rows
@@ -610,13 +621,15 @@ class RuleTable(Ruled):
     """A table between its two heavy rules. ``view`` holds the rows and ``header`` is the view's header. A
     page hears a selection through ``view.selectionModel()`` and, from a header that sorts, a click through
     ``header.sortIndicatorChanged``. A table that is not ``selectable`` takes neither a selection nor the
-    keyboard focus."""
+    keyboard focus. A table that ``keeps_words`` never gives up the widest word of the column that takes the room
+    left (``RuleView``)."""
 
-    def __init__(self, columns, rows=(), *, selectable: bool = True, sortable: bool = False):
+    def __init__(self, columns, rows=(), *, selectable: bool = True, sortable: bool = False,
+                 keeps_words: bool = False):
         columns = _checked_columns(columns)                  # both refused before anything is built
         rows = _checked_rows(rows, len(columns))
         super().__init__(top=design.SIZE["rule"], bottom=design.SIZE["rule"])
-        self.view = RuleView(columns, selectable=selectable, sortable=sortable)
+        self.view = RuleView(columns, selectable=selectable, sortable=sortable, keeps_words=keeps_words)
         self.header = self.view.horizontalHeader()
         self.box.addWidget(self.view)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)     # as tall as its rows, wherever it stands

@@ -4599,6 +4599,36 @@ def test_an_acceptance_is_written_into_the_training_history_during_and_after_the
         turn_until(app, lambda: not controller().is_live())
 
 
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_comparisons_table_beside_the_list_keeps_its_row_names_whole(factor, tmp_path):
+    """At the window's opening size, at both text sizes, the comparison's page of a difference to look closer at stands
+    beside the list, and its table's first column, which names each row ("Simulation set", "The audit"), is at least as
+    wide as its longest word: the table keeps its row names whole and, where its block is narrower than the table,
+    scrolls sideways inside it rather than crush them. The table's block stands within the page."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QFontMetricsF
+    from core.gui import design
+    from core.gui.widgets import rule_table as rt
+    with text_size(factor), _checks_page(tmp_path, records=_an_audit,
+                                         size=(design.scaled(1300), design.scaled(820))) as (_window, screen, page,
+                                                                                            store):
+        audit, = _audit_ids(store)
+        _a_set_of(tmp_path, store, screen, compared={"audit": audit, "audit_fraction": 0.379})
+        page.read_facts()
+        page.open_check("comparison")
+        _settle()
+        one = page.check_pages["comparison"]
+        view = one.result.table.view
+        lead, gap = rt._pads(0, view.model().columnCount())
+        words = [word for row in one.result.table_words().rows for word in row[0].split()]
+        widest = max(QFontMetricsF(rt._face("text")).horizontalAdvance(word) for word in words)
+        assert view.columnWidth(0) - lead - gap >= widest, (factor, view.columnWidth(0) - lead - gap, widest)
+        assert page.list_detail.beside(), (factor, "the comparison's page left the list's side")
+        block = one.result.table_block
+        assert block.isVisibleTo(one) and block.mapTo(one, QPoint(block.width(), 0)).x() <= one.width(), (
+            factor, block.width(), one.width())
+
+
 def test_an_acceptance_lapses_when_another_audit_counts(tmp_path):
     """An acceptance is of the audit it names: once another audit counts for the prior, the check reads the difference
     from that audit again, to look closer at, and says no acceptance."""
