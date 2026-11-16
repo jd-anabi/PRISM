@@ -753,9 +753,10 @@ class RunView(QWidget):
         self.continue_button.clicked.connect(self._continue)
         self.resume_button = style.set_class(QPushButton(retry.RESUME_TEXT), cls="primary")
         self.resume_button.clicked.connect(self._resume)
-        # on the past view of a run whose kept training is offered: the training deleted, as "Discard" deletes one
+        # on the past view of a run whose kept training is offered: the training deleted, as "Discard" deletes one, once
+        # the question that every other way of deleting a kept training asks is answered
         self.discard_kept_button = style.set_class(QPushButton(questions.DISCARD_TEXT), cls="danger")
-        self.discard_kept_button.clicked.connect(self._discard)
+        self.discard_kept_button.clicked.connect(self._discard_kept)
         offers.addWidget(self.continue_button)
         offers.addWidget(self.resume_button)
         offers.addWidget(self.discard_kept_button)
@@ -1433,6 +1434,22 @@ class RunView(QWidget):
                 self._ended_words = ended
                 self._draw()
         self.say(words)
+
+    def _discard_kept(self) -> None:
+        """"Discard" on the past view of a run whose kept training is offered: first the question the Training step's
+        list of kept trainings asks before it deletes one, of the epochs the offer holds, "Keep it" preselected and the
+        other answer drawn as losing work; "Keep it" deletes nothing and leaves the offer as it stands, the other
+        deletes the training as "Discard" does. While a run is live nothing is asked, read or deleted, and the page
+        says a run is live."""
+        from .controller import LIVE_TEXT, controller
+        if controller().is_live():
+            self.say(LIVE_TEXT)
+            return
+        question = questions.delete_kept_question(getattr(self._past_offer, "epoch", None))
+        if not ask(self.window(), question.title, question.sentence, question.safe, question.other,
+                   loses_work=question.loses_work):
+            return
+        self._discard()
 
     def _toggle_text(self) -> None:
         """Show the full text, or hide it again."""

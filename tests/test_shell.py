@@ -9155,13 +9155,45 @@ def test_the_past_view_offers_what_the_run_can_do_and_discard_deletes_the_kept_t
     controller().offer_pressed.disconnect(pressed.append)
     assert [(offer.kind, offer.kept) for offer in pressed] == [("resume", kept)], "the past view's Resume is not Home's"
     assert window.shell.rail.row("training").accessibleName() == "Step 3, Training. Unfinished: training kept after epoch 7"
-    choose(monkeypatch, words="Discard")
+    choose(monkeypatch, words="Delete it")
     past.discard_kept_button.click()
     assert [row.id for row in store.list("fit")] == [] and not past.resume_button.isVisibleTo(past)
     assert "Unfinished" not in window.shell.rail.row("training").accessibleName(), (
         "the kept training a Discard deleted is still said, until something reads again")
     window.go_to("home")
     assert home.next_button.text() != "&Resume"
+
+
+def test_the_past_views_discard_asks_first_as_the_list_of_kept_trainings_asks(store, tmp_path, monkeypatch):
+    """"Discard" on the past view of a reopened training asks, before it deletes anything, the question the Training
+    step's list of kept trainings asks before its Delete, in the same words: its title, the epochs it deletes, "Keep it"
+    preselected and the other answer drawn as losing work. "Keep it" deletes nothing and leaves the offer as it stands;
+    "Delete it" deletes the kept training."""
+    from tests._dialogs import forget_asked
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    kept = _a_kept_training(store, held)
+    _a_failed_training(store, tmp_path, held, batches=10_000, kept=kept)
+    window, _home = _home_of_last_time(tmp_path)
+    page = window.part("inference").posterior_panel
+    window._open_run(_REOPENED)
+    past = page._past_view
+    forget_asked()
+    past.discard_kept_button.click()                    # left unanswered: the safe answer, "Keep it"
+    words = [(one.title, one.sentence, one.answers, one.default, one.loses_work) for one in all_asked()]
+    assert words == [("Delete this kept training?", "The 7 epochs kept are deleted; the next training starts from its "
+                      "first epoch.", ("Delete it", "Keep it"), "Keep it", True)], words
+    assert ([row.id for row in store.list("fit")], past.resume_button.isVisibleTo(past),
+            past.discard_kept_button.isVisibleTo(past)) == ([kept], True, True), "Keep it deleted, or the offer went"
+    window.go_to("inference", "training")
+    forget_asked()
+    _row_of(page, kept)["delete"].click()
+    assert [(one.title, one.sentence, one.answers, one.default, one.loses_work) for one in all_asked()] == words, (
+        "the list of kept trainings asks in other words")
+    window._open_run(_REOPENED)
+    choose(monkeypatch, other=True)
+    past.discard_kept_button.click()
+    assert store.list("fit") == [] and not past.resume_button.isVisibleTo(past), "Delete it deleted nothing"
 
 
 def test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed(store, tmp_path, monkeypatch):
@@ -10043,7 +10075,7 @@ def test_a_past_view_offers_nothing_while_a_run_is_live(store, tmp_path, monkeyp
     assert past.resume_button.isVisibleTo(past) and past.discard_kept_button.isVisibleTo(past)
     pressed = []
     controller().offer_pressed.connect(pressed.append)
-    choose(monkeypatch, words="Discard")
+    choose(monkeypatch, other=True)                     # were it asked, the question's answer that deletes
     with running(window.panel(InferPanel)):
         past.resume_button.click()
         assert (pressed, past.notice.text()) == ([], LIVE_TEXT)

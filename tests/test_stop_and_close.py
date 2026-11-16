@@ -449,6 +449,8 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
         said + "the training is kept up to epoch 62, so you can resume it.",
         "The 20,480,000 simulations are kept; the training is kept up to epoch 62, so you can resume it.")
     view.discard_button.click()
+    assert [box.title for box in all_asked()] == ["Stop training?"], (
+        "the page's Discard, itself the answer to the page's own question, asked another")
     assert (kept(), view.notice.text(), view.keep_block.isVisibleTo(view)) == (
         [], "The training was discarded.", False)
     assert (view.sentence.text(), held.status.sentence, history.read(tmp_path / "runs" / f"{run}.json")["fit"][

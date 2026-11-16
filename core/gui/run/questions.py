@@ -43,6 +43,14 @@ DISCARDED_TEXT = "The training was discarded."
 #: What Discard leaves said of a training the records no longer hold, and of one whose run's history cannot be read.
 GONE_TEXT = "The training was already gone."
 UNFOUND_TEXT = "Nothing was discarded: the run's history that names the training cannot be read."
+#: The question asked before a kept training is deleted where nothing has asked about it yet: by "Delete" on the
+#: Training step's list of kept trainings, and by "Discard" on the past view of a run whose kept training is offered.
+#: Its title, its sentence of the epochs deleted (one, or none counted), and its two answers, the safe one first.
+DELETE_KEPT_TITLE = "Delete this kept training?"
+DELETE_KEPT_TEXT = "The {} epochs kept are deleted; the next training starts from its first epoch."
+DELETE_KEPT_ONE_TEXT = "The 1 epoch kept is deleted; the next training starts from its first epoch."
+DELETE_KEPT_UNCOUNTED_TEXT = "The epochs kept are deleted; the next training starts from its first epoch."
+KEEP_IT, DELETE_IT = "Keep it", "Delete it"
 #: The words of the close question.
 CLOSE_TITLE = "Close PRISM?"
 KEEP_RUNNING = "Keep running"
@@ -149,6 +157,15 @@ def keep_question(note) -> tuple[str, str]:
     else:
         beneath = f"Discard deletes the whole training: {epochs}, saved over {sessions}."
     return KEEP_QUESTION, beneath
+
+
+def delete_kept_question(epochs) -> Question:
+    """The question asked before a kept training of ``epochs`` epochs is deleted (anything but a whole number above
+    nought: none counted): "Keep it" the safe answer, the other drawn as losing work, since what it deletes is the
+    training's every saved epoch."""
+    sentence = (DELETE_KEPT_UNCOUNTED_TEXT if not isinstance(epochs, int) or epochs <= 0 else
+                DELETE_KEPT_ONE_TEXT if epochs == 1 else DELETE_KEPT_TEXT.format(number_text(epochs)))
+    return Question(DELETE_KEPT_TITLE, sentence, "", KEEP_IT, DELETE_IT, True)
 
 
 def what_a_stop_keeps(word: str, name: str) -> str:

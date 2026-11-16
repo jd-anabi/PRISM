@@ -51,7 +51,7 @@ from ... import check_lineage, continuing, design, fields, fonts, plans, record_
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import NUM_RUNS_KEY, POSTERIOR_KEY, RUN_SIZE_KEY, put_many
 from ...reported import reported
-from ...run import ends, history
+from ...run import ends, history, questions
 from ...run.controller import controller
 from ...run.model import TYPED_EPOCHS_TEXT, RunSpec
 from ...run.view import WrappedWords
@@ -107,18 +107,13 @@ EARLIER_NAME_TEXT = "The earlier run was named {}."
 NAME_TITLE = "Name this training"
 NAME_TEXT = "This kept training has no name yet. A posterior needs one."
 NAME_TAKEN_TEXT = "The name '{}' is now taken by another posterior. This training needs another one."
-#: The list of kept trainings: its heading, its two buttons, what a row says of a training a run of this window trains,
-#: and Delete's question.
+#: The list of kept trainings: its heading, its two buttons, and what a row says of a training a run of this window
+#: trains. Delete's question is the run's table's, which the past view of a run that kept a training asks too.
 KEPT_HEAD = "Kept trainings"
 RESUME_WORDS = "Resume"
 DELETE_WORDS = "Delete"
 RUNNING_TEXT = "Running: a run of this window is training it."
 USES_TEXT = "It uses the settings it was kept with."
-DELETE_TITLE = "Delete this kept training?"
-DELETE_TEXT = "The {} epochs kept are deleted; the next training starts from its first epoch."
-DELETE_ONE_TEXT = "The 1 epoch kept is deleted; the next training starts from its first epoch."
-DELETE_UNCOUNTED_TEXT = "The epochs kept are deleted; the next training starts from its first epoch."
-KEEP_IT, DELETE_IT = "Keep it", "Delete it"
 
 # THE SETTINGS A TRAINING READS, in the order the stage checks them, each with its rule's floor: the facts' one table,
 # which a narrowing round reads too.
@@ -641,10 +636,9 @@ class PosteriorPanel(StepPage):
         if controller().is_live():
             return
         offer = next((offer for offer in self.kept_offers() if offer.kept == ident), None)
-        epochs = getattr(offer, "epoch", None)
-        sentence = (DELETE_UNCOUNTED_TEXT if not isinstance(epochs, int) or epochs <= 0 else
-                    DELETE_ONE_TEXT if epochs == 1 else DELETE_TEXT.format(texts.number_text(epochs)))
-        if not ask(self, DELETE_TITLE, sentence, KEEP_IT, DELETE_IT, loses_work=True):
+        question = questions.delete_kept_question(getattr(offer, "epoch", None))
+        if not ask(self, question.title, question.sentence, question.safe, question.other,
+                   loses_work=question.loses_work):
             return
         at = next((index for index, (row, _parts) in enumerate(self._kept_rows) if row.kept == ident), 0)
         self._said_on_row.pop(ident, None)      # what the row said before, a refused Resume's, is no refusal of this
