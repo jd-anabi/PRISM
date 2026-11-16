@@ -1469,8 +1469,8 @@ def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
     by an error, which is quoted as its record words it; its sentence says after which epoch and when it was last
     saved, its best loss and how long ago, the set and the prior it trains on, and that a resume reads the set back
     first; one whose fit is finished says resuming writes the posterior alone; and one that cannot be resumed says why
-    and offers no button, the engine's reason written as a sentence. The run that kept it is named when a history says
-    so."""
+    and offers no button, the engine's reason written as a sentence, and its own sentence says nothing of what a resume
+    does. The run that kept it is named when a history says so."""
     from core.gui import continuing
     kept = [_kept("20261003T130500", state="kept when stopped", on_purpose=True, reason="KeyboardInterrupt",
                   saved="2026-10-04T10:00:00+00:00"),
@@ -1486,6 +1486,8 @@ def test_a_training_kept_on_purpose_is_offered_as_one_cut_off_is_saying_how():
     gone, error, purpose, finished = found
     assert (gone.why_not, gone.button, continuing.for_home(found)) == (
         "Its simulation set eda5c2a1e468 is not in the store.", "", error)
+    assert gone.sentence.startswith("It stopped unexpectedly after epoch 41") and (
+        "resum" not in gone.sentence.lower()), gone.sentence
     assert purpose.how == "kept when stopped" and purpose.run == "20261003T120000-training"
     assert purpose.sentence.startswith("It was kept when stopped after epoch 41, last saved "), purpose.sentence
     assert error.how == "stopped unexpectedly after the error 'RuntimeError: the card ran out of memory'"

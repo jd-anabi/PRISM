@@ -9207,8 +9207,8 @@ def test_the_past_views_discard_asks_first_as_the_list_of_kept_trainings_asks(st
 
 def test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed(store, tmp_path, monkeypatch):
     """A kept training that cannot be resumed (its simulation set no longer whole) is offered nowhere: not on Home,
-    not by a Resume on its row in the Training step's list, which says why and keeps "Delete", and not on the past
-    view of the run that kept it."""
+    not by a Resume on its row in the Training step's list, which says why, says nothing of what a resume does and
+    keeps "Delete", and not on the past view of the run that kept it."""
     held = _a_launch_before(store, tmp_path, monkeypatch)
     kept = _a_kept_training(store, held, set_whole=False)
     _a_failed_training(store, tmp_path, held, batches=10_000, kept=kept)
@@ -9219,6 +9219,7 @@ def test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed(s
     row = _row_of(page, kept)
     assert ("is not in the store any more" in row["why"].text() or "committed batches" in row["why"].text(),
             row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block)) == (True, False, True)
+    _said_with_no_resume(row["sentence"], "It was kept when stopped after epoch 7")
     window._open_run(_REOPENED)
     past = page._past_view
     assert not past.resume_button.isVisibleTo(past) and not past.discard_kept_button.isVisibleTo(past)
@@ -9227,7 +9228,8 @@ def test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed(s
 def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(store, tmp_path, monkeypatch):
     """A kept training whose prior is no longer in Records, after a reopening, a run's history naming it: Home offers
     no Resume; its row in the Training step's list offers none and says why before any press, in the words its Resume's
-    refusal says, and keeps "Delete"; and the past view of the run that kept it offers nothing, neither "Resume the
+    refusal says, says nothing of what a resume does, and keeps "Delete"; and the past view of the run that kept it
+    offers nothing, neither "Resume the
     training" nor "Discard", and under the run's own sentence, which says what the run kept when it was stopped, says
     that it cannot be resumed now, why, and where it can be deleted."""
     from core.SBI import fit_state
@@ -9248,6 +9250,7 @@ def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(sto
     assert (row["why"].text(), row["why"].isVisibleTo(page.kept_block), row["resume"].isVisibleTo(page.kept_block),
             row["delete"].isVisibleTo(page.kept_block), row["uses"].isVisibleTo(page.kept_block)) == (
         said, True, False, True, False), row["why"].text()
+    _said_with_no_resume(row["sentence"], "It was kept when stopped after epoch 7")
     assert inference.resume_kept(kept) is None and page._said_on_row.get(kept) == said, (
         "the press refuses in other words than the row's", page._said_on_row)
     window._open_run(_REOPENED)
@@ -9258,6 +9261,13 @@ def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(sto
     _the_then_above_the_now(past, "; the training is kept up to epoch 7, so you can resume it.",
                             f"It cannot be resumed now. {said} It can be deleted under 'Kept trainings' in step 3, "
                             "Training.")
+
+
+def _said_with_no_resume(sentence, opening: str) -> None:
+    """The sentence ``sentence`` of a kept training's row that offers no Resume: what the training holds, from
+    ``opening`` on, and nothing of what resuming it does."""
+    words = sentence.text()
+    assert words.startswith(opening) and "resum" not in words.lower(), words
 
 
 def _the_then_above_the_now(past, then: str, now: str) -> None:
@@ -10318,9 +10328,10 @@ def test_the_past_view_of_a_reopened_kept_round_offers_its_resume(store, tmp_pat
 def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gone, store, tmp_path, monkeypatch):
     """A kept narrowing round whose posterior it narrows, whose prior or whose observation is no longer in Records,
     after a reopening, a run's history naming it: Home passes over it; its row on the Narrowing round step offers no
-    "Resume" and says why before any press, in the words its Resume's refusal says, and keeps "Delete"; and the past
-    view of the run that kept it offers nothing and, under the run's own sentence, which says what the run kept when it
-    was stopped, says that it cannot be resumed now, why, and where it can be deleted."""
+    "Resume" and says why before any press, in the words its Resume's refusal says, says nothing of what a resume does,
+    and keeps "Delete"; and the past view of the run that kept it offers nothing and, under the run's own sentence,
+    which says what the run kept when it was stopped, says that it cannot be resumed now, why, and where it can be
+    deleted."""
     from core.SBI import fit_state
     from tests._fixtures import write_history, write_simulation_set
     held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
@@ -10353,6 +10364,7 @@ def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gon
     assert (parts["why"].text(), parts["why"].isVisibleTo(block), parts["resume"].isVisibleTo(block),
             parts["delete"].isVisibleTo(block), parts["loads"].isVisibleTo(block)) == (
         said, True, False, True, False), parts["why"].text()
+    _said_with_no_resume(parts["sentence"], "It was kept when stopped after epoch 41")
     assert inference.resume_round(kept) is None and page._said_on_row.get(kept) == said, (
         "the press refuses in other words than the row's", page._said_on_row)
     window._open_run(run)

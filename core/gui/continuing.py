@@ -149,11 +149,12 @@ def as_sentence(clause) -> str:
 
 
 def resume_sentence(kept, prior_label: "str | None" = None, *, around: "str | None" = None,
-                    narrowed_from: "str | None" = None) -> str:
+                    narrowed_from: "str | None" = None, resumable: bool = True) -> str:
     """What Home and the step that lists it say of a kept training: how it stopped, after which epoch and when it was
     last saved, its best validation loss and how many epochs ago, for a narrowing round's the observation it trains
     around and the posterior it was narrowed from, the simulation set and the prior it trains on, and that a resume
-    reads the set back first; for one whose fit is finished, that resuming writes the posterior alone. ``prior_label``,
+    reads the set back first; for one whose fit is finished, that resuming writes the posterior alone. Nothing of what
+    a resume does for one that cannot be resumed (``resumable`` False), whose row says why instead. ``prior_label``,
     ``around`` and ``narrowed_from`` are how a sentence names the prior, the observation and the parent posterior ("the
     prior retrain_prior", or an unnamed one by when it was made), None for one no longer in Records."""
     state = getattr(kept, "state", "") or ""
@@ -186,7 +187,8 @@ def resume_sentence(kept, prior_label: "str | None" = None, *, around: "str | No
                        else f", on {prior}."))
     elif isinstance(simulation, str) and simulation:
         said.append(f"It trains on the simulation set {simulation} and {prior}.")
-    said.append(FINISHED_TEXT if state == "finished" else READ_BACK_TEXT)
+    if resumable:
+        said.append(FINISHED_TEXT if state == "finished" else READ_BACK_TEXT)
     return " ".join(said)
 
 
@@ -204,7 +206,7 @@ def not_resumable_words(offer) -> str:
 def _kept_offer(kept, runs: dict, prior_label, label, gone) -> Offer:
     """A kept training as an offer: a narrowing round's, on its page, or another's, with why it cannot be resumed where
     it cannot, as a sentence: the record's own reason, else what of the records its Resume loads is gone (``gone``),
-    as its press says it."""
+    as its press says it; its own sentence then says nothing of what a resume does."""
     region = getattr(kept, "region", None)
     why = (" ".join(gone(kept)) if getattr(kept, "can_resume", False)
            else as_sentence(getattr(kept, "why_not", None) or "it cannot be resumed"))
@@ -220,7 +222,7 @@ def _kept_offer(kept, runs: dict, prior_label, label, gone) -> Offer:
     loads, match = "", ()
     if region is not None:
         around, narrowed_from = named("observation", "observation", label), named("posterior", "parent_posterior", label)
-        sentence = resume_sentence(kept, prior, around=around, narrowed_from=narrowed_from)
+        sentence = resume_sentence(kept, prior, around=around, narrowed_from=narrowed_from, resumable=not why)
         if around and narrowed_from and prior:
             loads = LOADS_TEXT.format(narrowed_from, prior[4:] if prior.startswith("the ") else prior, around)
         record = getattr(kept, "config", None) or {}
@@ -229,7 +231,7 @@ def _kept_offer(kept, runs: dict, prior_label, label, gone) -> Offer:
         match = (parents.get("prior"), parents.get("parent_posterior"), parents.get("observation"), level,
                  *(record.get(key) for key in ("num_runs", "run_size_cap", "hidden_features", "num_transforms")))
     else:
-        sentence = resume_sentence(kept, prior)
+        sentence = resume_sentence(kept, prior, resumable=not why)
     how = stopped_words(getattr(kept, "state", None), getattr(kept, "stopped_on_purpose", None),
                         getattr(kept, "stop_reason", None))
     at = _moment(getattr(kept, "saved_at", None)) or _moment(getattr(kept, "created", None))
