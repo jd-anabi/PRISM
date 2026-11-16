@@ -892,13 +892,24 @@ class InferPanel(StepPage):
         self._screen.take_observation(observation)
 
     def _run_ended(self, status) -> None:
-        """A run has ended. One of this page's that returned its records: its result said, read from them. One of this
-        page's that failed once its observation was saved under the name asked for, its inference refused the name
-        another inference took meanwhile: the observation's name emptied, and the page says why. Then the reading."""
+        """A run has ended. One of this page's that returned its records: its result said, read from them, and the
+        names and the note it was handed each emptied while it still holds what the run was handed, as the Training
+        step's are at its run's end, so that one typed since stands. One of this page's that failed once its
+        observation was saved under the name asked for, its inference refused the name another inference took
+        meanwhile: the observation's name emptied, and the page says why. Then the reading."""
         made, self._made = self._made, None
         handed, self._handed = self._handed, None
         if made is not None:
             self._say_the_result(*made, asked=handed[1] if handed else "")
+            name, other, note = handed or ("", "", "")
+            names = self._names
+            if names.name_value() == name:
+                names.name.clear()
+                names.set_hint("")
+            if names.other_value() == other:
+                names.other_name.clear()
+            if names.note.text().strip() == note:
+                names.note.clear()
         elif handed is not None and getattr(status, "outcome", None) == "failed" and getattr(status, "place", None) == (
                 _PLACE):
             name, other, _note = handed

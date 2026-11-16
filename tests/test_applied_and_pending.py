@@ -5173,6 +5173,8 @@ def test_the_two_modes_never_mix_and_the_second_shows_the_posteriors_form(tmp_pa
             assert not {"cell", "gt_values"} & set(kwargs) and args[2].spont.endswith("spont.npy"), kwargs
             _run_ends(runs["recordings"])
             page.modes.set_value("simulated")
+            page.names.other_name.setText("cell_c")      # the run's end emptied the name its records now hold
+            page.read_facts()
             page._main_clicked()
             assert runs["simulated"].started.wait(5), (chi, page.foot.reason.text())
             args, kwargs = runs["simulated"].calls[-1]
@@ -5266,6 +5268,8 @@ def test_a_narrowed_posterior_asks_at_every_run_in_both_modes(mode, tmp_path, mo
         assert runs[mode].started.wait(5)
         assert runs[mode].calls[-1][1]["accept"] == Accept(other_observation=True)
         _run_ends(runs[mode])
+        page.names.other_name.setText("cell_c")          # the run's end emptied the name its records now hold
+        page.read_facts()
         forget_asked()
         choose(monkeypatch)
         page._main_clicked()
@@ -5515,6 +5519,39 @@ def test_narrow_around_this_observation_is_offered_only_where_the_round_can_use_
         choose(monkeypatch, words="Run inference anyway")
         _inferred(page, tmp_path, digest=digest)
         assert tuple(step.words for step in page.result.next_steps()) == offered, page.result.next_steps()
+
+
+def test_an_inference_that_returns_its_records_empties_the_names_and_the_note_it_was_handed(tmp_path, monkeypatch):
+    """When an inference returns its records, the names (the inference's and the observation's) and the note its run was
+    handed are emptied, as the Training step's are at its run's end, so that the next inference is not stopped by a name
+    its own records now hold; a field whose words changed while the run went keeps what was typed since. The result
+    stays on the page until a next step is pressed."""
+    from core import orchestrator
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, _runs):
+        _ready(page, tmp_path, mode="simulated")
+        page.names.other_name.setText("cell_b")
+        page.names.name.setText("retrain_inf")
+        page.names.note.setText("a note")
+        page.read_facts()
+        stand_in = orchestrator.simulated_inference
+        page._main_clicked()
+        assert stand_in.started.wait(5), page.foot.reason.text()
+        page.names.note.setText("another note")                    # typed while the run went
+        made = _an_observation("cell_b")                            # the observation the stage saves
+        held = _a_record(tmp_path / "observation", ["simulated_observation.png"], kind="observation", id=made,
+                         name="cell_b")
+        inference = _a_record(tmp_path / "inference", ["posterior_corner.png"], kind="inference",
+                              id="20261113T150000", name="retrain_inf",
+                              results={"posterior_summary": SUMMARY, "ppc": {"coverage_90": 0.93}})
+        stand_in.release((held, inference))
+        turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+        assert (page.names.name_value(), page.names.other_value(), page.names.note.text()) == (
+            "", "", "another note"), "the names the run was handed still stand, or the note typed since went"
+        assert not page.result.isHidden() and page.result.next_steps()[-1].words == "Run another inference"
+        page.read_facts()
+        assert "taken" not in page.foot.reason.text(), page.foot.reason.text()
 
 
 def test_an_inference_name_taken_meanwhile_empties_the_observations_name_and_says_why(tmp_path, monkeypatch):
