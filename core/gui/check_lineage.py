@@ -43,8 +43,12 @@ _NOT_RUN = ("Not run yet", "Waiting for the audit")
 #: What a row says when the check cannot run or cannot apply, before or beside its state.
 NEEDS_PRIOR_TEXT = "Needs a prior: build or load one in step 2."
 NEEDS_POSTERIOR_TEXT = "Needs a posterior: train one in step 3, or load a saved one."
-OTHER_PRIOR_TEXT = "The prior in use is not the one this posterior was trained on. Load it in step 2."
 OTHER_PRIOR_NAMED_TEXT = "The prior in use is not the one this posterior was trained on ({}). Load it in step 2."
+#: The same once that prior is no longer in Records, or cannot be named: nothing that cannot be loaded is asked for.
+OTHER_PRIOR_GONE_TEXT = ("The prior in use is not the one this posterior was trained on, and that prior is no longer in "
+                         "Records.")
+#: How both of those begin, which a check's button is greyed by.
+_OTHER_PRIOR_OPENING = "The prior in use is not the one this posterior was trained on"
 NO_SIMULATIONS_TEXT = "This posterior was trained without keeping its simulations, and this check reads them."
 NO_ROTATION_TEXT = "This posterior was trained without the rotation, so there are no directions to read."
 FREQUENCY_ONLY_TEXT = "Applies only with the frequency response."
@@ -451,11 +455,12 @@ def _of_posterior(one, held: Held, records, *, reason: str = "") -> CheckRow:
 
 def _other_prior(held: Held) -> str:
     """Why the prior in use cannot be checked with the posterior, naming the prior it was trained on when the reading
-    found it; "" when the engine takes the pair."""
+    found it, and saying that it is no longer in Records when the reading did not, asking then for no load; "" when
+    the engine takes the pair."""
     if not held.pair_refused:
         return ""
     return (OTHER_PRIOR_NAMED_TEXT.format(held.posterior_prior_words) if held.posterior_prior_words
-            else OTHER_PRIOR_TEXT)
+            else OTHER_PRIOR_GONE_TEXT)
 
 
 def _calibration(one, held: Held, records, _histories, _made) -> CheckRow:
@@ -721,7 +726,7 @@ def button_facts(row: CheckRow) -> tuple[Fact, ...]:
     is not the posterior's own is said with that prior's name when the reading found it. None for a check its row
     leaves free to run."""
     facts = []
-    if row.reason.startswith(OTHER_PRIOR_TEXT.split(".", 1)[0]):
+    if row.reason.startswith(_OTHER_PRIOR_OPENING):
         facts.append(Fact("lock", row.reason, step_facts.OTHER_PRIOR_BLOCKS))
     elif row.reason in _BUTTON_FACTS:
         facts.append(Fact("lock", *_BUTTON_FACTS[row.reason]))

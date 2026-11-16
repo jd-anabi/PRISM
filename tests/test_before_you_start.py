@@ -1025,6 +1025,18 @@ def test_a_prior_that_is_not_the_posteriors_own_blocks():
         "Cannot start yet: the prior in use is not the posterior's own.")
 
 
+def test_a_posteriors_prior_no_longer_in_records_is_said_and_asks_for_no_load():
+    """When the prior the posterior was trained with is no longer in Records, the round says so in a sentence of its own,
+    as the Training step's load view says it, which asks for nothing that cannot be loaded; it still blocks."""
+    from core.gui.step_facts import round_facts
+    held = round_facts(**{**ROUND, "prior_own": ("", "other_prior")})
+    assert ("err", "This posterior was trained with a prior no longer in Records; the prior in use is other_prior. A "
+                   "narrowing round refuses this pair.") in _said(held), _said(held)
+    assert not any("Load" in sentence or "load" in sentence for _kind, sentence in _said(held)), _said(held)
+    assert reason_beside(held, live=False, nothing_to_apply=False) == (
+        "Cannot start yet: the prior in use is not the posterior's own.")
+
+
 def test_the_round_says_what_it_continues():
     """A round simulates its own set, named with its simulations; filled to continue its set, it says the batch it
     continues from in place of that."""

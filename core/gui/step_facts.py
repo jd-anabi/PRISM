@@ -1081,6 +1081,9 @@ NEEDS_AN_OBSERVATION = "Needs an observation: run an inference in step 5, or cho
 NEEDS_AN_OBSERVATION_BLOCKS = "needs an observation"
 OWN_PRIOR_TEXT = "This posterior was trained with the prior in use, {}."
 NOT_OWN_PRIOR_TEXT = "This posterior was trained with {}; the prior in use is {}. Load {} in step 2."
+#: The same once that prior is no longer in Records: nothing that cannot be loaded is asked for.
+NOT_OWN_PRIOR_GONE_TEXT = ("This posterior was trained with a prior no longer in Records; the prior in use is {}. A "
+                           "narrowing round refuses this pair.")
 ROUND_SIMULATIONS_TEXT = ("Simulates {:,} simulations in the round's own simulation set. A round never continues a "
                           "training's simulations; if this same round was run before with the same settings, its saved "
                           "simulations are continued.")
@@ -1159,7 +1162,8 @@ def round_facts(*, needs: Sequence[str] = (), uses: str = "", prior_own=None, si
     """The facts of the sixth step, in the order of its table, those that block first. ``needs``: what is missing of
     "posterior", "prior" and "observation", each blocking until a load or a run brings it. ``uses``: what the round
     uses. ``prior_own``: the prior in use by its label when it is the posterior's own, ``(the prior it was trained
-    with, the prior in use)`` by their labels when it is not, which blocks; None when nothing can be said. ``simulations``: the
+    with, the prior in use)`` by their labels when it is not, which blocks, the first "" for a prior no longer in
+    Records, which a sentence of its own says; None when nothing can be said. ``simulations``: the
     simulations the round makes, or with ``continuing_from`` the batch its own set is continued from. ``result``: that
     the posterior made replaces the one in use. ``checks``: the two checks' line for the prior in use. ``fit``: "saved"
     or "never", how a stop of the fit ends. Then how long, the memory, the other steps' changes not applied, the names',
@@ -1173,7 +1177,8 @@ def round_facts(*, needs: Sequence[str] = (), uses: str = "", prior_own=None, si
         facts.append(Fact("fine", OWN_PRIOR_TEXT.format(prior_own)))
     elif isinstance(prior_own, tuple):
         trained_with, in_use = prior_own
-        facts.append(Fact("err", NOT_OWN_PRIOR_TEXT.format(trained_with, in_use, trained_with), OTHER_PRIOR_BLOCKS))
+        facts.append(Fact("err", NOT_OWN_PRIOR_TEXT.format(trained_with, in_use, trained_with) if trained_with
+                          else NOT_OWN_PRIOR_GONE_TEXT.format(in_use), OTHER_PRIOR_BLOCKS))
     if continuing_from is not None and _whole(continuing_from) is not None:
         facts.append(Fact("info", ROUND_CONTINUES_TEXT.format(continuing_from)))
     elif _whole(simulations) is not None:

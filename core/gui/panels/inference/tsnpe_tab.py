@@ -42,7 +42,7 @@ from ...run.view import WrappedWords
 from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, CARRIED_TEXT, CHANGED_TO_TEXT,
                            CHECK_THIS_WORDS,
                            DIRECTIONS_TEXT, FIT_RULES, NETWORK_DIFFERS_TEXT, NETWORK_HELD_TEXT, NEW_SET_ROUND_TEXT,
-                           NEW_SET_ROUND_TITLE, NO_OBSERVATION_WORDS, NO_PRIOR_WORDS, REGION_TEXT, REGION_WARN_BELOW,
+                           NEW_SET_ROUND_TITLE, NO_OBSERVATION_WORDS, REGION_TEXT, REGION_WARN_BELOW,
                            ROTATION_REUSED_TEXT, ROUND_CAME_FROM_TEXT, ROUND_IN_USE_TEXT, ROUND_KEPT_TEXT,
                            ROUND_START_WORDS, SAME_OBSERVATION_WORDS, KEPT_ROUND_TEXT, Fact, fit_row_problem,
                            narrows_around, new_round_question, pressed_reading,
@@ -612,8 +612,9 @@ class TSNPEPanel(StepPage):
             parents = getattr(getattr(posterior, "manifest", None), "parents", None)
             trained_with = parents.get("prior") if isinstance(parents, dict) else None
             in_use = record_words.label_of(prior)
+            # the prior it was trained with by its label, "" once it is no longer in Records
             prior_own = in_use if not trained_with or trained_with == getattr(prior, "id", None) else (
-                self._trained_with or NO_PRIOR_WORDS, in_use)
+                self._trained_with, in_use)
         simulations = None
         preview = self._preview if "num_runs" not in found and "run_size_cap" not in found else None
         if preview is not None and getattr(preview, "width", None):

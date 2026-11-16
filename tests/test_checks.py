@@ -963,7 +963,7 @@ def test_each_check_that_cannot_apply_or_run_says_why():
         "Not run yet", "Not run yet. This posterior was trained without the rotation, so there are no directions to "
                        "read.")
     assert _row(check_lineage.rows(_held(pair_refused="the engine's sentence"), (), ()), "calibration").reason == (
-        "The prior in use is not the one this posterior was trained on. Load it in step 2.")
+        "The prior in use is not the one this posterior was trained on, and that prior is no longer in Records.")
     assert {(row.state, row.reason) for row in check_lineage.rows(_held(prior=None), (), ())} == {
         ("Waiting for a prior", "Needs a prior: build or load one in step 2.")}
 
@@ -1360,7 +1360,8 @@ _GREYED = {
         "Cannot start yet: the prior in use is not the posterior's own."),
     "the calibration with the prior of another, its record gone": (
         "calibration", dict(pair_refused="refused"),
-        [("lock", "The prior in use is not the one this posterior was trained on. Load it in step 2.")],
+        [("lock", "The prior in use is not the one this posterior was trained on, and that prior is no longer in "
+                  "Records.")],
         "Cannot start yet: the prior in use is not the posterior's own."),
     "the calibration with no prior": (
         "calibration", dict(prior=None), [("lock", "Needs a prior: build or load one in step 2, Prior.")],
@@ -1493,11 +1494,13 @@ def test_the_prior_pair_greys_the_calibration_by_the_engines_guard_and_names_the
         page.open_check("calibration")
         live = pair in ("the posterior's own prior", "a prior of another id and the same fingerprint")
         assert page.foot.main_button.isEnabled() == live, (pair, page.foot.reason.text())
-        named = "" if pair == "another prior, its record gone" else " (older_prior)"
         assert page.foot.reason.text() == ("" if live else "Cannot start yet: the prior in use is not the posterior's "
                                                            "own.")
         facts = [fact.sentence for fact in page.facts_from_form()]
-        sentence = f"The prior in use is not the one this posterior was trained on{named}. Load it in step 2."
+        # a prior gone from Records cannot be loaded, and its sentence asks for nothing
+        sentence = ("The prior in use is not the one this posterior was trained on, and that prior is no longer in "
+                    "Records." if pair == "another prior, its record gone" else
+                    "The prior in use is not the one this posterior was trained on (older_prior). Load it in step 2.")
         assert (sentence in facts) == (not live), facts
         if pair == "another prior, its record kept":
             audit = page.check_pages["audit"].result.verdict.sentence.plain_text()
@@ -2509,7 +2512,7 @@ def test_a_check_no_run_can_pass_no_longer_holds_the_step_open(tmp_path):
             "Not run yet. This posterior was trained without keeping its simulations, and this check reads them.")
         held = screen.checks_in_use()
         for lifted in (replace(rows["calibration"], state="Not run yet", record=None,
-                               reason=check_lineage.OTHER_PRIOR_TEXT),
+                               reason=check_lineage.OTHER_PRIOR_GONE_TEXT),
                        replace(rows["calibration"], state="Not run yet", record=None,
                                line="Not run yet. Run only at a reduced size (40 test datasets; the usual is 2,000), "
                                     "which does not count."),

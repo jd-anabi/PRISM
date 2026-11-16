@@ -5607,6 +5607,28 @@ def _round_posterior(acceptance=0.12, ident="20261113T160000"):
                            posterior=SimpleNamespace(x_obs_digest="a" * 16, truncation=None))
 
 
+@pytest.mark.parametrize("prior", ["in Records", "no longer in Records"])
+def test_the_round_asks_for_the_posteriors_own_prior_only_while_it_can_be_loaded(prior, tmp_path, monkeypatch):
+    """A posterior in use trained with a prior other than the one in use blocks the round: while that prior is in
+    Records, the round names it and asks for it to be loaded in step 2; once it is no longer there, a sentence of its
+    own says so and asks for nothing that cannot be loaded."""
+    from core.artifacts import default_store
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    with _sixth_step(tmp_path, monkeypatch) as (_window, screen, page, _run, _made):
+        older = _prior_artifact(default_store(), _nad_cfg(), name="older_prior", seed=5).id
+        screen.session.posterior.manifest.parents["prior"] = older
+        if prior == "no longer in Records":
+            default_store().delete("prior", older, force=True)
+        page.read_facts()
+        said = [(fact.kind, fact.sentence) for fact in page.facts_from_form()]
+        want = {"in Records": "This posterior was trained with older_prior; the prior in use is retrain_prior. Load "
+                              "older_prior in step 2.",
+                "no longer in Records": "This posterior was trained with a prior no longer in Records; the prior in "
+                                        "use is retrain_prior. A narrowing round refuses this pair."}[prior]
+        assert ("err", want) in said, said
+        assert page.foot.reason.text().startswith("Cannot start yet:") and not page.foot.main_button.isEnabled()
+
+
 def test_the_round_passes_the_network_it_shows(tmp_path, monkeypatch):
     """The round hands its stage the network the page shows, the width and the depth always, at their usual values as
     typed ones, so that what is on the page is what trains; and the region's level and directions, the budget and the
