@@ -2268,6 +2268,10 @@ def test_the_lines_the_helpers_say_are_the_ones_the_engine_writes():
     assert [readings.read(line, "info").name for line in (writing, masked, epoch)] == [
         "simulation_writing", "chi_total", "fit_epoch"]
     assert epoch == _runs.epoch_line(1)
+    from core.SBI import train
+    for n, since, took, training, validation in ((1, 0, 3780.0, -3.0, -3.1), (12, 3, 3541.25, -3.41274, -3.398126)):
+        assert _runs.epoch_line(n, since, took, training, validation) == train.fit_epoch_line(
+            n, training, validation, took, since), "the helper's epoch line is not the engine's"
 
 
 def test_no_test_and_no_part_of_the_window_reaches_a_run_through_a_panels_flag():

@@ -3912,7 +3912,9 @@ def test_the_walk_of_the_whole_list_run_alone_ends_its_process_cleanly(tmp_path)
     (tmp_path / "Artifacts").mkdir()
     child = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", WALKED_ALONE], cwd=root,
                            env=environment, capture_output=True, text=True, encoding="utf-8", timeout=300)
-    assert child.returncode == 0, (child.returncode, child.stdout[-2000:], child.stderr[-2000:])
+    code = child.returncode & 0xFFFFFFFF
+    assert code == 0, (f"the process ended with 0x{code:08X}" + (", a corrupted heap" if code == 0xC0000374 else ""),
+                       child.stdout[-2000:], child.stderr[-2000:])
     assert "1 passed" in child.stdout, child.stdout[-2000:]
 
 

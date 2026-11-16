@@ -750,7 +750,7 @@ def test_check_three_reads_only_the_counts_that_are_there():
         assert (found.state, found.line, found.when) == ("Not compared", line, None), counts
     waiting = _row(check_lineage.rows(_held(set_counts=(8_412, 22_144, 100, WHOLE)), [], ()), "comparison")
     assert (waiting.state, waiting.when, waiting.line) == ("Waiting for the audit", None, "Waiting for the audit."), (
-        "check 3 was dated while it waits for the audit")
+        "the comparison after simulating was dated while it waits for the audit")
     assert _row(check_lineage.rows(_held(chi=False), [audit], ()), "comparison").state == "Does not apply"
     for counts in (None, (0, 0, 0, WHOLE), (900, 2_200, 10, check_readings_part())):
         for records in ([audit], [], [_record("audit", masked_fraction=0.5)]):
@@ -1569,7 +1569,6 @@ def _cell_file() -> Path:
     return Path(config.RESOURCES_ROOT) / "Cells" / "nadrowski" / "master_spont.txt"
 
 
-#: What a record of each check holds that says its verdict, its reading or its reasons in the engine's own words.
 #: The fields a record holds the engine's own words in: its verdicts and readings, its reasons, summary and caveats,
 #: the calibration's caveat and description, the repeated calibration's scope, the drive study's notes and the audit's
 #: dominant cause.
