@@ -1395,6 +1395,33 @@ _BLOCK_WORDS = (("Needs a prior", "needs a prior", "Cannot start yet:"),
                 ("Does not apply with", "it does not apply with the frequency response", "Cannot start:"))
 
 
+@pytest.mark.parametrize("model, bounds, applies", [
+    ("NADROWSKI", "master.txt", {"pin_down": True, "drive_study": True, "across_prior": True}),
+    ("HOPF", "cell.txt", {"pin_down": False, "drive_study": True, "across_prior": True}),
+    ("NADROWSKI", "master_spont.txt", {"pin_down": False, "drive_study": False, "across_prior": False})],
+    ids=["Nadrowski with its forcing section", "Hopf", "Nadrowski with no forcing section"])
+def test_the_checks_read_the_model_and_the_forcing_section_of_the_configuration_in_use(model, bounds, applies, tmp_path):
+    """What the checks are told of the configuration in use is read off the configuration itself, as the screen reads
+    the checks: another model than Nadrowski's makes "What the observations can pin down" not apply, and a bounds file
+    with no forcing section makes it, the drive study and identifiability across the prior not apply, each in its row's
+    words; with Nadrowski's master bounds file each applies."""
+    from core import cli, config, registry
+    from core.gui.session import SbiSession
+    folder = {"NADROWSKI": "nadrowski", "HOPF": "hopf"}[model]
+    cfg = cli.make_sim_config(model, config.VALID_LABELS[config.VALID_MODELS.index(model)],
+                              registry.state_dep_drift(model), str(config.BOUNDS_PATH / folder / bounds))
+    cfg.hw = config.cpu_device()
+    with _checks_page(tmp_path, chi=False, shown=False) as (_window, screen, _page, _store):
+        screen.session = SbiSession(draft=screen.session.draft, cfg=cfg, inf_prior=screen.session.inf_prior,
+                                    posterior=screen.session.posterior)
+        screen.read_checks()
+        rows = {row.key: row for row in screen.check_rows()}
+        said = {key: (rows[key].state != "Does not apply", rows[key].reason) for key in applies}
+        why = {"pin_down": check_lineage.NEEDS_FORCING_TEXT if model == "NADROWSKI" else check_lineage.NADROWSKI_ONLY_TEXT,
+               "drive_study": check_lineage.NEEDS_FORCING_TEXT, "across_prior": check_lineage.NEEDS_FORCING_TEXT}
+        assert said == {key: (on, "" if on else why[key]) for key, on in applies.items()}, said
+
+
 @pytest.mark.parametrize("case", list(_GREYED))
 def test_each_checks_button_is_greyed_with_the_reason_of_its_table(case):
     """Each check's button is greyed by the reason its row gives, each in its table's exact words: a block a load lifts,
