@@ -132,8 +132,8 @@ class _Listing(QWidget):
     def set_rows(self, found) -> None:
         """Show each check's row of ``found`` (the checks' rows in the list's order; None before the first reading,
         the names alone). The row the keyboard is on in each table stays the current one, by its check, and no drawing
-        moves the keyboard: ``drawing`` says so while it lasts. A group's heading is no row a click selects or the keyboard
-        stops on."""
+        moves the keyboard: ``drawing`` says so while it lasts. A group's heading is drawn as a heading, and is no row a
+        click selects or the keyboard stops on."""
         self.drawing = True
         try:
             self._set_rows(found)
@@ -148,8 +148,8 @@ class _Listing(QWidget):
         self.headings, self.row_of, self.key_at = [], {}, {}
         for group in GROUPS:
             self.headings.append(len(whole))
-            whole.append([TextCell(group, wrap=True), TextCell(""), TextCell(""), TextCell("")])
-            narrow.append([TextCell(group, wrap=True), TextCell("")])
+            whole.append([TextCell(group, heading=True), TextCell(""), TextCell(""), TextCell("")])
+            narrow.append([TextCell(group, heading=True), TextCell("")])
             for one in (one for one in CHECKS if one.group == group):
                 row = by_key.get(one.key)
                 state = (StateCell(check_readings.STATE_MARKERS.get(row.state, "later"), row.state) if row is not None

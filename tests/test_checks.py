@@ -2593,6 +2593,44 @@ def test_a_groups_heading_is_no_row_a_click_or_the_keyboard_stops_on(tmp_path):
             assert page.open_key == page.listing.key_at[last]
 
 
+def test_a_groups_heading_is_drawn_as_a_heading_over_its_checks(tmp_path, monkeypatch):
+    """Each group's heading ("Before the run", "After simulating", "After the fit", "Tools") is drawn as a heading in the
+    whole table and in the narrow one: set as the table's header sets its words, small and semibold, with a little space
+    above it, so that its row stands taller than a check's row of one line by that space; none of its cells can be
+    chosen, so that neither a click nor the arrow keys stop on it; and a check's row is drawn in the body's type."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QStyleOptionViewItem
+    from core.gui import design
+    from core.gui.widgets import rule_table as rt
+    with _checks_page(tmp_path) as (_window, _screen, page, _store):
+        page.open_check("band")
+        _settle()
+        real = rt._face
+        for table in (page.listing.whole, page.listing.narrow):
+            view, model = table.view, table.view.model()
+            one_line = view.rowHeight(page.listing.row_of["card_test"])          # "Card test": one line anywhere
+            for at in page.listing.headings:
+                cell = model.index(at, 0).data(Qt.UserRole)
+                assert isinstance(cell, rt.TextCell) and cell.heading, (at, cell)
+                assert view.rowHeight(at) == one_line + design.scaled(design.GAP["head_table"]), (at, view.rowHeight(at))
+                assert all(model.flags(model.index(at, column)) == Qt.NoItemFlags
+                           for column in range(model.columnCount())), at
+            for row, faces in ((page.listing.headings[0], ["title"]), (page.listing.row_of["card_test"], ["text"])):
+                asked = []
+                monkeypatch.setattr(rt, "_face", lambda part, asked=asked: asked.append(part) or real(part))
+                image = QImage(600, 80, QImage.Format_ARGB32)
+                painter = QPainter(image)
+                try:
+                    option = QStyleOptionViewItem()
+                    option.rect = QRect(0, 0, 600, view.rowHeight(row))
+                    view.itemDelegate().paint(painter, option, model.index(row, 0))
+                finally:
+                    painter.end()
+                monkeypatch.setattr(rt, "_face", real)
+                assert asked == faces, (row, asked)
+
+
 def _a_failed_band(store, cfg, _prior, _posterior) -> None:
     """A frequency band that failed for the master's spontaneous cell: its result is long, its table of every
     frequency among it."""

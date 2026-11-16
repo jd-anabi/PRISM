@@ -29,11 +29,14 @@ from .ruled import Ruled
 @dataclass(frozen=True)
 class TextCell:
     """Words in a cell, at its left. Too long for its column they are cut, or set in as many lines as they
-    need when ``wrap`` is set; a word wider than its column is then broken, never cut."""
+    need when ``wrap`` is set; a word wider than its column is then broken, never cut. A ``heading`` heads the
+    rows under it: its words are set as the header sets its own, small and semibold, in as many lines as they
+    need, with a little space above them, and its row is a line taller by that space."""
     text: str
     quiet: bool = False       # secondary lettering
     elide: str = "end"        # "end" for a note, "middle" for a name
     wrap: bool = False
+    heading: bool = False
 
 
 @dataclass(frozen=True)
@@ -290,6 +293,11 @@ class RuleDelegate(QStyledItemDelegate):
                     painter.setPen(design.colour("ink_2"))
                     under = QRectF(box.left(), box.top() + height, box.width(), design.scaled(design.TYPE["small"][1]))
                     painter.drawText(under, Qt.AlignRight | Qt.AlignVCenter, second)
+            elif isinstance(cell, TextCell) and cell.heading:
+                font = _face("title")
+                painter.setPen(design.colour("ink"))
+                layout, _lines = _wrapped(cell.text, font, box.width(), height)
+                layout.draw(painter, box.topLeft() + QPointF(0, design.scaled(design.GAP["head_table"])))
             elif isinstance(cell, TextCell):
                 font = _face("selected" if selected and first else "text")
                 painter.setFont(font)
@@ -456,7 +464,7 @@ class RuleView(QTableView):
                 marker = design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["state_gap"])
                 need = max(need, marker + wide("selected" if column == 0 else "word", cell.word))
             else:
-                need = max(need, wide("selected" if column == 0 else "text", cell.text))
+                need = max(need, wide("title" if cell.heading else "selected" if column == 0 else "text", cell.text))
         lead, gap = _pads(column, len(self._columns))
         width = min(design.scaled(design.SIZE["table_fit_most"]), math.ceil(need)) + lead + gap
         return max(width, design.scaled(design.SIZE["table_section_least"]))
@@ -479,7 +487,8 @@ class RuleView(QTableView):
                 widest = max([widest] + [marker + metrics.horizontalAdvance(part) for part in parts])
                 continue
             else:
-                words = [(_face("selected" if semibold else "text"), word) for word in cell.text.split()]
+                face = _face("title" if cell.heading else "selected" if semibold else "text")
+                words = [(face, word) for word in cell.text.split()]
             widest = max([widest] + [QFontMetricsF(face).horizontalAdvance(word) for face, word in words])
         lead, gap = _pads(column, len(self._columns))
         return max(math.ceil(widest) + lead + gap, design.scaled(design.SIZE["table_section_least"]))
@@ -528,6 +537,11 @@ class RuleView(QTableView):
         cell = index.data(Qt.UserRole)
         line = design.scaled(design.TYPE["body"][1])
         lines = line
+        if isinstance(cell, TextCell) and cell.heading:
+            lead, gap = _pads(index.column(), len(self._columns))
+            lines = line * _wrapped(cell.text, _face("title"), self._column_width(index.column()) - lead - gap, line)[1]
+            return (max(lines + 2 * design.scaled(design.SIZE["table_pad"]), design.scaled(design.SIZE["table_row"]))
+                    + design.scaled(design.GAP["head_table"]))
         if isinstance(cell, TextCell) and cell.wrap:
             lead, gap = _pads(index.column(), len(self._columns))
             semibold = (index.column() == 0 and self.selectionMode() != QAbstractItemView.NoSelection
