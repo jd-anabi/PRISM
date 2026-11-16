@@ -5860,13 +5860,24 @@ def test_the_controller_publishes_the_idle_state_before_the_run_ends(tmp_path, m
     with _sixth_step(tmp_path, monkeypatch) as (_window, screen, _page, _run, _made):
         heard = []
         held = controller()
-        held.status_changed.connect(lambda status: heard.append(("status", status.live)))
-        held.run_ended.connect(lambda _status: heard.append(("ended", held.is_live())))
-        stand_in = StandIn(word="Other run")
-        start_run(screen.prior_panel, stand_in)
-        _round_ends(stand_in, payload=object())
-        ended = heard.index(("ended", False))
-        assert heard[ended - 1] == ("status", False), heard
+
+        def status(status):
+            heard.append(("status", status.live))
+
+        def ended(_status):
+            heard.append(("ended", held.is_live()))
+
+        held.status_changed.connect(status)
+        held.run_ended.connect(ended)
+        try:
+            stand_in = StandIn(word="Other run")
+            start_run(screen.prior_panel, stand_in)
+            _round_ends(stand_in, payload=object())
+        finally:                             # the process's one run controller is left with the listeners it had
+            held.status_changed.disconnect(status)
+            held.run_ended.disconnect(ended)
+        at = heard.index(("ended", False))
+        assert heard[at - 1] == ("status", False), heard
 
 
 def test_the_round_says_its_result_and_offers_check_this_posterior(tmp_path, monkeypatch):

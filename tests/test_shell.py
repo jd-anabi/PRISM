@@ -10076,14 +10076,16 @@ def test_a_past_view_offers_nothing_while_a_run_is_live(store, tmp_path, monkeyp
     pressed = []
     controller().offer_pressed.connect(pressed.append)
     choose(monkeypatch, other=True)                     # were it asked, the question's answer that deletes
-    with running(window.panel(InferPanel)):
-        past.resume_button.click()
-        assert (pressed, past.notice.text()) == ([], LIVE_TEXT)
-        past.discard_kept_button.click()
-        assert kept in [row.id for row in store.list("fit")] and past.notice.text() == LIVE_TEXT
-        window._open_run(_REOPENED)
-        assert not past.resume_button.isVisibleTo(past) and not past.discard_kept_button.isVisibleTo(past)
-    controller().offer_pressed.disconnect(pressed.append)
+    try:
+        with running(window.panel(InferPanel)):
+            past.resume_button.click()
+            assert (pressed, past.notice.text()) == ([], LIVE_TEXT)
+            past.discard_kept_button.click()
+            assert kept in [row.id for row in store.list("fit")] and past.notice.text() == LIVE_TEXT
+            window._open_run(_REOPENED)
+            assert not past.resume_button.isVisibleTo(past) and not past.discard_kept_button.isVisibleTo(past)
+    finally:                                 # the process's one run controller is left with the listeners it had
+        controller().offer_pressed.disconnect(pressed.append)
     turn_until(qt_app(), lambda: not controller().is_live())
 
 
