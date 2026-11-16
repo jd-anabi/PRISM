@@ -5820,6 +5820,9 @@ def test_the_rounds_run_hands_its_history_plain_settings(tmp_path, monkeypatch):
         assert {key: held[key] for key in ("prior", "parent_posterior", "observation", "level", "directions", "name")} == {
             "prior": screen.session.inf_prior.id, "parent_posterior": "20261003T031200", "observation": made["cell_a"],
             "level": 0.999, "directions": 5, "name": "retrain_round1"}, held
+        # what a Continue after a reopening fills step 1 and step 2 from: the model, its options and the bounds file
+        assert (held["model"], held["bounds"], sorted(held["options"])) == ("NADROWSKI", "master.txt", [
+            "chi_k_pad", "chi_max_cycles", "chi_mode", "chi_n_freqs", "reparam_rotate", "units_override"]), held
         assert [row["name"] for row in held["rows"]] == ["num_runs", "run_size_cap", "hidden_features",
                                                           "num_transforms", "learning_rate", "stop_after_epochs",
                                                           "max_num_epochs", "checkpoint_every"]
