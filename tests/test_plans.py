@@ -1383,8 +1383,9 @@ def test_each_step_counts_the_departures_of_what_its_run_reads(tmp_path, monkeyp
     """Each step's run reads its own form and what the earlier steps it follows hold, never another step's form: a
     check, an inference and a narrowing round read the model and its options and the prior as their steps hold them,
     then their own form, and none reads Training's. A change on Training's form is a departure of a training alone, and
-    one on a later step's form a departure of that step alone, in its plan line and in "Before you start" (on Checks, a
-    check's own, with the check open)."""
+    one on a later step's form a departure of that step alone, in its plan line and in "Before you start" (on Checks,
+    the calibration's, with the calibration open: another check's run reads none of its sizes, so its "Before you
+    start" names the departures of the model and the prior alone, while the line under the heading counts all)."""
     from core.gui import plans as window_plans
     assert window_plans.HEADING_OF == {"model": "Model and options", "prior": "Prior", "training": "Training",
                                        "checks": "Calibration", "infer": "Inference", "narrowing": "Narrowing round"}
@@ -1416,6 +1417,16 @@ def test_each_step_counts_the_departures_of_what_its_run_reads(tmp_path, monkeyp
         "checks": "Information. Plan retrain, with 1 change: Test datasets 500 (usual 2,000).",
         "infer": "Information. Plan retrain, with 1 change: Posterior draws 1,500 (usual 1,000).",
         "narrowing": "Information. Plan retrain, with 1 change: Batches 4,000 (usual 5,000)."}
+    # the calibration's sizes are the calibration's alone: another check's facts do not name them, though the line
+    # under the heading counts them
+    checks = screen.validate_panel
+    checks.open_check("band")
+    screen.refresh_gates()
+    assert (_said(checks.plan_line), _plan_fact(checks)) == ("Plan: retrain, 1 change", usual), (
+        "the frequency band's facts named a departure its run never reads")
+    checks.open_check("calibration")
+    screen.refresh_gates()
+    assert _plan_fact(checks) == "Information. Plan retrain, with 1 change: Test datasets 500 (usual 2,000)."
 
 
 def test_the_plan_facts_come_from_values_not_widgets(tmp_path, monkeypatch, store):

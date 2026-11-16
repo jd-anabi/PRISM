@@ -31,7 +31,7 @@ from core.diagnostics import ablation, identifiability, probes, sbc
 from core.Helpers import labels
 from core.refusals import Refusal, require_at_least
 
-from ... import check_lineage, check_readings, check_scratch, design, fonts, record_words, style
+from ... import check_lineage, check_readings, check_scratch, design, fonts, plans, record_words, style
 from ...check_catalogue import AGAIN_WORDS, CHECKS, DECIDING, GROUPS, entry
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...reported import reported
@@ -655,9 +655,8 @@ class ValidatePanel(StepPage):
         and each record that cannot be read. With a check open: what its run simulates or reads, how long it took here
         last at these sizes, the memory limit and the last run for a check on the graphics card, that nothing else can
         run meanwhile and what it writes; the earlier steps' changes; and what stops its button: its row's reason, a cell
-        file not chosen, the rules its form breaks, its name and its note; and, last, what it says of the plan in use,
-        whose departures are those of the model, the prior and the calibration's sizes, as the line under the heading
-        counts them."""
+        file not chosen, the rules its form breaks, its name and its note; and, last, what it says of the plan in use
+        (``plan_lines``): the departures its run reads."""
         others = tuple(Fact("warn", said) for said in self._others_pending() if said)
         key = self.open_key
         if key is None or not entry(key).button:
@@ -693,6 +692,17 @@ class ValidatePanel(StepPage):
         said = check_forms.before_you_start(key, sizes=counted, last=self._took(key, sizes), memory=self._memory(),
                                             read=self._history_read)
         return (*said, *others, *names, *blocks, *cell, *fields, *self.plan_lines())
+
+    def plan_lines(self) -> tuple:
+        """What "Before you start" says of the plan in use for the open check's run: the departures of the model and its
+        options and of the prior, which every check reads; the calibration's run alone reads the calibration's sizes too,
+        so its page alone says their departures. The line under the heading counts all three, as the step's. Reads
+        nothing."""
+        screen = self._screen
+        if self.open_key == "calibration" or not hasattr(screen, "plan_source"):
+            return super().plan_lines()
+        own = plans.HEADING_OF[self.step]
+        return plans.plan_facts(screen, tuple(heading for heading in plans.headings_to(self.step) if heading != own))
 
     def _memory(self) -> tuple:
         """The memory limit in force and, once the history has been read, the last run on this computer."""
