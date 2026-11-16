@@ -1,5 +1,46 @@
 # PRISM — state
 
+**Last updated:** 2026-11-15, evening (19:27 by the clock; the weekly bar 5 %, resetting on 22 November at 04:00 UTC;
+extra usage switched on, nothing spent): STAGE 5'S LAST REVIEW AND ITS ONE FIX WAVE ARE COMPLETE, head `6530e3d`. Task
+14, the exit, is next; its first question to the owner (the order) is put.
+
+- **The last review** (three seats over `3adc659..c915721`, `stage-5/briefs/stage-5-final-review-dispatches.md`): seat
+  two sorted the stage's 51 carried rows (its section 7 the 19 items for the owner at the exit); seat one: "The stage may
+  exit" once the fix wave carries the past view's Resume, nothing crosses an owner's line, 2 Important (that, and stage
+  4's one-press Discard on the past view, `view.py`), 7 Minor; seat three: 2 Important (a round's history test passing
+  with the model and bounds missing; the failure message's selection and copy pinned by nothing), 10 Minor, its fault
+  runs and cure texts.
+- **The fix wave** (one Opus builder from `stage-5/briefs/stage-5-fix-wave-dispatch.md`, the rulings W1 to W12,
+  departures 481 to 485 at `231d40e`): thirteen commits `2984414` to `6530e3d`. A reopened round's past view offers its
+  Resume and says what it loads; the past view's Discard asks the kept trainings' question first (`run/questions.py`
+  `delete_kept_question`, read by both places); the Checks list's main button passes over checks waiting for training
+  ("Go to Training"); "Narrow around this observation" only where the round can use it (`step_facts.narrows_around`, one
+  rule); a check other than the calibration counts only the model's and the prior's plan departures; the round's fix
+  sentence built from its button's constant and pinned; seat three's test cures; the code audit's list items 18 to 25.
+  Every change under `core/gui/` or `tests/`; the engine closed. The re-read (sonnet): CLEAN, 2 Minor (one dropped on
+  reading the code, one kept as built).
+- **The gates on `6530e3d`:** the fast gate 4156 passed, 14 skipped, 3 deselected, 43 min 1 s (4173 collected; not
+  certified quiet); the real-screen run 14 passed; `Artifacts/` 428 entries, the listing identical; `PRISM.ini`
+  unchanged. The carried-over list: none closed, 5 born, 1956 rows, missing 0.
+- **For the owner at the exit** (in `stage-5/exit/rulings-for-the-owner.md` when it is written): seat two's 19 items;
+  departure 481 (amends stage 4's 319); Task 12-13 closed with an Important carried to the wave instead of a second fix
+  round; the `sbitest` test model the suite writes into the real `Resources/` while it runs, carried to the last stage's
+  final gates, and the review dispatch's wording, which was wider than the owner's line; seat one's items 6 and 7.
+- **For Task 14's documents:** the plan's table and registry lines (with the wave's new names), the guide's sentences
+  (`getting-started.md` about :195-198, `architecture.md` about :295-296, Task 2's three), `docs/guide/testing.md`'s
+  canaries sentence, the walkthrough rows, the `CLAUDE.md` edits for the owner's yes.
+- **Measured:** the last review and the wave about 3 points (2 % to 5 %): the seats 1.28 M tokens, the builder 0.45 M,
+  the re-read 0.13 M.
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: Task 14, the exit, with the owner, in the order the owner answers (recommended: the pictures and the owner's
+questions; a change asked for, as a small task; the gates of record once on the final head, a quiet machine: the slow
+set, the card test with the diagnostic card and one card test through the Checks page's call, the real-screen run; the
+walkthrough rows; the guide's pages for Checks, Inference and the round; the owner's yes or no to the `CLAUDE.md` edits;
+`stage-5/exit/rulings-for-the-owner.md`). Then the code audit; the retrain from the window; one last stage.
+
+What follows is the head as the afternoon of 15 November left it:
+
 **Last updated:** 2026-11-15, afternoon (15:30 by the clock; the weekly bar 2 %, resetting on 22 November at 04:00 UTC;
 extra usage switched on, nothing spent): STAGE 5'S TASK 12-13, PLANS FILLING EVERY STEP AND A KEPT NARROWING ROUND AFTER
 A REOPENING, IS COMPLETE. The chat started from
