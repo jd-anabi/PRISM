@@ -5048,9 +5048,10 @@ def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(t
     platform's fonts and their metrics, at the least size the window takes on the screen it stands on, at the ordinary
     text size and at one and a half times it, the Checks list's main button and the words beside it stand inside the
     window with nothing drawn over them: with the longest words its button has, the next check the comparison after
-    simulating; and with a check open in the list's place whose three blocks are said beside the greyed button. The
-    window is laid out where no screen shows it and is never shown or brought to the front: the window in front stays
-    in front."""
+    simulating (a posterior in use whose training's counts cannot be read, so that the comparison still holds the step
+    open); and with a check open in the list's place whose three blocks are said beside the greyed button. The window
+    is laid out where no screen shows it and is never shown or brought to the front: the window in front stays in
+    front."""
     import ctypes
     from types import SimpleNamespace
     from PySide6.QtCore import QPoint, QRect, Qt
@@ -5082,20 +5083,20 @@ def test_the_checks_buttons_stand_inside_the_smallest_window_with_real_metrics(t
             write_diagnostic(store, cfg, diagnostic="probes", variant="band", **check_results("band"))
             write_diagnostic(store, cfg, diagnostic="probes", variant="mask", parents={"prior": held.id},
                              **check_results("audit"))
-            screen.session = SbiSession(cfg=cfg, inf_prior=held)
+            # Before a training the button passes over the checks that wait for one; with a posterior in use whose
+            # training's counts cannot be read, the comparison after simulating is still the next check.
+            posterior = SimpleNamespace(kind="posterior", id="20261003T031200", name="retrain", path=tmp_path,
+                                        manifest=SimpleNamespace(parents={"prior": held.id},
+                                                                 body={"transform": {"V": None}}), posterior=None)
+            screen.session = SbiSession(cfg=cfg, inf_prior=held, posterior=posterior)
             screen.refresh_gates()
             window.go_to("inference", "checks")
             page = screen.validate_panel
             page.read_facts()
             words = page.foot.main_button.text().replace("&", "")
             assert words == "Open Unusable driven recordings: simulation set against the audit", words
-            posterior = SimpleNamespace(kind="posterior", id="20261003T031200", name="retrain", path=tmp_path,
-                                        manifest=SimpleNamespace(parents={"prior": held.id},
-                                                                 body={"transform": {"V": None}}), posterior=None)
             for state in ("the longest words", "a check open in the list's place"):
                 if state != "the longest words":
-                    screen.session = SbiSession(cfg=cfg, inf_prior=held, posterior=posterior)
-                    page.read_facts()
                     # identifiability across the prior: it does not apply with the frequency response, and its
                     # cell file and its recording length, which open blank (Inference's list holds no cell until one
                     # is chosen), are in error
