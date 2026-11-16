@@ -1539,6 +1539,62 @@ def test_a_kept_round_is_offered_with_resume_and_no_command():
         gone[0].sentence), gone[0].sentence
 
 
+def test_the_records_a_resume_loads_are_found_gone_by_the_presses_own_rule():
+    """The records a kept training's Resume loads, found gone by the one rule its press and the reading of what is
+    offered both read (``present`` is ``store.get``, or a reading of it, which raises for a record not in Records): a
+    kept training's prior; a kept round's prior, then the posterior it narrows and its observation, or that its record
+    names neither; each in the sentence the press refuses with. Nothing else is looked at: no file, no model and no
+    device."""
+    from core.gui.panels.inference import resume
+    held, asked = {("prior", "20261002T101500"), ("posterior", "20261002T120000"),
+                   ("observation", "20261002T130000")}, []
+
+    def present(kind, ident):
+        asked.append((kind, ident))
+        if (kind, ident) not in held:
+            raise LookupError(ident)
+        return object()
+
+    moved = _kept("k1", inputs={"bounds": {"path": "nowhere/gone.txt", "sha256": "0" * 64}},
+                  config={"model": "GONE", "device": "cuda"})
+    assert (resume.records_gone(moved, present), asked) == ((), [("prior", "20261002T101500")])
+    assert resume.records_gone(_kept("k2", prior="p9"), present) == (resume.PRIOR_GONE_TEXT,)
+    assert resume.records_gone(_kept("k3", region={"lo": [0.0]}, parents=_ROUND_PARENTS), present) == ()
+    gone = {"prior": "p9", "simulation": "s", "parent_posterior": "q9", "observation": "o9"}
+    assert resume.records_gone(_kept("k4", region={"lo": [0.0]}, parents=gone), present) == (
+        "The prior it was trained with is no longer in Records.",
+        "The posterior it narrows, q9, is no longer in Records.",
+        "The observation it was trained around is no longer in Records.")
+    assert resume.records_gone(_kept("k5", region={"lo": [0.0]}, parents={"prior": "20261002T101500"}), present) == (
+        "Its record names no posterior it narrows.", "Its record names no observation it was trained around.")
+
+
+def test_a_kept_training_whose_records_are_gone_offers_no_resume_and_says_why():
+    """What the reading finds gone of the records a kept training's Resume loads (``gone``) is its offer's reason, its
+    sentences joined: no button, and Home, the Training step and the Narrowing round step pass it over. A record that
+    cannot be resumed for a reason of its own says that reason alone, as its press does."""
+    from core.gui import continuing
+    said = {"k1": ("The prior it was trained with is no longer in Records.",),
+            "k2": ("The posterior it narrows, 20261002T120000, is no longer in Records.",
+                   "The observation it was trained around is no longer in Records."),
+            "k3": ("The prior it was trained with is no longer in Records.",)}
+    kept = [_kept("k1", saved="2026-10-04T10:00:00+00:00"),
+            _kept("k2", region={"lo": [0.0]}, parents=_ROUND_PARENTS, saved="2026-10-05T10:00:00+00:00"),
+            _kept("k3", can_resume=False, why_not="its simulation set eda5c2a1e468 is not in the store",
+                  saved="2026-10-06T10:00:00+00:00")]
+    found = continuing.offers((), kept, records_root=_ROOT, set_batches=lambda _folder: None,
+                              gone=lambda row: said[row.id])
+    assert [(offer.kept, offer.why_not, offer.button) for offer in found] == [
+        ("k3", "Its simulation set eda5c2a1e468 is not in the store.", ""),
+        ("k2", "The posterior it narrows, 20261002T120000, is no longer in Records. The observation it was trained "
+               "around is no longer in Records.", ""),
+        ("k1", "The prior it was trained with is no longer in Records.", "")], found
+    assert (continuing.for_home(found), continuing.for_the_steps(found), continuing.for_the_round(found)) == (
+        None, None, None)
+    held = continuing.offers((), kept[:2], records_root=_ROOT, set_batches=lambda _folder: None)
+    assert [offer.why_not for offer in held] == ["", ""], "a record found nowhere gone is said to be"
+
+
 def test_a_rounds_history_offers_continue_from_batch_n():
     """A narrowing round that failed, or was not seen to end, with its set unfinished and settings that name its bounds
     file, the posterior it narrows and its observation, offers "Continue from batch N" on its own step, N the set's own

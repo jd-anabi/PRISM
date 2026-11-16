@@ -772,10 +772,13 @@ class MainWindow(QMainWindow):
         past = getattr(panel, "_past_view", None)
         if shown and past is not None and panel.results.currentWidget() is past:
             # Nothing is offered while a run is live: what is offered was read before it, and is read again after it.
+            # What can be taken goes first; a kept training of the run that cannot be resumed is handed on all the same,
+            # so that the page says why it offers nothing.
             inference = self._built.get("inference")
             offers = () if held.is_live() else inference.offers() if inference is not None else self._offers
-            past.offer_past(next((offer for offer in offers if offer.run == run and not offer.why_not
-                                  and offer.kind in ("continue", "fit_again", "resume", "round")), None))
+            own = [offer for offer in offers if offer.run == run
+                   and offer.kind in ("continue", "fit_again", "resume", "round")]
+            past.offer_past(next((offer for offer in own if not offer.why_not), own[0] if own else None))
         if shown and ended:
             held.acknowledge(run)
 

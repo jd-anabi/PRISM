@@ -8861,8 +8861,9 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
     """A kept training whose world has moved since it was kept, after a reopening, each cause alone: its Resume says
     why on its row, in words, and nothing is read, applied, loaded or started; nothing raises. What is said is the
     cause's sentence and nothing more. A library changed is the record's own reason, said before any Resume is offered:
-    Home offers it not. A bounds file renamed in its capitals alone is the same file on Windows: nothing is said, and
-    the press goes on."""
+    Home offers it not; and so is its prior deleted, which the reading of what is offered finds: Home offers no Resume,
+    and the row says why before any press. A bounds file renamed in its capitals alone is the same file on Windows:
+    nothing is said, and the press goes on."""
     import shutil
     import sys
     from core import cli, config, registry
@@ -8919,10 +8920,15 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
     elif cause == "card gone":
         monkeypatch.setattr(config, "detect_device", config.cpu_device)
     window, home = _home_of_last_time(tmp_path)
-    assert (home.next_button.text() == "&Resume") == (cause != "a library changed"), home.next_button.text()
+    assert (home.next_button.text() == "&Resume") == (cause not in ("a library changed", "prior deleted")), (
+        home.next_button.text())
     inference = window.part("inference")
     inference.read_offers()
     page = inference.posterior_panel
+    if cause == "prior deleted":
+        row = _row_of(page, kept)
+        assert (row["why"].text(), row["resume"].isHidden(), row["delete"].isHidden()) == (said, True, False), (
+            "the row does not say why before any press", row["why"].text())
     if goes_on:
         app = qt_app()
         assert inference.resume_kept(kept) is not None and page._said_on_row == {}
@@ -9215,6 +9221,39 @@ def test_a_page_never_offers_resume_where_the_record_says_it_cannot_be_resumed(s
     assert not past.resume_button.isVisibleTo(past) and not past.discard_kept_button.isVisibleTo(past)
 
 
+def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(store, tmp_path, monkeypatch):
+    """A kept training whose prior is no longer in Records, after a reopening, a run's history naming it: Home offers
+    no Resume; its row in the Training step's list offers none and says why before any press, in the words its Resume's
+    refusal says, and keeps "Delete"; and the past view of the run that kept it offers nothing, neither "Resume the
+    training" nor "Discard", and says why, and where it can be deleted."""
+    from core.SBI import fit_state
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    kept = _a_kept_training(store, held, batches=10_000)
+    the_set = store.kind_dir("simulation") / fit_state.kept_fit(store, kept).parents["simulation"]
+    _a_failed_training(store, tmp_path, held, batches=10_000, folder=the_set, kept=kept)
+    store.delete("prior", held.prior, force=True)
+    said = "The prior it was trained with is no longer in Records."
+    window, home = _home_of_last_time(tmp_path)
+    assert home.next.action != "resume" and home.next_button.text() != "&Resume", home.next_button.text()
+    assert getattr(home.next.offer, "kept", None) != kept, "Home offers the kept training"
+    window.go_to("inference", "training")
+    inference = window.part("inference")
+    page = inference.posterior_panel
+    row = _row_of(page, kept)
+    assert (row["why"].text(), row["why"].isVisibleTo(page.kept_block), row["resume"].isVisibleTo(page.kept_block),
+            row["delete"].isVisibleTo(page.kept_block), row["uses"].isVisibleTo(page.kept_block)) == (
+        said, True, False, True, False), row["why"].text()
+    assert inference.resume_kept(kept) is None and page._said_on_row.get(kept) == said, (
+        "the press refuses in other words than the row's", page._said_on_row)
+    window._open_run(_REOPENED)
+    past = page._past_view
+    assert past is not None and page.results.currentWidget() is past
+    assert not any(button.isVisibleTo(past) for button in (past.resume_button, past.discard_kept_button,
+                                                           past.continue_button)), "the past view offers a button"
+    assert (past.notice.text(), past.notice.isVisibleTo(past)) == (
+        f"{said} It can be deleted under 'Kept trainings' in step 3, Training.", True), past.notice.text()
+
+
 def test_a_kept_training_another_program_writes_reaches_home_at_its_next_opening(store, tmp_path, monkeypatch):
     """A kept training written while the window is open, by another program (the command-line tool's training stopped
     at a pass), is offered by Home at its next opening, and by the Training step at its next reading; nothing watches
@@ -9381,20 +9420,23 @@ def test_a_resumes_repeat_keeps_the_kept_training_and_sends_nothing_of_the_forms
 
 def test_a_resume_refused_before_anything_is_read_is_said_on_its_row_until_the_next_reading(store, tmp_path,
                                                                                             monkeypatch):
-    """What stops a Resume before anything is read is said on the kept training's row in the Training step's list, in
-    place of its "Resume", with "Delete" kept beside it, until the list is next read, which asks again."""
+    """What stops a Resume before anything is read, and that the list's reading does not ask (here the graphics card it
+    was trained on gone), is said on the kept training's row in the Training step's list, in place of its "Resume",
+    with "Delete" kept beside it, until the list is next read, which asks again."""
+    from core import config
     held = _a_launch_before(store, tmp_path, monkeypatch)
     _the_loads(monkeypatch, store, held, release=False)
-    kept = _a_kept_training(store, held)
-    store.delete("prior", held.prior, force=True)
+    kept = _a_kept_training(store, held, config={"device": "cuda"})
+    monkeypatch.setattr(config, "detect_device", config.cpu_device)
     window, _home = _home_of_last_time(tmp_path)
     window.go_to("inference", "training")
     inference = window.part("inference")
     page = inference.posterior_panel
+    assert _row_of(page, kept)["resume"].isVisibleTo(page.kept_block), "the list's reading asked for the card"
     _row_of(page, kept)["resume"].click()
     row = _row_of(page, kept)
     assert (row["why"].text(), row["resume"].isVisibleTo(page.kept_block), row["delete"].isVisibleTo(page.kept_block)) \
-        == ("The prior it was trained with is no longer in Records.", False, True)
+        == ("It was trained on the graphics card; this computer has none now.", False, True)
     page.foot.check_again.click()
     assert page._said_on_row == {} and _row_of(page, kept)["resume"].isVisibleTo(page.kept_block), (
         "what was said on the row outlived the list's next reading")
@@ -10251,6 +10293,56 @@ def test_the_past_view_of_a_reopened_kept_round_offers_its_resume(store, tmp_pat
     monkeypatch.setattr(InferenceScreen, "resume_round", lambda screen, ident: resumed.append(ident))
     past.resume_button.click()
     assert resumed == [kept], "the past view's Resume did not reach the round's own resume"
+
+
+@pytest.mark.parametrize("gone", ["the posterior it narrows", "its prior", "its observation"])
+def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gone, store, tmp_path, monkeypatch):
+    """A kept narrowing round whose posterior it narrows, whose prior or whose observation is no longer in Records,
+    after a reopening, a run's history naming it: Home passes over it; its row on the Narrowing round step offers no
+    "Resume" and says why before any press, in the words its Resume's refusal says, and keeps "Delete"; and the past
+    view of the run that kept it offers nothing and says why, and where it can be deleted."""
+    from core.SBI import fit_state
+    from tests._fixtures import write_history, write_simulation_set
+    held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
+    folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "kept", "name": "retrain_round1"}, 4,
+                                  complete=True)                  # the kept round's own set, whole
+    run = "20261003T030211-narrowing-round"
+    write_history(tmp_path / "runs", id=run, word="Narrowing round", name="retrain_round1",
+                  place=["inference", "narrowing"], records_root=str(store.root), started=_at(3, 3, 2, 11),
+                  ended=_at(3, 9, 0), outcome="failed", acknowledged=True,
+                  simulation_set={"folder": str(folder), "batches": 4, "at_start": 0, "at_end": 4},
+                  settings=None, fit={"kept_id": kept})
+    if gone == "the posterior it narrows":
+        store.delete("posterior", held.posterior, force=True)
+        said = f"The posterior it narrows, {held.posterior}, is no longer in Records."
+    elif gone == "its prior":
+        store.delete("prior", held.prior, force=True)
+        said = "The prior it was trained with is no longer in Records."
+    else:
+        store.delete("observation", fit_state.kept_fit(store, kept).parents["observation"], force=True)
+        said = "The observation it was trained around is no longer in Records."
+    window, home = _home_of_last_time(tmp_path)
+    assert home.next.action != "open_round" and getattr(home.next.offer, "kept", None) != kept, (
+        "Home leads to the kept round", home.next)
+    window.go_to("inference", "narrowing")
+    inference = window.part("inference")
+    page = inference.tsnpe_panel
+    (offer, parts), = page._kept_rows
+    assert offer.kept == kept
+    block = page.kept_block
+    assert (parts["why"].text(), parts["why"].isVisibleTo(block), parts["resume"].isVisibleTo(block),
+            parts["delete"].isVisibleTo(block), parts["loads"].isVisibleTo(block)) == (
+        said, True, False, True, False), parts["why"].text()
+    assert inference.resume_round(kept) is None and page._said_on_row.get(kept) == said, (
+        "the press refuses in other words than the row's", page._said_on_row)
+    window._open_run(run)
+    past = page._past_view
+    assert past is not None and page.results.currentWidget() is past
+    assert not any(button.isVisibleTo(past) for button in (past.resume_button, past.discard_kept_button,
+                                                           past.continue_button)), "the past view offers a button"
+    assert (past.notice.text(), past.notice.isVisibleTo(past)) == (
+        f"{said} It can be deleted under 'Kept narrowing rounds' in step 6, Narrowing round.", True), (
+        past.notice.text())
 
 
 # ── Home's presses, the load view's order ──

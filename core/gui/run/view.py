@@ -40,7 +40,7 @@ from PySide6.QtGui import (QDesktopServices, QFontMetrics, QKeySequence, QPainte
 from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
-from .. import check_readings, design, fonts, style
+from .. import check_readings, continuing, design, fonts, style
 from ..reported import reported
 from ..widgets.ask import ask
 from ..widgets.log_pane import LINES_KEPT, LogPane
@@ -1017,14 +1017,17 @@ class RunView(QWidget):
         None for nothing): "Continue from batch N" or "Fit again on the saved simulations", or "Resume the training"
         with "Discard" beside it for the training the run kept; for a narrowing round it kept, "Resume the training"
         alone, and under the page's sentence what that Resume loads and puts in use, as the round's row says it. A press
-        hands the offer to the window, as Home's button does; "Discard" deletes the kept training. Until the page draws
-        another run."""
+        hands the offer to the window, as Home's button does; "Discard" deletes the kept training. A kept training, or a
+        kept round, that cannot be resumed is offered nothing: under the sentence, why, and where it can be deleted.
+        Until the page draws another run."""
         self._past_offer = offer if offer is not None and not getattr(offer, "why_not", "") else None
         kind = getattr(self._past_offer, "kind", None)
         if kind in ("continue", "fit_again"):
             self.continue_button.setText(self._past_offer.button)
         if kind == "round" and getattr(self._past_offer, "loads", ""):
             self.notice.setText(self._past_offer.loads)
+        if offer is not None and self._past_offer is None:
+            self.notice.setText(continuing.not_resumable_words(offer))
         self._arrange()
 
     def refused(self, sentence: str) -> None:

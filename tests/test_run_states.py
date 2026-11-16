@@ -6441,13 +6441,13 @@ def test_a_chain_whose_first_link_raises_ends_and_raises(tmp_path):
 
 def _kept_many(store, count=12):
     """``count`` kept trainings in ``store``, each that can be resumed (its set whole, its code, constants and libraries
-    this process's): the first named with a name of more than sixty characters, each made from a bounds file of a long
-    path. Their ids."""
+    this process's, its prior in Records): the first named with a name of more than sixty characters, each made from a
+    bounds file of a long path. Their ids."""
     from types import SimpleNamespace
     from core.artifacts import write_fit_manifest
     from core.SBI import fit_state
-    from tests._fixtures import _fit_body, write_simulation_set
-    made = []
+    from tests._fixtures import _fit_body, _nad_cfg, _prior_artifact, write_simulation_set
+    prior, made = _prior_artifact(store, _nad_cfg(), name="retrain_prior").id, []
     for at in range(count):
         folder = write_simulation_set(store.kind_dir("simulation"), {"kept": at}, 4, complete=True)
         identity = {"simulation": {"kept": at}, "batches": 4, "settings": {}, "code": fit_state.loaded_code(),
@@ -6458,7 +6458,7 @@ def _kept_many(store, count=12):
         path = store.new_fit_dir()
         path.mkdir(parents=True)
         made.append(write_fit_manifest(path, body=body, cfg=cfg, config={"model": "NADROWSKI", "chi_mode": True},
-                                       parents={"prior": "p", "simulation": folder.name,
+                                       parents={"prior": prior, "simulation": folder.name,
                                                 "parent_posterior": "20261002T120000",
                                                 "observation": "20261002T130000"}).id)
     return made

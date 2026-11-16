@@ -33,6 +33,7 @@ from core.refusals import Refusal, require_at_least, require_between
 from core.SBI import truncate
 
 from ... import check_lineage, design, fonts, plans, record_words, settings, style, texts
+from ...continuing import KEPT_HEADS
 from ...memory_limit import computer, limit_words, memory_limit_in_force
 from ...remembered import OBSERVATION_KEY, put_many
 from ...run import ends, history
@@ -80,7 +81,7 @@ _FIT = ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "learni
 #: The rows a plan fills, in the form's order.
 PLAN_ROWS = ("hpd_level", "n_directions", *_FIT)
 #: The list of kept narrowing rounds: its heading, its two buttons and Delete's question.
-KEPT_HEAD = "Kept narrowing rounds"
+KEPT_HEAD = KEPT_HEADS["narrowing"]
 RESUME_WORDS = "Resume"
 DELETE_WORDS = "Delete"
 DELETE_TITLE = "Delete this kept narrowing round?"

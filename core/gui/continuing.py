@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Iterable
 
+from .keys import place_words
 from .step_facts import stopped_words
 from .texts import date_text, number_text
 
@@ -39,6 +40,10 @@ GONE_OBSERVATION = "an observation no longer in Records"
 GONE_POSTERIOR = "a posterior no longer in Records"
 #: What a kept narrowing round's row says its Resume loads.
 LOADS_TEXT = "Resume loads {}, its {} and {}, and puts them in use."
+#: The heading of each step's list of what it keeps, and where the past view of a run says a kept training, or a kept
+#: narrowing round, that cannot be resumed can be deleted.
+KEPT_HEADS = {"training": "Kept trainings", "narrowing": "Kept narrowing rounds"}
+DELETED_WHERE_TEXT = "It can be deleted under '{}' in {}."
 #: How a history's training ended, as an offer's sentence says it.
 HOW = {"failed": "failed", "not seen to end": "was not seen to end", "stopped": "stopped"}
 
@@ -183,12 +188,23 @@ def resume_sentence(kept, prior_label: "str | None" = None, *, around: "str | No
     return " ".join(said)
 
 
-def _kept_offer(kept, runs: dict, prior_label, label) -> Offer:
+def not_resumable_words(offer) -> str:
+    """What the past view of a run says of the kept training, or the kept narrowing round, ``offer`` holds that cannot
+    be resumed: why, and where it can be deleted; "" for one that can be."""
+    why = getattr(offer, "why_not", "")
+    if not why:
+        return ""
+    step = getattr(offer, "step", "training")
+    return f"{why} {DELETED_WHERE_TEXT.format(KEPT_HEADS[step], place_words(step))}"
+
+
+def _kept_offer(kept, runs: dict, prior_label, label, gone) -> Offer:
     """A kept training as an offer: a narrowing round's, on its page, or another's, with why it cannot be resumed where
-    it cannot, as a sentence."""
+    it cannot, as a sentence: the record's own reason, else what of the records its Resume loads is gone (``gone``),
+    as its press says it."""
     region = getattr(kept, "region", None)
-    why = "" if getattr(kept, "can_resume", False) else as_sentence(getattr(kept, "why_not", None)
-                                                                   or "it cannot be resumed")
+    why = (" ".join(gone(kept)) if getattr(kept, "can_resume", False)
+           else as_sentence(getattr(kept, "why_not", None) or "it cannot be resumed"))
     ident = getattr(kept, "id", None)
     parents = getattr(kept, "parents", None) or {}
     parents = parents if isinstance(parents, dict) else {}
@@ -279,7 +295,8 @@ def _ended_sentence(name: str, how: str, at, done: int, *, whole: bool, what: st
 def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
            set_batches: Callable[[str], "int | None"],
            prior_label: Callable[[str], "str | None"] = lambda _ident: None,
-           label: Callable[[str, str], "str | None"] = lambda _kind, _ident: None) -> tuple[Offer, ...]:
+           label: Callable[[str, str], "str | None"] = lambda _kind, _ident: None,
+           gone: Callable[[object], Iterable[str]] = lambda _kept: ()) -> tuple[Offer, ...]:
     """Every offer, newest first: each kept training (``kept_rows``, read by their attributes as ``KeptFit`` holds them),
     resumable or not, a narrowing round's on its own page; and, of the history of the records folder ``records_root``
     (``histories``, as ``history.read`` gives them, of any records folder and any order), the newest training and the
@@ -290,7 +307,8 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
     offers what the steps alone say. A later run of the same word of that folder, whatever its end, leaves an earlier one
     nothing; a run of the other word does not count. ``prior_label`` names a kept training's prior by its id, as a
     sentence names it, None for one no longer in Records; ``label`` names a kept narrowing round's observation and
-    parent posterior by their kind and id, the same way."""
+    parent posterior by their kind and id, the same way; ``gone`` says, in sentences, what of the records a kept
+    training's Resume loads is no longer in Records, and a kept training it says any of offers no Resume."""
     records = [record for record in histories if isinstance(record, dict)]
     kept_rows = list(kept_rows)
     newest, runs = [], {}
@@ -305,7 +323,7 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
                 runs[fit["kept_id"]] = record["id"]
         if ran:
             newest.append(ran[-1][1])
-    kept = [_kept_offer(row, runs, prior_label, label) for row in kept_rows]
+    kept = [_kept_offer(row, runs, prior_label, label, gone) for row in kept_rows]
     kept_on = {getattr(row, "parents", {}).get("simulation") for row in kept_rows
                if getattr(row, "can_resume", False) and isinstance(getattr(row, "parents", None), dict)}
     found = list(kept)

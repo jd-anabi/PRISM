@@ -109,7 +109,7 @@ NAME_TEXT = "This kept training has no name yet. A posterior needs one."
 NAME_TAKEN_TEXT = "The name '{}' is now taken by another posterior. This training needs another one."
 #: The list of kept trainings: its heading, its two buttons, and what a row says of a training a run of this window
 #: trains. Delete's question is the run's table's, which the past view of a run that kept a training asks too.
-KEPT_HEAD = "Kept trainings"
+KEPT_HEAD = continuing.KEPT_HEADS["training"]
 RESUME_WORDS = "Resume"
 DELETE_WORDS = "Delete"
 RUNNING_TEXT = "Running: a run of this window is training it."

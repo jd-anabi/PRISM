@@ -36,8 +36,9 @@ def read_offers(store, folder) -> tuple:
     """What a reopened window can offer, read now: the kept trainings of ``store`` (none read when the store lists no
     kept training), the run history in ``folder``, each simulation set's own count, read from the set, each kept
     training's prior as a sentence names it, and a kept narrowing round's observation and parent posterior the same
-    way, each record read once. The one reading of these; its caller never asks while a run is live. What cannot be read
-    offers nothing, and nothing raises."""
+    way, each record read once; a kept training whose records its Resume loads are no longer in Records
+    (``records_gone``, from those same readings) offers no Resume and says why. The one reading of these; its caller
+    never asks while a run is live. What cannot be read offers nothing, and nothing raises."""
     from types import SimpleNamespace
     from core.SBI import fit_state, training_checkpoint
     from ... import record_words
@@ -59,20 +60,29 @@ def read_offers(store, folder) -> tuple:
         done = (state or {}).get("batches_done")
         return done if isinstance(done, int) and not isinstance(done, bool) else None
 
-    labels: dict = {}
+    held: dict = {}
+
+    def present(kind: str, ident: str):
+        # Each record read once, with ``store.get``; raises, as it does, for one no longer in Records.
+        if (kind, ident) not in held:
+            try:
+                held[kind, ident] = store.get(kind, ident)
+            except Exception:                # noqa: BLE001 -- a record no longer in Records is said so
+                held[kind, ident] = None
+        if held[kind, ident] is None:
+            raise LookupError(kind)
+        return held[kind, ident]
 
     def label(kind: str, ident: str):
-        if (kind, ident) not in labels:
-            try:
-                manifest = store.get(kind, ident)
-                labels[kind, ident] = record_words.phrase_of(kind, SimpleNamespace(kind=kind, name=manifest.name,
-                                                                                   manifest=manifest))
-            except Exception:                # noqa: BLE001 -- a record no longer in Records is said so
-                labels[kind, ident] = None
-        return labels[kind, ident]
+        try:
+            manifest = present(kind, ident)
+            return record_words.phrase_of(kind, SimpleNamespace(kind=kind, name=manifest.name, manifest=manifest))
+        except Exception:                    # noqa: BLE001 -- a record no longer in Records is said so
+            return None
 
     return continuing.offers(runs, kept, records_root=str(store.root), set_batches=set_batches,
-                             prior_label=lambda ident: label("prior", ident), label=label)
+                             prior_label=lambda ident: label("prior", ident), label=label,
+                             gone=lambda row: records_gone(row, present))
 
 
 def _input(kept, key: str) -> "tuple[Path, str | None] | None":
@@ -95,12 +105,57 @@ def _sha(path: Path) -> "str | None":
         return None
 
 
+def _in_records(present, kind: str, ident) -> bool:
+    """Whether the record ``ident`` of ``kind`` is in Records, as ``present`` finds it (``store.get``, or a reading of
+    it), which raises for one that is not; an id that is no name is in no Records."""
+    if not isinstance(ident, str) or not ident:
+        return False
+    try:
+        present(kind, ident)
+    except Exception:                        # noqa: BLE001 -- deleted, torn, or never named
+        return False
+    return True
+
+
+def prior_gone(kept, present) -> tuple[str, ...]:
+    """The prior the kept training ``kept`` names gone from Records, as its sentence; none while ``present`` finds
+    it."""
+    prior = (getattr(kept, "parents", None) or {}).get("prior")
+    return () if _in_records(present, "prior", prior) else (PRIOR_GONE_TEXT,)
+
+
+def round_records_gone(kept, present) -> tuple[str, ...]:
+    """The posterior the kept narrowing round ``kept`` narrows and the observation it was trained around, each gone from
+    Records by the id its record names, as its sentence: the posterior named by that id, which is all that is known of
+    a record that is gone; a record that names no such id says so."""
+    found = []
+    parents = getattr(kept, "parents", None) or {}
+    for kind, key in (("posterior", "parent_posterior"), ("observation", "observation")):
+        ref = parents.get(key)
+        if not isinstance(ref, str) or not ref:
+            found.append(NO_PARENT_TEXT if kind == "posterior" else NO_OBSERVATION_TEXT)
+        elif not _in_records(present, kind, ref):
+            found.append(PARENT_GONE_TEXT.format(ref) if kind == "posterior" else OBSERVATION_GONE_TEXT)
+    return tuple(found)
+
+
+def records_gone(kept, present) -> tuple[str, ...]:
+    """What of the records the Resume of ``kept`` loads is no longer in Records, each a sentence, as ``present``
+    (``store.get``, or a reading of it) finds them: its prior; for a kept narrowing round, then the posterior it narrows
+    and its observation. The one rule its press refuses by and the reading of what is offered says before any press;
+    no file is read and no device is asked."""
+    found = prior_gone(kept, present)
+    if getattr(kept, "region", None) is not None:
+        found += round_records_gone(kept, present)
+    return found
+
+
 def resume_problems(kept, *, device, store) -> tuple[str, ...]:
     """What stops the Resume of ``kept`` before anything is read, each a sentence: its bounds file gone or changed since
     it began, or limits typed by hand with a forcing section, which its record cannot rebuild; its units file gone or
-    changed; its prior gone from Records; its model no longer one PRISM can train; a training kept on the graphics card
-    on a computer that has none now (``device``, the device check's answer). A library or the training code changed is
-    the kept training's own ``why_not``, said before any Resume is offered."""
+    changed; its prior gone from Records (``prior_gone``); its model no longer one PRISM can train; a training kept on
+    the graphics card on a computer that has none now (``device``, the device check's answer). A library or the
+    training code changed is the kept training's own ``why_not``, said before any Resume is offered."""
     found = []
     record = getattr(kept, "config", None) or {}
     model = record.get("model")
@@ -120,11 +175,7 @@ def resume_problems(kept, *, device, store) -> tuple[str, ...]:
             found.append(UNITS_GONE_TEXT.format(units[0].name))
         elif units[1] is not None and _sha(units[0]) != units[1]:
             found.append(UNITS_CHANGED_TEXT.format(units[0].name))
-    prior = (getattr(kept, "parents", None) or {}).get("prior")
-    try:
-        store.get("prior", prior)
-    except Exception:                        # noqa: BLE001 -- deleted, torn, or never named
-        found.append(PRIOR_GONE_TEXT)
+    found += prior_gone(kept, store.get)
     if record.get("device") == "cuda" and getattr(getattr(device, "device", None), "type", None) != "cuda":
         found.append(NO_CARD_TEXT)
     return tuple(found)
@@ -133,20 +184,8 @@ def resume_problems(kept, *, device, store) -> tuple[str, ...]:
 def round_problems(kept, *, device, store) -> tuple[str, ...]:
     """What stops the Resume of the kept narrowing round ``kept`` before anything is read, each a sentence: what stops a
     training's (``resume_problems``), then the posterior it narrows and the observation it was trained around gone
-    from Records, each by the id its record names; the posterior named by that id, which is all that is known of a
-    record that is gone. A record that names no such id says so."""
-    found = list(resume_problems(kept, device=device, store=store))
-    parents = getattr(kept, "parents", None) or {}
-    for kind, key in (("posterior", "parent_posterior"), ("observation", "observation")):
-        ref = parents.get(key)
-        if not isinstance(ref, str) or not ref:
-            found.append(NO_PARENT_TEXT if kind == "posterior" else NO_OBSERVATION_TEXT)
-            continue
-        try:
-            store.get(kind, ref)
-        except Exception:                    # noqa: BLE001 -- deleted, torn, or never named
-            found.append(PARENT_GONE_TEXT.format(ref) if kind == "posterior" else OBSERVATION_GONE_TEXT)
-    return tuple(found)
+    from Records (``round_records_gone``)."""
+    return resume_problems(kept, device=device, store=store) + round_records_gone(kept, store.get)
 
 
 def resume_draft(kept) -> ConfigDraft:
