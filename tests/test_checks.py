@@ -1456,11 +1456,13 @@ def test_the_prior_pair_greys_the_calibration_by_the_engines_guard_and_names_the
 
 
 def test_the_foot_with_no_check_open_offers_the_next_check(tmp_path):
-    """With no check open the foot's main button opens the first deciding check that applies, has not passed and that a
-    run can still pass, named for it, and goes to Inference once none is left; it says no fact of its own, and with no
-    prior in use it is greyed with the reason of a step not done. A check open reads its own button's words, and "Run
-    again" once a record of it exists; on the page of a check with no button of its own, the comparison's, the foot
-    passes over that check, which stands open already, to the next, or to Inference."""
+    """With no check open the foot's main button opens the first deciding check that applies, has not passed, does not
+    wait for a posterior or for the simulations, and that a run can still pass, named for it; when only checks that
+    wait for those are left, before a training, it reads "Go to Training" and opens step 3; and it goes to Inference
+    once none is left. It says no fact of its own, and with no prior in use it is greyed with the reason of a step not
+    done. A check open reads its own button's words, and "Run again" once a record of it exists; on the page of a check
+    with no button of its own, the comparison's, the foot passes over that check, which stands open already, to the
+    next, to Training or to Inference."""
     from tests._fixtures import check_results, write_diagnostic
     from tests._runs import masked_none
     nothing_counted = f"10:00:00 info {masked_none(WHOLE)}\n"     # a posterior whose set counted no driven recording
@@ -1481,20 +1483,29 @@ def test_the_foot_with_no_check_open_offers_the_next_check(tmp_path):
         write_diagnostic(store, screen.session.cfg, diagnostic="probes", variant="mask", parents={"prior": prior},
                          **check_results("audit"))
         page.read_facts()
-        assert page.foot.main_button.text().replace("&", "") == (
-            "Open Unusable driven recordings: simulation set against the audit")
+        # before a training, what is left waits for a posterior or for the simulations, which step 3 makes
+        assert [(row.key, row.state) for row in screen.check_rows() if row.key in check_catalogue.DECIDING
+                and row.state != "Passed"] == [("comparison", "Waiting for the simulations"),
+                                               ("calibration", "Waiting for a posterior"),
+                                               ("input_use", "Waiting for a posterior"),
+                                               ("identifiability", "Waiting for a posterior")]
+        assert page.foot.main_button.text().replace("&", "") == "Go to Training", "a check that waits was offered"
+        page.open_check("comparison")
+        assert page.foot.main_button.text().replace("&", "") == "Go to Training", (
+            "the comparison's page offered a check that waits for training")
         page.foot.main_button.click()
-        assert page.open_key == "comparison"
-        assert page.foot.main_button.text().replace("&", "") == "Open Calibration", (
-            "the comparison's page offered itself")
-        page.foot.main_button.click()
-        assert page.open_key == "calibration"
+        assert window.current_place() == ("inference", "training")
+        window.go_to("inference", "checks")
         page.open_check(None)
         screen.session.posterior = _held_posterior(tmp_path, prior=screen.session.inf_prior, text=nothing_counted)
         page.read_facts()
         assert _row(screen.check_rows(), "comparison").state == "Not compared"
         assert page.foot.main_button.text().replace("&", "") == "Open Calibration", (
             "a check no run can pass was offered next")
+        page.open_check("comparison")
+        assert page.foot.main_button.text().replace("&", "") == "Open Calibration", (
+            "the comparison's page offered itself")
+        page.open_check(None)
         page.foot.main_button.click()
         assert page.open_key == "calibration"
         assert page.foot.main_button.text().replace("&", "") == "Run the calibration"

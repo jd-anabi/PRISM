@@ -35,8 +35,9 @@ CONFIG_FIELDS = ("model", "param_keys", "nd_lows", "nd_highs", "rescale_lows", "
 _EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
 #: The states a deciding check reads once a record of it counts, from the best to the worst.
 _DECIDED = ("Passed", "Look closer", "Failed")
-#: What the second line counts as waiting for step 3, and as not run yet.
-_WAITING_FOR_TRAINING = ("Waiting for a posterior", "Waiting for the simulations")
+#: What the second line counts as waiting for step 3, which the Checks list's main button passes over, and as not run
+#: yet.
+WAITING_FOR_TRAINING = ("Waiting for a posterior", "Waiting for the simulations")
 _NOT_RUN = ("Not run yet", "Waiting for the audit")
 
 #: What a row says when the check cannot run or cannot apply, before or beside its state.
@@ -591,7 +592,7 @@ def _second_line(deciding, held: Held) -> str:
     never = [row for row in deciding if no_run_passes(row, held=held)]
     for states, one, several in ((("Failed",), FAILED_COUNT_TEXT, FAILED_COUNT_TEXT),
                                  (("Look closer",), CLOSER_COUNT_TEXT, CLOSER_COUNT_TEXT),
-                                 (_WAITING_FOR_TRAINING, ONE_WAITS_TEXT, SEVERAL_WAIT_TEXT),
+                                 (WAITING_FOR_TRAINING, ONE_WAITS_TEXT, SEVERAL_WAIT_TEXT),
                                  (_NOT_RUN, NOT_RUN_COUNT_TEXT, NOT_RUN_COUNT_TEXT)):
         count = sum(row.state in states and row not in never for row in deciding)
         if count:

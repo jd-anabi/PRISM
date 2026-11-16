@@ -67,8 +67,10 @@ NARROW_COLUMNS = ("Check", "State")
 #: the list's two columns beside it, each check's name on two lines; and the width the list asks for beside it.
 CHECK_BESIDE_WIDTH = 890
 LIST_NARROW_WIDTH = 436
-#: The foot's main button with no check open.
+#: The foot's main button with no check open: the next deciding check, else step 3 while the checks left wait for what a
+#: training makes, else Inference.
 OPEN_WORDS = "Open {}"
+GO_TO_TRAINING = "Go to Training"
 GO_TO_INFERENCE = "Go to Inference"
 #: What the comparison after simulating says while a training or a narrowing round is live: it is worked out once the
 #: run's simulation ends.
@@ -347,7 +349,8 @@ class ValidatePanel(StepPage):
         return held() if callable(held) else None
 
     def _next_check(self) -> "str | None":
-        """The first deciding check that applies, has not passed and that a run can still pass, the check open passed
+        """The first deciding check that applies, has not passed, does not wait for a posterior or for the simulations
+        (a check that waits has nothing to press until a training), and that a run can still pass, the check open passed
         over, since its own page stands already; with nothing read, the first deciding check that is not open; None when
         none is left."""
         found, held = self._rows(), self._held()
@@ -355,9 +358,15 @@ class ValidatePanel(StepPage):
             return next(key for key in DECIDING if key != self.open_key)
         for row in found:
             if (row.key in DECIDING and row.key != self.open_key and row.state not in ("Passed", "Does not apply")
+                    and row.state not in check_lineage.WAITING_FOR_TRAINING
                     and not check_lineage.no_run_passes(row, held=held)):
                 return row.key
         return None
+
+    def _waits_for_training(self) -> bool:
+        """Whether a deciding check of the last reading waits for a posterior or for the simulations, which a training
+        makes."""
+        return any(row.key in DECIDING and row.state in check_lineage.WAITING_FOR_TRAINING for row in self._rows() or ())
 
     def _draw(self, *, read: bool) -> None:
         """The heading, the headline, the table and each check's page, from the screen's last reading of what the
@@ -612,17 +621,21 @@ class ValidatePanel(StepPage):
     # ── what a page answers ──
     def main_words(self) -> str:
         """The open check's button, "Run again" once a record of it exists; with none open, or with one open that has
-        no button, "Open" and the next deciding check, or "Go to Inference"."""
+        no button, "Open" and the next deciding check; while only checks that wait for a training are left, "Go to
+        Training"; else "Go to Inference"."""
         key = self.open_key
         if key is not None and entry(key).button:
             row = self._by_key().get(key)
             ran = row is not None and (row.record is not None or bool(row.earlier) or row.state == "Done")
             return AGAIN_WORDS if ran else entry(key).button
         following = self._next_check()
-        return OPEN_WORDS.format(entry(following).name) if following is not None else GO_TO_INFERENCE
+        if following is not None:
+            return OPEN_WORDS.format(entry(following).name)
+        return GO_TO_TRAINING if self._waits_for_training() else GO_TO_INFERENCE
 
     def main_pressed(self) -> None:
-        """Run the open check; with none open, open the next deciding check, or go to Inference."""
+        """Run the open check; with none open, open the next deciding check, or go to Training while only checks that
+        wait for a training are left, or else to Inference."""
         key = self.open_key
         if key in _STARTS:
             getattr(self, _STARTS[key])()
@@ -630,10 +643,12 @@ class ValidatePanel(StepPage):
         if key is not None and entry(key).button:
             return                           # every check with a button is started above
         following = self._next_check()
-        if following is None:
-            self._screen.navigate.emit("inference", "infer")
-        else:
+        if following is not None:
             self.open_check(following)
+        elif self._waits_for_training():
+            self._screen.navigate.emit("inference", "training")
+        else:
+            self._screen.navigate.emit("inference", "infer")
 
     def facts_from_form(self) -> tuple:
         """With no check open: that nothing can be checked with no prior, the changes of the earlier steps not applied,
