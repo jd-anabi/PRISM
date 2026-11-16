@@ -1018,8 +1018,8 @@ class RunView(QWidget):
         with "Discard" beside it for the training the run kept; for a narrowing round it kept, "Resume the training"
         alone, and under the page's sentence what that Resume loads and puts in use, as the round's row says it. A press
         hands the offer to the window, as Home's button does; "Discard" deletes the kept training. A kept training, or a
-        kept round, that cannot be resumed is offered nothing: under the sentence, why, and where it can be deleted.
-        Until the page draws another run."""
+        kept round, that cannot be resumed is offered nothing: under the sentence, which says what the run kept then,
+        that it cannot be resumed now, why, and where it can be deleted. Until the page draws another run."""
         self._past_offer = offer if offer is not None and not getattr(offer, "why_not", "") else None
         kind = getattr(self._past_offer, "kind", None)
         if kind in ("continue", "fit_again"):

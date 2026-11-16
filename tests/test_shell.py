@@ -8435,13 +8435,15 @@ _HISTORY_ROWS = ({"name": "num_runs", "value": 7_000}, {"name": "hidden_features
 
 
 def _a_failed_training(store, tmp_path, held, *, batches=236, outcome="failed", acknowledged=True, rows=_HISTORY_ROWS,
-                       settings=True, kept=None, handed=None, folder=None, ident=_REOPENED, day=3):
-    """A training of the records folder in use that ended ``outcome`` at 09:00 on ``day`` October, its history in the
-    test's folder of runs and its simulation set in the test's store holding ``batches`` of its 10,000, or the set
-    ``folder`` when one is handed, named as the run's own line names it, by its whole path; its settings those the
-    Training page hands (Nadrowski, its options, master.txt, the prior of ``held``, its name and note and ``rows``, each
-    of ``handed`` replacing its own), or none (``settings=False``), as a history written before they were kept; ``kept``
-    the kept training it names."""
+                       settings=True, kept=None, handed=None, folder=None, ident=_REOPENED, day=3, stage=None,
+                       passes=None):
+    """A training of the records folder in use that ended ``outcome`` at 09:00 on ``day`` October, in ``stage`` when
+    one is handed, its history in the test's folder of runs and its simulation set in the test's store holding
+    ``batches`` of its 10,000, or the set ``folder`` when one is handed, named as the run's own line names it, by its
+    whole path; its settings those the Training page hands (Nadrowski, its options, master.txt, the prior of ``held``,
+    its name and note and ``rows``, each of ``handed`` replacing its own), or none (``settings=False``), as a history
+    written before they were kept; ``kept`` the kept training it names, kept up to the epoch ``passes`` when one is
+    handed."""
     from tests._fixtures import write_history, write_simulation_set
     if folder is None:
         folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "continue"}, batches,
@@ -8453,9 +8455,10 @@ def _a_failed_training(store, tmp_path, held, *, batches=236, outcome="failed", 
                       for row in rows], **(handed or {})}
     return write_history(tmp_path / "runs", id=ident, word="Training", name="retrain_3",
                          place=["inference", "training"], records_root=str(store.root), started=_at(day, 3, 2, 11),
-                         ended=_at(day, 9, 0), outcome=outcome, acknowledged=acknowledged,
+                         ended=_at(day, 9, 0), outcome=outcome, acknowledged=acknowledged, stage=stage,
                          simulation_set={"folder": str(folder), "batches": 10_000, "at_start": 0, "at_end": 5},
-                         settings=given if settings else None, fit=None if kept is None else {"kept_id": kept})
+                         settings=given if settings else None,
+                         fit=None if kept is None else {"kept_id": kept, **({"passes": passes} if passes else {})})
 
 
 def _a_kept_training(store, held, *, name="retrain_3", passes=7, stopped="on_purpose", cfg=None, config=None,
@@ -9225,12 +9228,14 @@ def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(sto
     """A kept training whose prior is no longer in Records, after a reopening, a run's history naming it: Home offers
     no Resume; its row in the Training step's list offers none and says why before any press, in the words its Resume's
     refusal says, and keeps "Delete"; and the past view of the run that kept it offers nothing, neither "Resume the
-    training" nor "Discard", and says why, and where it can be deleted."""
+    training" nor "Discard", and under the run's own sentence, which says what the run kept when it was stopped, says
+    that it cannot be resumed now, why, and where it can be deleted."""
     from core.SBI import fit_state
     held = _a_launch_before(store, tmp_path, monkeypatch)
     kept = _a_kept_training(store, held, batches=10_000)
     the_set = store.kind_dir("simulation") / fit_state.kept_fit(store, kept).parents["simulation"]
-    _a_failed_training(store, tmp_path, held, batches=10_000, folder=the_set, kept=kept)
+    _a_failed_training(store, tmp_path, held, batches=10_000, folder=the_set, kept=kept, outcome="stopped",
+                       stage="Fitting", passes=7)
     store.delete("prior", held.prior, force=True)
     said = "The prior it was trained with is no longer in Records."
     window, home = _home_of_last_time(tmp_path)
@@ -9250,8 +9255,22 @@ def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(sto
     assert past is not None and page.results.currentWidget() is past
     assert not any(button.isVisibleTo(past) for button in (past.resume_button, past.discard_kept_button,
                                                            past.continue_button)), "the past view offers a button"
-    assert (past.notice.text(), past.notice.isVisibleTo(past)) == (
-        f"{said} It can be deleted under 'Kept trainings' in step 3, Training.", True), past.notice.text()
+    _the_then_above_the_now(past, "; the training is kept up to epoch 7, so you can resume it.",
+                            f"It cannot be resumed now. {said} It can be deleted under 'Kept trainings' in step 3, "
+                            "Training.")
+
+
+def _the_then_above_the_now(past, then: str, now: str) -> None:
+    """The past view ``past`` says what its run kept as its history says it, its sentence ending ``then``, and under it
+    what can be done now, its notice ``now``: the sentence first, the notice under it."""
+    for _ in range(3):
+        QApplication.processEvents()
+    sentence, notice = past.sentence, past.notice
+    assert (sentence.text().endswith(then), notice.text(), notice.isVisibleTo(past)) == (True, now, True), (
+        sentence.text(), notice.text())
+    bottom = sentence.mapTo(past, QPoint(0, sentence.height())).y()
+    assert sentence.isVisibleTo(past) and bottom <= notice.mapTo(past, QPoint(0, 0)).y(), (
+        "the notice does not stand under the run's sentence")
 
 
 def test_a_kept_training_another_program_writes_reaches_home_at_its_next_opening(store, tmp_path, monkeypatch):
@@ -10300,7 +10319,8 @@ def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gon
     """A kept narrowing round whose posterior it narrows, whose prior or whose observation is no longer in Records,
     after a reopening, a run's history naming it: Home passes over it; its row on the Narrowing round step offers no
     "Resume" and says why before any press, in the words its Resume's refusal says, and keeps "Delete"; and the past
-    view of the run that kept it offers nothing and says why, and where it can be deleted."""
+    view of the run that kept it offers nothing and, under the run's own sentence, which says what the run kept when it
+    was stopped, says that it cannot be resumed now, why, and where it can be deleted."""
     from core.SBI import fit_state
     from tests._fixtures import write_history, write_simulation_set
     held, kept = _a_kept_round_left(store, tmp_path, monkeypatch)
@@ -10309,9 +10329,9 @@ def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gon
     run = "20261003T030211-narrowing-round"
     write_history(tmp_path / "runs", id=run, word="Narrowing round", name="retrain_round1",
                   place=["inference", "narrowing"], records_root=str(store.root), started=_at(3, 3, 2, 11),
-                  ended=_at(3, 9, 0), outcome="failed", acknowledged=True,
+                  ended=_at(3, 9, 0), outcome="stopped", acknowledged=True, stage="Fitting",
                   simulation_set={"folder": str(folder), "batches": 4, "at_start": 0, "at_end": 4},
-                  settings=None, fit={"kept_id": kept})
+                  settings=None, fit={"kept_id": kept, "passes": 41})
     if gone == "the posterior it narrows":
         store.delete("posterior", held.posterior, force=True)
         said = f"The posterior it narrows, {held.posterior}, is no longer in Records."
@@ -10340,9 +10360,9 @@ def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gon
     assert past is not None and page.results.currentWidget() is past
     assert not any(button.isVisibleTo(past) for button in (past.resume_button, past.discard_kept_button,
                                                            past.continue_button)), "the past view offers a button"
-    assert (past.notice.text(), past.notice.isVisibleTo(past)) == (
-        f"{said} It can be deleted under 'Kept narrowing rounds' in step 6, Narrowing round.", True), (
-        past.notice.text())
+    _the_then_above_the_now(past, "; the training is kept up to epoch 41, so you can resume it.",
+                            f"It cannot be resumed now. {said} It can be deleted under 'Kept narrowing rounds' in "
+                            "step 6, Narrowing round.")
 
 
 # ── Home's presses, the load view's order ──

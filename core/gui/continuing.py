@@ -41,9 +41,11 @@ GONE_POSTERIOR = "a posterior no longer in Records"
 #: What a kept narrowing round's row says its Resume loads.
 LOADS_TEXT = "Resume loads {}, its {} and {}, and puts them in use."
 #: The heading of each step's list of what it keeps, and where the past view of a run says a kept training, or a kept
-#: narrowing round, that cannot be resumed can be deleted.
+#: narrowing round, that cannot be resumed can be deleted, after saying, against what the run kept then, that it
+#: cannot be resumed now.
 KEPT_HEADS = {"training": "Kept trainings", "narrowing": "Kept narrowing rounds"}
 DELETED_WHERE_TEXT = "It can be deleted under '{}' in {}."
+NOT_NOW_TEXT = "It cannot be resumed now."
 #: How a history's training ended, as an offer's sentence says it.
 HOW = {"failed": "failed", "not seen to end": "was not seen to end", "stopped": "stopped"}
 
@@ -190,12 +192,13 @@ def resume_sentence(kept, prior_label: "str | None" = None, *, around: "str | No
 
 def not_resumable_words(offer) -> str:
     """What the past view of a run says of the kept training, or the kept narrowing round, ``offer`` holds that cannot
-    be resumed: why, and where it can be deleted; "" for one that can be."""
+    be resumed, under the run's own sentence, which says what the run kept then: that it cannot be resumed now, why,
+    and where it can be deleted; "" for one that can be."""
     why = getattr(offer, "why_not", "")
     if not why:
         return ""
     step = getattr(offer, "step", "training")
-    return f"{why} {DELETED_WHERE_TEXT.format(KEPT_HEADS[step], place_words(step))}"
+    return f"{NOT_NOW_TEXT} {why} {DELETED_WHERE_TEXT.format(KEPT_HEADS[step], place_words(step))}"
 
 
 def _kept_offer(kept, runs: dict, prior_label, label, gone) -> Offer:
