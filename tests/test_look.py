@@ -4445,17 +4445,25 @@ def test_a_wrapped_cell_makes_its_row_as_tall_as_its_lines_at_the_width_it_has()
         assert 30 <= wide < narrow and (wide - 10) % 20 == 0          # more room, fewer lines: measured again
         assert table.height() == 2 + 27 + wide + 30 + 2
 
-    # Words in the first column that take one line plain and two semibold. Where a row can be selected the row
-    # keeps the second line, since a selected row sets them semibold; a table that selects nothing never does,
-    # and keeps one line. Heights only: no pixel of a letter is read.
+    # Words in the first column that take one line plain and two semibold. A row takes the lines its words take
+    # as they are drawn: the second line only while it is selected, since a selected row sets them semibold, and
+    # one line again once it is not; a table that selects nothing never sets them so, and keeps one line. Heights
+    # only: no pixel of a letter is read.
     name = "Graphics card memory"
     room = math.ceil(QFontMetricsF(fonts.inter("body")).horizontalAdvance(name))
     assert QFontMetricsF(fonts.inter("strong")).horizontalAdvance(name) > room
-    for selectable, height in ((True, 50), (False, 30)):
+    for selectable, heights in ((True, (30, 50, 30)), (False, (30, 30, 30))):
         first = rt.RuleTable([rt.Column("", room + 10 + 16), rt.Column("")],
-                             [[rt.TextCell(name, wrap=True), rt.TextCell("")]], selectable=selectable)
+                             [[rt.TextCell(name, wrap=True), rt.TextCell("")], [rt.TextCell("a"), rt.TextCell("")]],
+                             selectable=selectable)
         with _on_a_page(first, width=500):
-            assert first.view.rowHeight(0) == height, selectable
+            seen = [first.view.rowHeight(0)]
+            first.select_row(0)
+            seen.append(first.view.rowHeight(0))
+            first.select_row(1)
+            seen.append(first.view.rowHeight(0))
+            assert tuple(seen) == heights, (selectable, seen)
+            assert first.height() == 2 + 27 + seen[-1] + 30 + 2, "the table did not follow its rows' heights"
 
 
 def test_a_value_or_a_states_word_too_long_for_its_column_is_cut_with_an_ellipsis_and_never_loses_its_start(monkeypatch):

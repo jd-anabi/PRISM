@@ -2593,6 +2593,57 @@ def test_a_groups_heading_is_no_row_a_click_or_the_keyboard_stops_on(tmp_path):
             assert page.open_key == page.listing.key_at[last]
 
 
+def _a_failed_band(store, cfg, _prior, _posterior) -> None:
+    """A frequency band that failed for the master's spontaneous cell: its result is long, its table of every
+    frequency among it."""
+    from tests._fixtures import check_results, write_diagnostic
+    write_diagnostic(store, cfg, diagnostic="probes", variant="band", cell=str(_cell_file()),
+                     **check_results("band", band_holds=False))
+
+
+def _top_in(widget, body) -> int:
+    """Where ``widget``'s top stands in ``body``, the page's scrolling body."""
+    from PySide6.QtCore import QPoint
+    return widget.mapTo(body, QPoint(0, 0)).y()
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_beside_a_long_result_the_list_stands_at_the_top_and_each_row_is_as_tall_as_its_words(factor, tmp_path):
+    """At the window's opening size, beside a check's page whose result is long (a frequency band that failed, its
+    table of every frequency among it), the list of checks stands at the top of its column, level with the page beside
+    it, whatever that page holds. Every row of the list a check's page stands beside is as tall as its words take as
+    they are drawn, the name of a row that is not selected in the body's weight: no row keeps the room of a line its
+    words do not take."""
+    from core.gui import design
+    from core.gui.widgets import rule_table as rt
+    with text_size(factor), _checks_page(tmp_path, posterior=False, records=_a_failed_band,
+                                         size=(design.scaled(1300), design.scaled(820))) as (_window, _screen, page,
+                                                                                            _store):
+        page.open_check("band")
+        _settle()
+        detail, body, table = page.check_pages["band"], page.scroller.body, page.listing.narrow
+        assert page.list_detail.beside() and detail.height() > table.height(), (
+            "the band's page did not stand beside the list, taller than it")
+        assert abs(_top_in(table, body) - _top_in(detail, body)) <= 4, (
+            factor, _top_in(table, body), _top_in(detail, body))
+        view = page.listing.narrow.view
+        line, pad = design.scaled(design.TYPE["body"][1]), design.scaled(design.SIZE["table_pad"])
+        marker = design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["state_gap"])
+        count = view.model().columnCount()
+        for row, key in page.listing.key_at.items():
+            if row == page.listing.row_of["band"]:
+                continue                     # the open check's row, its name set semibold
+            name, state = (view.model().index(row, column).data(Qt.UserRole) for column in range(2))
+            lead, gap = rt._pads(0, count)
+            lines = rt._wrapped(name.text, rt._face("text"), view.columnWidth(0) - lead - gap, line)[1]
+            if isinstance(state, rt.StateCell):
+                lead, gap = rt._pads(1, count)
+                lines = max(lines, rt._wrapped(state.word, rt._face("word"), view.columnWidth(1) - lead - gap - marker,
+                                               line)[1])
+            want = max(lines * line + 2 * pad, design.scaled(design.SIZE["table_row"]))
+            assert view.rowHeight(row) == want, (factor, key, view.rowHeight(row), want)
+
+
 def test_a_drawing_keeps_the_keyboards_row_and_the_open_checks_row(tmp_path):
     """The list drawn again, at a reading or as the page draws, keeps the row the keyboard is on, by its check, in the
     whole list and beside a check's page; and beside a check's page the open check's row stays selected."""

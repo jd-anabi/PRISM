@@ -14,7 +14,7 @@ page that owns the rows orders them and hands them in again.
 import math
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QModelIndex, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (QFontMetricsF, QPainter, QPen, QStandardItem, QStandardItemModel, QTextCharFormat,
                            QTextLayout, QTextOption)
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QSizePolicy, QStyle, QStyledItemDelegate,
@@ -522,15 +522,17 @@ class RuleView(QTableView):
     def _cell_height(self, index) -> int:
         """The height one cell asks of its row: a line of words, or as many lines as its wrapped words take
         at the width its column will have, or a line and a small one under it; the space above and below; and
-        never under a row's least height. Wrapped words in the first column are measured semibold where a row
-        can be selected, which is how a selected row sets them; a table that selects nothing never sets them
-        so, and measures them plain."""
+        never under a row's least height. Wrapped words in the first column are measured as they are drawn:
+        semibold in the row that is selected, which is how a selected row sets them, and plain in every other,
+        so that no row keeps the room of a line its words do not take."""
         cell = index.data(Qt.UserRole)
         line = design.scaled(design.TYPE["body"][1])
         lines = line
         if isinstance(cell, TextCell) and cell.wrap:
             lead, gap = _pads(index.column(), len(self._columns))
-            semibold = index.column() == 0 and self.selectionMode() != QAbstractItemView.NoSelection
+            semibold = (index.column() == 0 and self.selectionMode() != QAbstractItemView.NoSelection
+                        and self.selectionModel() is not None
+                        and self.selectionModel().isRowSelected(index.row(), QModelIndex()))
             font = _face("selected" if semibold else "text")
             lines = line * _wrapped(cell.text, font, self._column_width(index.column()) - lead - gap, line)[1]
         elif isinstance(cell, StateCell) and self._columns[index.column()].wrap:
@@ -563,6 +565,11 @@ class RuleView(QTableView):
         if any(column.wrap for column in self._columns):
             self._fit_columns()              # a column that wraps gives up room, or takes it back, at another width
         self._set_heights()                  # wrapped words take other lines at another width
+
+    @reported()
+    def selectionChanged(self, selected, deselected):
+        super().selectionChanged(selected, deselected)
+        self._set_heights()                  # a selected row's first words are semibold, and may take another line
 
     @reported()
     def paintEvent(self, event):

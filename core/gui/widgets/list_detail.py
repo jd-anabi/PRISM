@@ -5,7 +5,8 @@ the list's place, with a plain link above it that goes back to the whole list.
 The switch reads the page's width, as the page's body is told it, and nothing else: the low window is a rule on the
 window's height and says nothing of the room beside a list. Beside, neither part is ever narrower than it needs to be:
 the detail stands beside the list only where the width holds the width the list asks for, the gap and the detail's least
-width as it stands in the room left, and from the width the caller names, which it scales.
+width as it stands in the room left, and from the width the caller names, which it scales. Beside, each stands at the top
+of its column, as tall as it is, whatever the other holds.
 """
 from PySide6.QtCore import QCoreApplication, QEvent, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
@@ -73,7 +74,7 @@ class ListAndDetail(QWidget):
         self._row = QHBoxLayout()
         self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(self._gap)
-        self._row.addWidget(listing, 1)
+        self._row.addWidget(listing, 1, Qt.AlignTop)
         box.addLayout(self._row)
         self._listing_widths = (listing.minimumWidth(), listing.maximumWidth())   # its own, put back in place
         listing.set_narrow(False)
@@ -87,7 +88,7 @@ class ListAndDetail(QWidget):
                 self.detail.hide()
             self.detail = detail
             if detail is not None:
-                self._row.addWidget(detail, 1)
+                self._row.addWidget(detail, 1, Qt.AlignTop)
         self.listing.set_narrow(detail is not None)
         self._arrange()
 
