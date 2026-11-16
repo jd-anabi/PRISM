@@ -682,6 +682,75 @@ def _menu_of(label) -> tuple:
     return entries, kind, bool(looped), kept, bool(label.findChildren(QMenu))
 
 
+def test_a_long_failure_message_wraps_within_a_narrow_page_and_is_copied_as_it_is_highlighted(tmp_path):
+    """On a run page 326 px wide, as at the window's least size, a failure's own message, a long path among its words
+    and in it a character outside the Basic Multilingual Plane, takes as many lines as it needs, broken inside the path
+    where it must: it stands as tall as those lines and no wider than the page. A drag across that character highlights
+    it whole, and the keyboard's copy copies exactly what is highlighted; the right button's menu is the toolkit's own
+    for a selectable label; a double click highlights the message to its end; and with no words the menu is the
+    toolkit's for none. The clipboard is put back as it was."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from tests._look_helpers import _settle
+    from tests._window_helpers import in_front, shown_off_screen
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    view.setFixedWidth(326)
+    shown_off_screen(host, 1300, 1000)
+    path = (f"C:/Users/J/PRISM/Artifacts/simulations/_unnamed__20261003T030211/{chr(0x1F4C1)}"
+            f"{'very_long_batch_name_' * 3}6150.pt")
+    unwritten = StandIn()
+    start_run(host, unwritten, spec=_training())
+    _to_the_simulation(app, unwritten, text, held, _set(tmp_path, 236), 236)
+    unwritten.fail(RuntimeError(f"the batch could not be written to its file\n{path}"))    # the path adds to it
+    _ended(app, held)
+    _settle()
+    message = view.failure_message
+    lines, needed = _lines_needed(message)
+    assert path in message.text() and lines > 1 and message.width() <= view.width(), (lines, message.text())
+    assert message.height() >= needed - 1, ("the message is not wrapped within the page", lines, message.height(),
+                                            needed)
+    words = message.text().encode("utf-16-le")
+    units = words.find(chr(0x1F4C1).encode("utf-16-le")) // 2                       # where the character is
+    layout = _laid_out(message)
+    holds = next(index for index in range(layout.lineCount())
+                 if layout.lineAt(index).textStart() + layout.lineAt(index).textLength() > units)
+    last, end = _at_the_end_of(layout, holds + 1)               # the end of the line after the character's
+    assert units + 2 <= end < len(words) // 2, ("the drag does not cross the character, or takes it all", units, end,
+                                                 len(words) // 2)
+    clipboard = QApplication.clipboard()
+    was = clipboard.text()
+    toolkit = QLabel(host)                                   # the toolkit's own selectable label, for its menu
+    toolkit.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    toolkit.show()
+    try:
+        with in_front(host):
+            QTest.mousePress(message, Qt.LeftButton, Qt.NoModifier, QPoint(1, round(layout.lineAt(0).height() / 2)))
+            QTest.mouseMove(message, last)
+            QTest.mouseRelease(message, Qt.LeftButton, Qt.NoModifier, last)
+            marked = [(shown.start, shown.length) for shown in message._marked()]
+            clipboard.clear()
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_C, Qt.ControlModifier)
+            highlighted = words[:2 * end].decode("utf-16-le")
+            assert (marked, clipboard.text()) == ([(0, end)], highlighted), (
+                "the copy is not what is highlighted", marked, end, repr(clipboard.text()), repr(highlighted))
+            toolkit.setText(message.text())
+            toolkit.setSelection(0, 3)
+            assert _menu_of(message) == _menu_of(toolkit), "the right button's menu is not the toolkit's"
+            QTest.mouseDClick(message, Qt.LeftButton, Qt.NoModifier, last)
+            marked = [(shown.start, shown.length) for shown in message._marked()]
+            assert marked == [(0, len(words) // 2)], ("the whole message is not highlighted", marked, len(words) // 2)
+        message.setText("")
+        toolkit.setText("")
+        assert _menu_of(message)[:3] == _menu_of(toolkit)[:3], "the menu for no words"
+    finally:
+        clipboard.setText(was)
+        toolkit.deleteLater()
+
+
 def test_continue_from_batch_n_repeats_the_runs_own_call_with_the_must_continue_policy(tmp_path, monkeypatch):
     """"Continue from batch N" stands on the page of a training that failed, and of one that was stopped, while its
     simulation set is unfinished and holds a batch, N the batches the set holds as read from it once the run has
