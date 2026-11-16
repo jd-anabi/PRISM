@@ -6231,6 +6231,9 @@ def test_a_resume_refusal_is_said_on_the_row_that_was_pressed(store, tmp_path, m
     fix = "Press 'Start the narrowing round' on this page to start a new round from its first batch."
     assert (asked.sentence, asked.beneath) == (stage, fix) and fix == fields.fix_sentence("resume", here="narrowing")
     assert page._head_fact.sentence == f"{stage} {fix}"
+    button = page.foot.main_button.text().replace("&", "")
+    assert f"Press '{button}' on this page" in fields.fix_sentence("resume", here="narrowing"), (
+        "the sentence names the round's main button by other words than the button reads", button)
     # the name taken meanwhile by another process
     page.read_facts()
     _posterior_artifact(store, _nad_cfg(), name="retrain_round1", parents={})

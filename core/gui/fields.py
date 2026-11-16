@@ -47,7 +47,7 @@ from core.Helpers import labels
 from core.refusals import FIELDS
 
 from . import keys
-from .step_facts import NO_DIFFERENCE_TEXT
+from .step_facts import NO_DIFFERENCE_TEXT, ROUND_START_WORDS
 
 _FIXED = "Fixed by measurement: it cannot be changed in the window."
 
@@ -210,9 +210,10 @@ ASKED_ON = {"new_run": ("training", "narrowing"), "accept_truncated": ("training
 ON_A_PART = {("note", "records"): f"Edit it in the Note box {_in('records')}."}
 #: What a step says of a refusal of its own run under a setting the table names on another step's form, which its page
 #: does not show: a narrowing round's "Continue from batch N" is refused under the policy that Training's "Continue or
-#: start new" sets, and on the round's page a press then starts a new round.
-ON_A_STEP = {("resume", "narrowing"): "Press 'Start the narrowing round' on this page to start a new round from its "
-                                      "first batch."}
+#: start new" sets, and on the round's page a press of its main button, named in the words it reads, then starts a new
+#: round.
+ON_A_STEP = {("resume", "narrowing"): f"Press '{ROUND_START_WORDS}' on this page to start a new round from its first "
+                                      "batch."}
 
 
 #: A saved simulation set's identity as a person reads it, row by row: the entries a row folds into its one line, what
