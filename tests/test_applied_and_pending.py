@@ -5408,11 +5408,12 @@ SUMMARY = [{"name": "k", "q05": 0.11, "median": 0.2345, "q95": 0.4, "assumed": F
            {"name": "T", "q05": 290.0, "median": 300.0, "q95": 310.0, "assumed": True}]
 
 
-def _inferred(page, tmp_path, *, mode="simulated", coverage=0.93, observation="cell_b", saved_as="cell_b", truth=True):
+def _inferred(page, tmp_path, *, mode="simulated", coverage=0.93, observation="cell_b", saved_as="cell_b", truth=True,
+              digest=None):
     """Run an inference on ``page`` in ``mode`` to its end, its stand-in run returning an observation saved as
     ``saved_as`` (asked ``observation``), and an inference saved as retrain_inf whose record holds ``SUMMARY``, the
-    truth when ``truth``, ``coverage`` and three figures; the observation's record holds its trace. The observation's
-    id."""
+    truth when ``truth``, ``coverage`` and three figures; the observation's record holds its trace, and the observation
+    the digest ``digest``. The observation's id."""
     from core import orchestrator
     from core.gui.run.controller import controller
     from tests._runs import turn_until
@@ -5425,7 +5426,7 @@ def _inferred(page, tmp_path, *, mode="simulated", coverage=0.93, observation="c
     assert stand_in.started.wait(5), page.foot.reason.text()
     made = _an_observation(saved_as or "unnamed_made_here")        # the observation the stage saves
     held = _a_record(tmp_path / "observation", ["simulated_observation.png"], kind="observation", id=made,
-                     name=saved_as)
+                     name=saved_as, digest=digest)
     results = {"posterior_summary": SUMMARY, "ppc": {"coverage_90": coverage},
                "ground_truth": {"k": 0.2, "x_scale": 31.0, "t_scale": 3.0, "T": 300.0} if truth else None}
     inference = _a_record(tmp_path / "inference", ["posterior_predictive_check.png", "posterior_corner.png",
@@ -5497,6 +5498,23 @@ def test_narrow_around_this_observation_opens_the_round(tmp_path, monkeypatch):
         page.result.next_buttons[1].click()
         assert window.current_place() == ("inference", "infer") and page.result.isHidden()
         assert (page.names.name_value(), page.names.other_value(), page.names.note_value()) == ("", "", "")
+
+
+@pytest.mark.parametrize("narrowed, digest, offered", [
+    (True, "e" * 16, ("Run another inference",)),
+    (True, "d" * 16, ("Narrow around this observation", "Run another inference")),
+    (False, "e" * 16, ("Narrow around this observation", "Run another inference"))],
+    ids=["narrowed around another observation", "narrowed around this observation", "not narrowed"])
+def test_narrow_around_this_observation_is_offered_only_where_the_round_can_use_it(narrowed, digest, offered, tmp_path,
+                                                                                     monkeypatch):
+    """An inference's result offers "Narrow around this observation" only where the narrowing round can be run around
+    that observation, by the rule the round greys its list of observations by: with a posterior no narrowing round made,
+    or one narrowed around this same observation, by its digest; after an inference with a posterior narrowed around
+    another, "Run another inference" alone."""
+    with _fifth_step(tmp_path, monkeypatch, narrowed=narrowed) as (_window, _screen, page, _runs):
+        choose(monkeypatch, words="Run inference anyway")
+        _inferred(page, tmp_path, digest=digest)
+        assert tuple(step.words for step in page.result.next_steps()) == offered, page.result.next_steps()
 
 
 def test_an_inference_name_taken_meanwhile_empties_the_observations_name_and_says_why(tmp_path, monkeypatch):

@@ -45,7 +45,7 @@ from ...step_facts import (CANCEL, CANNOT_BE_USED_BLOCKS, CANNOT_BE_USED_TEXT, C
                            NEW_SET_ROUND_TITLE, NO_OBSERVATION_WORDS, NO_PRIOR_WORDS, REGION_TEXT, REGION_WARN_BELOW,
                            ROTATION_REUSED_TEXT, ROUND_CAME_FROM_TEXT, ROUND_IN_USE_TEXT, ROUND_KEPT_TEXT,
                            ROUND_START_WORDS, SAME_OBSERVATION_WORDS, KEPT_ROUND_TEXT, Fact, fit_row_problem,
-                           new_round_question, pressed_reading,
+                           narrows_around, new_round_question, pressed_reading,
                            round_facts, round_how_long, round_uses)
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.ask import ask
@@ -255,9 +255,9 @@ class TSNPEPanel(StepPage):
 
     def _usable(self, ident: str) -> bool:
         """Whether the observation ``ident`` can be used by the posterior in use: any, unless it was narrowed around one,
-        and then only that one, by its digest, as the last reading read the digests."""
-        wanted = self._narrowed_digest()
-        return wanted is None or not self._digests_read or self._digests.get(ident) == wanted
+        and then only that one, by its digest, as the last reading read the digests (``narrows_around``, the rule an
+        inference's result offers its next step by)."""
+        return not self._digests_read or narrows_around(self._held()[2], self._digests.get(ident))
 
     def _grey(self) -> None:
         """The observations the posterior in use cannot be used on, greyed in the list with why. Each row is told through

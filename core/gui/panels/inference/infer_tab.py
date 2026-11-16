@@ -49,8 +49,8 @@ from ...run.model import RunSpec
 from ...step_facts import (ANOTHER_WORDS, CANCEL, CELL_PROBLEM_TEXT, INFER_BLANKS, INFER_REMOVE, NARROW_WORDS,
                            NO_OBSERVATION_WORDS, NOT_MEASURED_TEXT, OBSERVATION_KEPT_TEXT, PLAN_NEEDS_LENGTH_TEXT,
                            PLAN_NEEDS_SPONTANEOUS_TEXT, PLANNED_TEXT, Fact,
-                           driven_reading, inference_facts, inference_uses, narrowed_question_words, observation_in_use,
-                           parameter_units, result_facts, result_table)
+                           driven_reading, inference_facts, inference_uses, narrowed_question_words, narrows_around,
+                           observation_in_use, parameter_units, result_facts, result_table)
 from ...widgets.ask import ask
 from ...widgets.artifact_picker import ArtifactPicker
 from ...widgets.form import NameAndNote, OtherName, RowTable, _dress, name_trouble
@@ -921,7 +921,9 @@ class InferPanel(StepPage):
 
     def _say_the_result(self, observation, inference, *, asked: str) -> None:
         """The result of the run that has ended, read from its two records, never while a run is live: the table of the
-        estimates, the pictures, what it says, and the next steps."""
+        estimates, the pictures, what it says, and the next steps: "Narrow around this observation" only where the round
+        can be run around it from the posterior in use, by the rule the round greys its list by, and "Run another
+        inference"."""
         results = getattr(inference, "results", None)
         results = results if isinstance(results, dict) else {}
         ppc = results.get("ppc") if isinstance(results.get("ppc"), dict) else {}
@@ -933,8 +935,9 @@ class InferPanel(StepPage):
                                           coverage=ppc.get("coverage_90"), asked=asked,
                                           saved_as=getattr(observation, "name", "") or ""))
         region.set_pictures(_pictures(inference) + _pictures(observation, first=False))
-        region.set_next_steps((NextStep(NARROW_WORDS, "narrowing", {"observation": observation.id}),
-                               NextStep(ANOTHER_WORDS, self.step)))
+        narrow = narrows_around(self._held()[1], getattr(observation, "digest", None))
+        region.set_next_steps(((NextStep(NARROW_WORDS, "narrowing", {"observation": observation.id}),) if narrow else ())
+                              + (NextStep(ANOTHER_WORDS, self.step),))
 
     def _next_step_pressed(self, step) -> None:
         """A next step of the result: "Run another inference" empties the result, the names and the note, on this page;

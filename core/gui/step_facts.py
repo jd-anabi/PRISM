@@ -1129,6 +1129,15 @@ def round_uses(posterior: str, prior: str, observation: str, body) -> str:
     return ROUND_USES_TEXT.format(posterior, prior, observation, tail)
 
 
+def narrows_around(posterior, digest) -> bool:
+    """Whether a narrowing round from ``posterior``, the posterior in use as the session holds it (None for none), can
+    be run around the observation whose digest is ``digest``: around any, unless the posterior was itself narrowed
+    around one, and then around that one alone, by its digest. The round greys its list of observations by it, and an
+    inference's result offers to narrow around its observation by it."""
+    narrowed = getattr(getattr(posterior, "posterior", None), "x_obs_digest", None)
+    return narrowed is None or digest == narrowed
+
+
 def round_how_long(expected, per_epoch=None) -> str:
     """How long the round's fit should take, from the epochs the last narrowing round of this kind ran (``expected``,
     its number and the words that say where it comes from, as the run's controller gives them) and the pace of an
