@@ -298,6 +298,12 @@ def _row(key: str, state: str, then: str = "", *, reason: str = "") -> CheckRow:
     return CheckRow(key, state, _line(state, None, then), None, None, (), reason)
 
 
+def live_row(key: str, state: str) -> CheckRow:
+    """The row of the check ``key`` as a live run's own reading decides it, no record among it: its ``state`` and its
+    state line alone."""
+    return _row(key, state)
+
+
 def _decided(one, belonging: Sequence[RecordRead], *, reason: str = "") -> CheckRow:
     """The row of the check ``one`` from its own records: the newest that counts decides, and the newest earlier one
     that counts and came out otherwise is said; with none that counts, "Not run yet", with what the newest that does not

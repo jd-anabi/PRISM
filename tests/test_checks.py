@@ -4599,6 +4599,50 @@ def test_an_acceptance_is_written_into_the_training_history_during_and_after_the
         turn_until(app, lambda: not controller().is_live())
 
 
+def test_while_a_training_is_live_the_comparisons_page_gives_one_answer(tmp_path):
+    """While a training is live, the comparison after simulating answers once on its page: the list's row (in the whole
+    table and the narrow one), the page's state line and the result under them are all the running training's, from its
+    run's model in memory: "Running" until its simulation ends, then its own comparison, here a difference to look
+    closer at, though the records read before it began say "Passed". The headline still counts the records."""
+    from tests._runs import StandIn, masked_line, start_run, training_spec, turn_until
+    app = qt_app()
+    with _checks_page(tmp_path, records=_an_audit) as (window, screen, page, store):
+        audit, = _audit_ids(store)
+        _a_set_of(tmp_path, store, screen, masked=86, compared={"audit": audit, "audit_fraction": 0.379,
+                                                                 "state": "Passed"})
+        page.read_facts()
+        page.open_check("comparison")
+        one = page.check_pages["comparison"]
+        assert _row(screen.check_rows(), "comparison").state == "Passed"
+        headline = page.headline.text()
+
+        def said() -> tuple:
+            at = page.listing.row_of["comparison"]
+            whole = page.listing.whole.view.model().index(at, 2).data(Qt.UserRole)
+            narrow = page.listing.narrow.view.model().index(at, 1).data(Qt.UserRole)
+            return (whole.word, narrow.word, one.state_line.sentence.plain_text(),
+                    one.result.verdict.sentence.plain_text())
+
+        training = StandIn(word="Training")
+        start_run(window.part("inference").tsnpe_panel, training, spec=training_spec(
+            place=("inference", "narrowing"), facts={"model": "NADROWSKI", "observation": "chi", "narrowed": False,
+                                                    "network": (256, 10), "cadence": 50,
+                                                    "audit": {"id": audit, "fraction": 0.379, "batches": 100}}))
+        assert training.started.wait(5)
+        page.refresh_local_gates()
+        assert said() == ("Running", "Running", "Running.", "Counted when simulation ends."), said()
+        training.say(masked_line(4163, 10_000, 3, WHOLE))
+        turn_until(app, lambda: controller().model.comparison() is not None)
+        page.refresh_local_gates()
+        whole, narrow, line, verdict = said()
+        assert (whole, narrow, line) == ("Look closer", "Look closer", "Look closer."), said()
+        assert verdict.endswith("up to 5 is a reason to look closer."), verdict
+        assert page.headline.text() == headline == screen.checks_summary().headline, "the headline left the records"
+        assert _row(screen.check_rows(), "comparison").state == "Passed", "the reading's row was changed"
+        training.release()
+        turn_until(app, lambda: not controller().is_live())
+
+
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_the_comparisons_table_beside_the_list_keeps_its_row_names_whole(factor, tmp_path):
     """At the window's opening size, at both text sizes, the comparison's page of a difference to look closer at stands

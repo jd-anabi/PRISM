@@ -381,16 +381,41 @@ class ValidatePanel(StepPage):
         self.headline_sentence.set_text(summary.sentence if summary is not None else "")
         self.headline_block.setVisible(summary is not None)
         found = self._rows()
-        self.listing.set_rows(found)
+        shown = self._as_shown(found)
+        self.listing.set_rows(shown)
         self.listing.select(self.open_key, current=False)
         by_key = {row.key: row for row in found or ()}
+        seen = {row.key: row for row in shown or ()}
         kept = getattr(self._screen, "checks_held", None)
         records = kept.records if kept is not None else ()
         for key, page in self.check_pages.items():
             row = by_key.get(key)
             result, source = self._result(key, row, found, kept, read=read, page=page)
-            page.show_row(row, result, earlier=check_lineage.earlier_lines(row, records) if row is not None else (),
-                          source=source)
+            page.show_row(seen.get(key), result,
+                          earlier=check_lineage.earlier_lines(row, records) if row is not None else (), source=source)
+
+    def _live_comparison(self, row) -> "tuple | None":
+        """While a training or a narrowing round is live, its own comparison after simulating, from its run's model in
+        memory, for the comparison's ``row`` as the reading made it: the state it reads ("Running" until the run's
+        simulation ends) and the comparison (None until then). None while no such run is live, and where the check
+        does not apply. Nothing is read: the one rule the list's row, the page's state line and its result follow."""
+        status, model = controller().status, controller().model
+        if row is None or row.state == "Does not apply" or not (status.live and status.word in TRAINING_WORDS):
+            return None
+        compared = model.comparison() if model is not None else None
+        return ("Running" if compared is None else compared.state), compared
+
+    def _as_shown(self, found) -> "tuple | None":
+        """The rows as the list and the checks' pages show them: the reading's, but the comparison's while a training or
+        a narrowing round is live, which is that run's own, as the result under its state line is, so that the page
+        gives one answer. The headline and the foot's next check count the reading's rows."""
+        if found is None:
+            return None
+        shown = []
+        for row in found:
+            live = self._live_comparison(row) if row.key == "comparison" else None
+            shown.append(row if live is None else check_lineage.live_row(row.key, live[0]))
+        return tuple(shown)
 
     def _result(self, key, row, found, kept, *, read: bool, page) -> tuple:
         """The result the page of the check ``key`` shows for its ``row``, and what it was made from: kept when it would
@@ -517,10 +542,9 @@ class ValidatePanel(StepPage):
         it is not compared, since its state line says why, or when it waits for a posterior or the simulations. While a
         training or a narrowing round is live, that it is counted when the simulation ends, where it applies. The one
         shown is kept while it would say the same."""
-        held = self._held()
-        status, model = controller().status, controller().model
-        live = status.live and status.word in TRAINING_WORDS and row.state != "Does not apply"
-        compared = model.comparison() if live and model is not None else None
+        held, model = self._held(), controller().model
+        running = self._live_comparison(row)
+        live, compared = running is not None, None if running is None else running[1]
         audit = next((one.record for one in found if one.key == "audit" and one.record is not None), None)
         if live and compared is None:
             made = (COUNTED_LATER_TEXT, "Running", False, None, "", "")
