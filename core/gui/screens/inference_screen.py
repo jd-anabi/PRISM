@@ -488,8 +488,8 @@ class InferenceScreen(QWidget):
         against.
 
         Nothing is deleted either way: every stage writes its artifact at completion, so what this
-        drops is the session's HANDLES, and the artifacts stay on disk to be selected again. Its
-        in-place twin is ``install_config``.
+        drops is the session's HANDLES, and the artifacts stay on disk to be selected again. A
+        configuration comes into use in place only with its prior, through ``take_prior``.
 
         The model and the kind of observation applied are remembered here, in one write, as they come into use: the
         next launch puts them back as choices. A value the settings file could not give back as it was written, from a
@@ -509,13 +509,6 @@ class InferenceScreen(QWidget):
         picks += self.last_used(model)
         if picks:
             remembered.put_many(picks)
-        self.refresh_gates()
-
-    def install_config(self, cfg):
-        """A configuration set IN PLACE, then the gates and the states worked out again: each step reads the
-        configuration in use as it draws. The Prior step no longer calls this: its configuration comes into use with
-        its prior, through ``take_prior``. Its destructive twin ``new_draft`` is the one the first step confirms."""
-        self._fan_out(cfg)
         self.refresh_gates()
 
     def _fan_out(self, cfg) -> None:

@@ -1,6 +1,6 @@
 """A combo box populated from ``file_manager.list_dir(base, keep=...)``: the GUI's INPUT-file picker
-(cells, bounds). Optionally offers a '(from scratch)' sentinel. StorePicker below is its
-generated-kind twin, which reads the artifact store instead of a directory.
+(cells, bounds). StorePicker below is its generated-kind twin, which reads the artifact store instead of a
+directory.
 
 A page of the look asks either for ``keeps_selection``: its list is a ``Choice`` that the page stands in a row of its
 own form, the picker lays nothing out, and a list read again keeps the item selected while it is there, else selects
@@ -49,20 +49,10 @@ def _relisted(combo, fill, wanted: str, said, before) -> None:
 
 
 class ArtifactPicker(QWidget):
-    # Plain ASCII, deliberately. This is a combo ITEM label, not a button, so icons.apply_icon cannot
-    # reach it -- that helper sets a widget's font family, and a QComboBox item is not a widget. The
-    # alternative, a QIcon rendered from the icon font, would be the one place in the app carrying a
-    # baked-in colour that does NOT follow a theme flip (icons.py's opening note is that rendering
-    # icons as TEXT is what makes them recolour for free). It used to be "➕", a heavy-plus emoji whose
-    # coverage and colour vary per font -- exactly the quirk the icon font was introduced to sidestep.
-    NEW_LABEL = "+  (from scratch)"
-
-    def __init__(self, base_path, keep=None, allow_new: bool = False, parent=None, *, keeps_selection: bool = False,
-                 hint: str = ""):
+    def __init__(self, base_path, keep=None, parent=None, *, keeps_selection: bool = False, hint: str = ""):
         super().__init__(parent)
         self.base_path = Path(base_path)
         self._keep = keep
-        self._allow_new = allow_new
         self.keeps_selection = keeps_selection
         if keeps_selection:
             self.combo = _held_list(self, hint)
@@ -91,8 +81,6 @@ class ArtifactPicker(QWidget):
         self._fill()
 
     def _fill(self) -> None:
-        if self._allow_new:
-            self.combo.addItem(self.NEW_LABEL, userData=None)
         entries = []
         if self.base_path.exists():
             entries = file_manager.list_dir(str(self.base_path), keep=self._keep)
@@ -105,12 +93,12 @@ class ArtifactPicker(QWidget):
             self.combo.setItemData(self.combo.count() - 1, entry.replace("\\", "/"), _TOOLTIP_ROLE)
 
     def selected(self):
-        """Return (entry_or_None, is_new). ``entry`` is the path relative to base_path."""
+        """Return (entry_or_None, nothing_selected). ``entry`` is the path relative to base_path."""
         data = self.combo.currentData()
         return data, (data is None)
 
     def selected_path(self):
-        """Full filesystem path of the selected entry, or None for the '(from scratch)' sentinel."""
+        """Full filesystem path of the selected entry, or None when nothing is selected."""
         data = self.combo.currentData()
         return None if data is None else str(self.base_path / data)
 
@@ -120,7 +108,7 @@ class ArtifactPicker(QWidget):
     # ── persistence ──────────────────────────────────────────────────────────
     def key(self) -> str:
         """A stable string identifying the current selection, for QSettings. The relpath (userData),
-        not the index (order shifts as files are added), and "" for the '(from scratch)' sentinel."""
+        not the index (order shifts as files are added), and "" when nothing is selected."""
         data = self.combo.currentData()
         return "" if data is None else str(data)
 
@@ -162,8 +150,8 @@ class ArtifactPicker(QWidget):
 # suffix on almost every row would carry no information at all and would push the name itself out of
 # a combo that AdjustToContentsOnFirstShow sized to its first listing. A TSNPE round's result is the
 # rare row -- valid near ONE observation, and the one you must not pick by accident -- so it is the
-# one that gets a suffix. Plain text, no icon: see ArtifactPicker.NEW_LABEL for why a combo ITEM
-# cannot carry the bundled icon font.
+# one that gets a suffix. Plain text, no icon: a combo ITEM is not a widget, so the bundled icon font, which
+# icons.apply_icon sets as a widget's font family, cannot reach it.
 NARROWED_SUFFIX = "  —  narrowed (TSNPE)"
 #: The same, on a page of the look, which names no place of the old pages.
 NARROWED_WORDS = "from a narrowing round"
@@ -207,12 +195,11 @@ class StorePicker(QWidget):
     ``row_filter`` narrows the listing further -- one kind can hold several things a screen offers
     separately.
     """
-    NEW_LABEL = ArtifactPicker.NEW_LABEL
 
-    def __init__(self, kind: str, allow_new: bool = False, store=None, row_filter=None,
-                 parent=None, *, keeps_selection: bool = False, hint: str = ""):
+    def __init__(self, kind: str, store=None, row_filter=None, parent=None, *, keeps_selection: bool = False,
+                 hint: str = ""):
         super().__init__(parent)
-        self.kind, self._allow_new, self._store = kind, allow_new, store
+        self.kind, self._store = kind, store
         self.keeps_selection = keeps_selection
         # ``Summary -> bool``, or None for "every row of the kind": one kind can hold several things a
         # screen wants to offer separately (no page of the window passes one now). Applied AFTER the
@@ -253,8 +240,6 @@ class StorePicker(QWidget):
 
     def _fill(self) -> None:
         self._summaries = {}                     # rebuilt here, so a deleted artifact's line goes too
-        if self._allow_new:
-            self.combo.addItem(self.NEW_LABEL, userData=None)
         try:
             rows = self._resolved_store().list(self.kind)
         except Exception:                        # noqa: BLE001 -- an unreadable root lists nothing
@@ -291,7 +276,7 @@ class StorePicker(QWidget):
             self.combo.setItemData(self.combo.count() - 1, tip, _TOOLTIP_ROLE)
 
     def selected(self):
-        """``(id_or_None, is_new)``."""
+        """``(id_or_None, nothing_selected)``."""
         data = self.combo.currentData()
         return data, (data is None)
 
@@ -304,8 +289,7 @@ class StorePicker(QWidget):
 
     def selection_summary(self) -> str:
         """The current item spelled out -- "chi · width 18 · amortized · 2026-09-14T10:22:31" -- and
-        "" when nothing is selected or the '(from scratch)' sentinel is (a sentinel is not an
-        artifact and has nothing to describe).
+        "" when nothing is selected.
 
         Read off what the last ``refresh()`` recorded, never off the store: this is called from a
         ``currentIndexChanged`` slot, and re-listing a kind's directory on every index change is how

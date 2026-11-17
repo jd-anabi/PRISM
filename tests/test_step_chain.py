@@ -1236,7 +1236,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
     from core.gui import reported
     from core.gui.run.controller import RunController
     from core.gui.session import SbiSession
-    from tests._fixtures import all_asked, answer_chooser, build_window, forget_asked, qt_app
+    from tests._fixtures import all_asked, answer_chooser, build_window, forget_asked, install_config, qt_app
     qt_app()
     started, raised = [], []
     # the controller's own start, which every page reaches whether or not its class goes through its base class's dispatch
@@ -1263,7 +1263,7 @@ def test_every_step_opens_on_any_session_and_no_press_on_it_starts_a_run(tiny_ru
             return
         inference.new_draft(draft)
         if session >= 2:
-            inference.install_config(cfg)
+            install_config(inference, cfg)
             inference.session.inf_prior = tiny_run.prior
             if session == 3:
                 inference.session.posterior = tiny_run.posterior

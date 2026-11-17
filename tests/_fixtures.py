@@ -227,7 +227,7 @@ def forced_cfg(names=("amp", "freq", "phase", "offset")):
 
 
 def spont_cfg():
-    """A stub config that survives the Prior page's post-build path and install_config: the SimConfig fields the
+    """A stub config that survives the Prior page's post-build path and ``install_config``: the SimConfig fields the
     "Config built" line, check_unit_consistency and the Infer page's on_config_built read, with chi OFF. A bare
     object() stops at cfg.check_unit_consistency(), so a test that wants the Prior click to REACH its dispatch needs
     this much. A stub, not a real build: the engine suites build real configurations of their own."""
@@ -1407,17 +1407,26 @@ def build_part(cls, **kwargs):
 def build_inference(*, session=None, cfg=None, plans=None):
     """The inference SCREEN, built anew at every call and let go when the test that built it ends; its
     steps are reached from it, and they go with it. ``plans`` is the folder of plans it is handed, its
-    own and no other; ``session`` is assigned when given, then ``cfg`` is installed when given, and that
-    is all: the gates are refreshed only as the constructor and ``install_config`` refresh them themselves,
-    so a test that writes to the session afterwards refreshes them on its own line."""
+    own and no other; ``session`` is assigned when given, then ``cfg`` is installed when given
+    (``install_config``), and that is all: the gates are refreshed only as the constructor and ``install_config``
+    refresh them themselves, so a test that writes to the session afterwards refreshes them on its own line."""
     qt_app()
     from core.gui.screens.inference_screen import InferenceScreen
     screen = _built.keep(InferenceScreen(plans=plans))
     if session is not None:
         screen.session = session
     if cfg is not None:
-        screen.install_config(cfg)
+        install_config(screen, cfg)
     return screen
+
+
+def install_config(screen, cfg) -> None:
+    """A configuration set IN PLACE on the inference screen ``screen``, as a test sets one: held by its session, then
+    its gates and its steps' states worked out again, each step reading the configuration in use as it draws. No
+    page does this: a configuration comes into use with its prior (``InferenceScreen.take_prior``), which lets go of
+    what depended on the prior held."""
+    screen._fan_out(cfg)
+    screen.refresh_gates()
 
 
 # The class of a bare run host, made the first time one is asked for (``run_host_class``).

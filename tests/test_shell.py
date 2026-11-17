@@ -24,7 +24,7 @@ from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
 from tests._fixtures import (build_part, build_run_host, build_step_page, build_window,
-                             card_and_programs as _card_and_programs, qt_app)
+                             card_and_programs as _card_and_programs, install_config, qt_app)
 from tests._dialogs import all_asked, asked, choose
 from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn,
                          a_worker_that_cannot_be_made, at as _at, epoch_line as _epoch, running, start_run,
@@ -1173,7 +1173,7 @@ def test_the_chain_follows_the_session_and_the_run(tmp_path):
 
         assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
         inference.session = SbiSession(draft=SimpleNamespace(model="NADROWSKI"))
-        inference.install_config(SimpleNamespace(model="NADROWSKI", params_dict={}, rescale_params={},
+        install_config(inference, SimpleNamespace(model="NADROWSKI", params_dict={}, rescale_params={},
                                                   force_params_dict={}, has_forcing=False, chi_mode=False,
                                                   chi_k_pad=config.CHI_K_PAD, observation_mode="spontaneous"))
         assert inference.step_states() == rules() and spoken() == [state.spoken for state in rules()]
@@ -3639,7 +3639,7 @@ def test_no_line_of_a_step_that_wraps_is_drawn_shorter_than_its_words():
                 inference.config_panel.model_combo.setCurrentText("NADROWSKI")
                 inference.config_panel.foot.main_button.click()    # the first step's own button: a model
                 bounds = config.BOUNDS_PATH / "nadrowski" / "master.txt"
-                inference.install_config(inference.session.draft.make_config(bounds_path=str(bounds)))
+                install_config(inference, inference.session.draft.make_config(bounds_path=str(bounds)))
             for step, page in pages:
                 window.go_to("inference", step)
                 for _ in range(3):                       # a step in sight already lays out what its gates just said

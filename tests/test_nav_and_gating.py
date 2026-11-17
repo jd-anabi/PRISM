@@ -33,7 +33,7 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from tests._fixtures import (build_inference, build_part, build_run_host,  # noqa: E402
-                             build_window, forced_cfg as _forced_cfg, prior_stub, qt_app,
+                             build_window, forced_cfg as _forced_cfg, install_config, prior_stub, qt_app,
                              spont_cfg as _spont_cfg)
 import contextlib                                                  # noqa: E402
 import functools                                                   # noqa: E402
@@ -378,10 +378,10 @@ def test_inference_pickers_repoint_from_draft_and_config():
         chi_k_pad = config.CHI_K_PAD    # mirrors SimConfig.chi_k_pad (probe-slot capacity)
         observation_mode = "spontaneous"
 
-    inf.install_config(Cfg())
+    install_config(inf, Cfg())
     inf.infer_panel.read_facts()                 # the page reads the model in use as it reads, never handed it
     assert inf.infer_panel.cell_picker.base_path.name == "hopf"
-    assert inf.session.draft is not None, "install_config must not wipe the draft/session"
+    assert inf.session.draft is not None, "a configuration set in place must not wipe the draft/session"
 
 def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots():
     """The table of driven recordings has rows of any number: the engine takes from one driven recording to the
@@ -408,7 +408,7 @@ def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots()
     table.remove(table.rows()[0])                            # a blank row goes at once, asking nothing
     assert len(table.rows()) == 5
     assert not any("at most" in fact.sentence for fact in panel.facts_from_form())
-    inf.install_config(_chi_cfg(k=3, pad=2))
+    install_config(inf, _chi_cfg(k=3, pad=2))
     assert len(table.rows()) == 5, "a configuration taken later dropped rows"
     assert "This posterior takes at most 2 driven recordings; remove 3." in [
         fact.sentence for fact in panel.facts_from_form()]
@@ -479,7 +479,7 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     first, second = table.rows()[0], table.add_row()
     first.path.edit.setText("/tmp/keep.csv")
     first.hz.setText("2.5")
-    inf.install_config(_chi_cfg(k=2))                         # another configuration taken
+    install_config(inf, _chi_cfg(k=2))                        # another configuration taken
     assert table.rows() == [first, second], "a configuration taken later added or dropped rows"
     assert first.value() == ("/tmp/keep.csv", 2.5), "a configuration taken later lost a row's data"
 
@@ -2345,7 +2345,7 @@ def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
                 assert _line(panel, "t_obs") == ("err", said) and said in _said(panel), (text, _line(panel, "t_obs"))
 
     # a simulated cell
-    inf.install_config(_forced_cfg())
+    install_config(inf, _forced_cfg())
     panel.modes.set_value("simulated")
     panel.cell_picker.selected_path = lambda: str(files["cell.txt"])
     refused_t_obs()
@@ -2366,14 +2366,14 @@ def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
     assert sent["args"][2].T_obs_s == 2.0 and sent["args"][2].forced == ((str(files["forced.npy"]), None),)
 
     # a spontaneous recording only: the same row, with no drive
-    inf.install_config(_forced_cfg(names=()))
+    install_config(inf, _forced_cfg(names=()))
     refused_t_obs()
     press("2.0")
     assert refused == [] and sent["fn"] is orchestrator.experimental_inference
     assert sent["args"][2].forced == () and sent["args"][2].forcing_params_si is None
 
     # a frequency response, with the spontaneous recording, the drive amplitude and two complete rows given
-    inf.install_config(_chi_cfg(k=2))
+    install_config(inf, _chi_cfg(k=2))
     rows["chi_f0_si"].widget.setText("1.0")
     for i, row in enumerate([panel.driven.rows()[0], panel.driven.add_row()]):
         row.path.edit.setText(str(files[f"probe{i}.npy"]))
@@ -2966,7 +2966,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     entry quotes -- a tick box, a list's row, a name or note box, 'Name', the Save button beside the Save box --
     is shown in the panel the window shows at each place its sentence names, so a page that rewords or
     moves it leaves no sentence pointing at words that are not there.
-    Step 5 is read after install_config with a FORCED stub config so its three drive rows exist; a
+    Step 5 is read after a FORCED stub config is set in place (``install_config``) so its three drive rows exist; a
     chi config would build none (no force_params_dict) and the drive entries would pass vacuously.
 
     The second half: the Inference page's registered rows are named by the table, through their field keys, never by a
@@ -2994,7 +2994,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
 
     qt_app()
     window = build_window()
-    window.part("inference").install_config(_forced_cfg())
+    install_config(window.part("inference"), _forced_cfg())
     # The model builder's init row exists once per declared variable and its value/min/max boxes once
     # per detected parameter (the control table names all four), so a freshly built builder shows
     # none of them: declare one variable and detect its parameter before reading the part back. The
@@ -3195,7 +3195,7 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     """The private copy at the window, on the SUCCESS path, with nothing stubbed: a real simulated
     inference on the tiny posterior, dispatched by this tab through the worker, writes its
     observation and inference and hands them to the session -- and leaves the session's config
-    exactly as install_config set it: no truth, no cell among its sources, the T_obs it had (1.0 s
+    exactly as ``install_config`` set it: no truth, no cell among its sources, the T_obs it had (1.0 s
     from the fixture) although the run was typed 1.5 s. The box value differs from the session's on
     purpose, so the T_obs clause is not satisfied by coincidence."""
     from tests._fixtures import all_asked, assert_cfg_unchanged, qt_app, snapshot_cfg
@@ -3406,28 +3406,28 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
 
     inf = build_inference()
-    picker = StorePicker("posterior", allow_new=True)       # the page that lists saved posteriors lists none yet
+    picker = StorePicker("posterior")                      # the page that lists saved posteriors lists none yet
     combo = picker.combo
 
     # (a) the item text: the exception is marked, the norm is not, the incomplete row is absent
     texts = [combo.itemText(i) for i in range(combo.count())]
-    assert texts == [StorePicker.NEW_LABEL, "amort", "round2" + NARROWED_SUFFIX], texts
+    assert texts == ["amort", "round2" + NARROWED_SUFFIX], texts
     assert NARROWED_SUFFIX.strip().startswith("—"), NARROWED_SUFFIX
     assert "narrowed (TSNPE)" in NARROWED_SUFFIX, NARROWED_SUFFIX
 
     # (b) the tooltip keeps every fact and its id-first order, and words amortization the one way
     tips = [combo.itemData(i, Qt.ToolTipRole) for i in range(combo.count())]
-    assert tips[1] == "20260914T102231 · 2026-09-14T10:22:31 · chi · width 18 · amortized", tips[1]
-    assert tips[2] == ("20260915T090000 · 2026-09-15T09:00:00 · chi · width 18 · "
-                       "narrowed (TSNPE)"), tips[2]
-    assert "NON-AMORTIZED" not in tips[2], tips[2]
+    assert tips[0] == "20260914T102231 · 2026-09-14T10:22:31 · chi · width 18 · amortized", tips[0]
+    assert tips[1] == ("20260915T090000 · 2026-09-15T09:00:00 · chi · width 18 · "
+                       "narrowed (TSNPE)"), tips[1]
+    assert "NON-AMORTIZED" not in tips[1], tips[1]
 
     # (c) selection_summary, for the posterior's two shapes and for none
-    combo.setCurrentIndex(1)
+    combo.setCurrentIndex(0)
     assert picker.selection_summary() == "chi · width 18 · amortized · 2026-09-14T10:22:31"
-    combo.setCurrentIndex(2)
+    combo.setCurrentIndex(1)
     assert picker.selection_summary() == "chi · width 18 · narrowed (TSNPE) · 2026-09-15T09:00:00"
-    combo.setCurrentIndex(0)                       # the "(from scratch)" sentinel is not an artifact
+    combo.setCurrentIndex(-1)                      # nothing selected: nothing to describe
     assert picker.selection_summary() == ""
 
     # (d) the other two kinds: a prior carries only its creation time, an observation its geometry. The Prior page's
@@ -3441,10 +3441,10 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     assert obs_picker.combo.currentText() == "obs1", "the round's list does not name the record by its label"
 
     # (e) a refresh(), not only a click: drop the narrowed posterior and rescan
-    combo.setCurrentIndex(1)
+    combo.setCurrentIndex(0)
     rows["posterior"] = rows["posterior"][:1]
     picker.refresh()
-    assert [combo.itemText(i) for i in range(combo.count())] == [StorePicker.NEW_LABEL, "amort"]
+    assert [combo.itemText(i) for i in range(combo.count())] == ["amort"]
     assert picker.selection_summary() == "chi · width 18 · amortized · 2026-09-14T10:22:31"
 
 
@@ -3497,11 +3497,11 @@ def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(mon
     one.refresh()
     assert [one.combo.itemText(i) for i in range(one.combo.count())] == ["done_one", "second_one"]
 
-    # (d) the default is no predicate at all: the sentinel + the THREE finished rows, because (c) appended
-    # one. BOUND to a name: a temporary picker can be collected before .count() runs -- "Internal C++ object
-    # already deleted" in plain Python -- so the one-liner passed only because pytest's assertion rewrite held it
-    default = StorePicker("simulation", allow_new=True)
-    assert default.combo.count() == 4
+    # (d) the default is no predicate at all: the THREE finished rows, because (c) appended one. BOUND to a
+    # name: a temporary picker can be collected before .count() runs -- "Internal C++ object already deleted" in
+    # plain Python -- so the one-liner passed only because pytest's assertion rewrite held it
+    default = StorePicker("simulation")
+    assert default.combo.count() == 3
 
 
 # ── the panel/tab counts, stale since the TSNPE tab arrived ──────────────────────────────────────

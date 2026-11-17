@@ -708,8 +708,7 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     held = build_inference(session=session)
     assert held.session is session and held is not plain and len(as_constructed) == 2
     assert len(refreshed) == as_constructed[-1], "the builder refreshed the gates itself"
-    monkeypatch.setattr(InferenceScreen, "install_config",
-                        lambda self, cfg: installed.append((self, cfg)))
+    monkeypatch.setattr(_fixtures, "install_config", lambda screen, cfg: installed.append((screen, cfg)))
     cfg = object()
     built = build_inference(cfg=cfg)
     assert installed == [(built, cfg)] and len(as_constructed) == 3
@@ -883,7 +882,7 @@ def test_no_widget_the_builders_make_is_shown_as_a_window_of_its_own(monkeypatch
     from core.gui import keys
     from core.gui.main_window import MainWindow
     from core.gui.widgets.ask import Ask
-    from tests._fixtures import build_step_page, build_window, forced_cfg, qt_app
+    from tests._fixtures import build_step_page, build_window, forced_cfg, install_config, qt_app
     qt_app()
     shown = []
     real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
@@ -899,7 +898,7 @@ def test_no_widget_the_builders_make_is_shown_as_a_window_of_its_own(monkeypatch
     window = build_window()
     for part in keys.PARTS:
         window.part(part.key)
-    window.part("inference").install_config(forced_cfg())
+    install_config(window.part("inference"), forced_cfg())
     build_step_page()
     for name, method in real.items():
         monkeypatch.setattr(QWidget, name, method)
