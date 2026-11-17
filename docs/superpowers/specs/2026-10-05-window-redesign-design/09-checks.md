@@ -376,7 +376,7 @@ run's prior (9.3): one manifest, read from the store at that moment.
 |---|---|---|
 | at most 3 | "Passed"; the run's row, "Fine" | the health row's sentence: "Unusable driven recordings 40.1 %. The audit read 37.9 %; within 3 points is fine." |
 | above 3, at most 5 | "Look closer" | the sentence, and one "Attention" message: "The simulation set and the audit differ by 3.8 points. Look closer before leaving the fit to run: step 4, Checks, shows the per-batch figures of both." |
-| above 5 | "Failed" | the sentence, then "The advice is to stop the fit and find out why. The simulation set is complete, so stopping loses only the hours of fitting so far."; buttons "Stop training…" (the usual question, U12) and "Keep training" (U7's one name for it). The run's page and the rail's foot say "needs you" until one is chosen. The window never stops the fit |
+| above 5 | "Failed" | the sentence, then "The advice is to stop the fit and find out why. The fit is saved after every epoch, so a stop keeps it and loses at most the epoch in progress; the training can be resumed later." (a training that keeps no simulation set: "The advice is to stop the fit and find out why. This training keeps no simulation set, so a stop loses its simulations and its fit."; amended as built at stage 5's exit, the fit being saved after every pass); buttons "Stop training…" (the usual question, U12) and "Keep training" (U7's one name for it). The run's page and the rail's foot say "needs you" until one is chosen. The window never stops the fit |
 
 The run's health row reads as the check does in every case but the first (C16); the announcement
 and the history are part 6's (6.3.5, 6.5). The answer beyond 5 and its time show on check 3's page
