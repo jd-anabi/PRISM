@@ -260,9 +260,11 @@ def test_a_row_named_nowhere_in_the_table_fails_as_it_is_built():
         _the_form().add("no_such_key", IntField(1))
 
 
-def test_a_label_runs_through_the_tables_rich_form():
-    """A label the table of rich forms writes with a subscript shows it, and reads back as it was handed."""
+def test_a_label_runs_through_the_tables_rich_form(monkeypatch):
+    """A label the table of rich forms writes with a subscript shows it, and reads back as it was handed. No label a
+    page passes has a rich form today, so the table is handed one of its own here."""
     from core.Helpers import labels
+    monkeypatch.setitem(labels.GUI_HTML, "T_obs (s)", "T<sub>obs</sub> (s)")
     form = _the_form()
     row = form.add("hpd_level", FloatField(0.9), label="T_obs (s)")
     assert row.label_text() == "T_obs (s)" and row.label.text() == labels.pretty_gui("T_obs (s)") != "T_obs (s)"

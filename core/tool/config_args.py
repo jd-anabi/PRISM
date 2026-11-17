@@ -63,12 +63,11 @@ def add_config_flags(p, *, chi: bool = True, bounds_help: "str | None" = None) -
                         + default_text("%(default)s"))
 
 
-def add_name_flags(p, *, name_help: "str | None" = None) -> None:
-    """``--name`` and ``--note``. ``name_help`` replaces the name's help for a subcommand whose name
-    is not used as given (no subcommand passes one now)."""
+def add_name_flags(p) -> None:
+    """``--name`` and ``--note``."""
     p.add_argument("--name", default="", metavar="NAME",
-                   help=name_help or ("name the artifact this command writes ('' = unnamed). A taken "
-                                      "name is refused at the stage's entry, before anything is spent."))
+                   help=("name the artifact this command writes ('' = unnamed). A taken "
+                         "name is refused at the stage's entry, before anything is spent."))
     p.add_argument("--note", default="", metavar="TEXT",
                    help=f"free text recorded in the artifact's manifest: one line, at most "
                         f"{NOTE_MAX_CHARS} characters ('' = no note)")

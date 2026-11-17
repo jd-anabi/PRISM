@@ -593,11 +593,11 @@ def test_labels_axis_and_rescale_render_latex_with_units():
     assert L.rescale_axis_label("x_offset", length_unit="nm") == r"$x_{\mathrm{off}}$ (nm)"
     assert L.rescale_axis_label("t_scale") == r"$t_{\mathrm{scale}}$"       # missing token -> bare symbol
 
-def test_labels_pretty_gui_and_forcing():
+def test_labels_pretty_gui_and_forcing(monkeypatch):
     from core.Helpers import labels as L
+    # no label a page passes has a rich form today, so the table is handed one of its own here
+    monkeypatch.setitem(L.GUI_HTML, "F0 (ND forcing amplitude)", "F<sub>0</sub> (ND forcing amplitude)")
     assert L.pretty_gui("F0 (ND forcing amplitude)") == "F<sub>0</sub> (ND forcing amplitude)"
-    assert "<sub>obs</sub>" in L.pretty_gui("T_obs (s)")
-    assert "<sub>a</sub>/T" in L.pretty_gui("T_a/T grid  (S = 0)")
     assert L.pretty_gui("Model") == "Model"                                # passthrough for non-math
     assert L.gui_forcing_label("phase", "rad") == "φ (rad)"
     assert L.gui_forcing_label("amp") == "A"
@@ -642,11 +642,14 @@ def test_plot_posterior_vs_truth_default_labels_have_units():
     plt.close(fig2)
     assert xlabel2 == "$t$ (ms)"
 
-def test_gui_form_labels_are_prettified():
+def test_gui_form_labels_are_prettified(monkeypatch):
     from PySide6.QtWidgets import QLabel
+    from core.Helpers import labels
     from core.gui.widgets.help_badge import help_label
 
     qt_app()
+    # no label a page passes has a rich form today, so the table is handed one of its own here
+    monkeypatch.setitem(labels.GUI_HTML, "F0 (ND forcing amplitude)", "F<sub>0</sub> (ND forcing amplitude)")
     holder = help_label("F0 (ND forcing amplitude)", "help text")
     lbl = holder.findChild(QLabel)
     assert lbl is not None and "F<sub>0</sub>" in lbl.text()

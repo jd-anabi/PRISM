@@ -300,23 +300,6 @@ def require_between(key: str, value, lo, hi, *, open_lo: bool = False, open_hi: 
     return v
 
 
-def require_below(key: str, lo, hi) -> tuple:
-    """A blank, a non-finite end, or ``lo >= hi`` is refused; the pair is returned as two floats.
-
-    The ordered-pair rule the other eight do not cover: ``require_between`` judges ONE value against
-    fixed bounds, and here the two ends are themselves what is being judged. Each end goes through
-    ``require_finite`` first, so None (a blank read through value_or_none) and a NaN are refused by
-    their own sentences. A blank that value() reads as 0 would arrive as a REAL 0, refused here only
-    when the other end is not above it -- ``(0, 1.5)`` passes -- which is why every caller hands its
-    ends over through value_or_none.
-    """
-    a, b = require_finite(key, lo), require_finite(key, hi)
-    if not a < b:
-        raise Refusal(f"{_what(key)} must have its lower bound below its upper bound; got {a:g} and "
-                      f"{b:g}{default_clause(key)}.", field=key)
-    return a, b
-
-
 def require_choice(key: str, value, choices: tuple) -> str:
     """A blank or a value outside ``choices`` is refused, the choices listed in the caller's order;
     the value is returned as a str."""

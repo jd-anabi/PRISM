@@ -40,17 +40,6 @@ INIT_SHAPES: dict = {"bp":        (2, 3),
                      "nadrowski": (2, 1),
                      "hopf":      (2, 0)}
 
-def sim_class(model: str):
-    """The Simulator class for a BUILT-IN model name, with a clear error for anything else (a user
-    model leaking past the routing that sends it to registry.make_user_simulator would otherwise
-    surface as a bare KeyError)."""
-    cls = VALID_SIMS.get(model.lower())
-    if cls is None:
-        raise ValueError(
-            f"No simulator is registered for model '{model}' (valid: {list(VALID_SIMS)}). "
-            "User-defined models are simulated through registry.make_user_simulator, not this table.")
-    return cls
-
 # Fraction of the available pool one simulation batch may plan to use. Higher than config's default
 # (0.6) because the estimate below counts the major tensors explicitly rather than guessing, and
 # because splitting is EXPENSIVE here: the SDE solver is a sequential kernel-launch-bound time loop,

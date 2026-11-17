@@ -22,8 +22,8 @@ from pathlib import Path
 import pytest
 
 from core.refusals import (FIELDS, NOTE_MAX_CHARS, Field, Refusal, describe, refuse, require_at_least,
-                           require_below, require_between, require_choice, require_file, require_finite,
-                           require_given, require_note, require_positive)
+                           require_between, require_choice, require_file, require_finite, require_given,
+                           require_note, require_positive)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -309,34 +309,6 @@ def test_require_between_honours_open_and_closed_ends_and_treats_nan_as_outside(
         require_between("chi_n_freqs", 25, 2, 24)
     assert _shape(e.value, "chi_n_freqs") == (
         "The number of chi probe frequencies must be between 2 and 24; got 25 (default 6).")
-
-
-def test_require_below_refuses_an_inverted_or_blank_pair_and_returns_two_floats():
-    """A band's two ends are an ORDERED PAIR, and none of the existing eight rules covers that
-    shape: require_between judges one value against fixed bounds, and a pair whose own two ends are
-    the thing being judged has no bound to compare to. An inverted or degenerate pair is not
-    hypothetical: a typed (0.0, 0.0) would make np.linspace produce a grid of one repeated value
-    rather than refuse. A BLANK end is another matter -- value() would read it as a
-    real 0, which passes here whenever the other end is above it -- so every caller reads its ends
-    through value_or_none and a blank arrives as None.
-
-    Both ends are refused blank and non-finite first, so the message never reads "0 and nan"; the
-    pair comes back as floats, which is what the caller binds."""
-    assert require_below("chi_freq_bounds", 0.0, 1.0) == (0.0, 1.0)
-    assert all(isinstance(v, float) for v in require_below("chi_freq_bounds", 0, 1))
-    for lo, hi, shown in ((1.0, 0.0, "1 and 0"), (0.0, 0.0, "0 and 0"), (2.5, 2.5, "2.5 and 2.5")):
-        with pytest.raises(Refusal) as e:
-            require_below("chi_freq_bounds", lo, hi)
-        assert _shape(e.value, "chi_freq_bounds") == (
-            f"The chi frequency band (fixed by measurement) must have its lower bound below its upper bound; "
-            f"got {shown}.")
-    with pytest.raises(Refusal) as e:
-        require_below("chi_freq_bounds", None, 2.0)
-    assert _shape(e.value, "chi_freq_bounds") == "The chi frequency band (fixed by measurement) is blank."
-    with pytest.raises(Refusal) as e:
-        require_below("chi_freq_bounds", 1.0, float("nan"))
-    assert _shape(e.value, "chi_freq_bounds") == (
-        "The chi frequency band (fixed by measurement) must be a finite number; got nan.")
 
 
 def test_require_finite_refuses_nan_and_inf_and_returns_a_float():
@@ -824,7 +796,7 @@ def test_the_public_entry_decorator_passes_a_sentinel_through():
 # core/tool/config_args.py has a describe(cfg, ...) of its own: that one's first argument is a config,
 # never a string literal, so a name match cannot mistake it for the registry's describe(key).
 _RULE_CALLS = ("describe", "refuse", "require_given", "require_finite", "require_positive",
-               "require_at_least", "require_between", "require_below", "require_choice", "require_file",
+               "require_at_least", "require_between", "require_choice", "require_file",
                # require_note("note", ...) has call sites in both measurement panels and the tool,
                # which the scan once missed
                "require_note",
@@ -1237,13 +1209,12 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         'refuse(key, "w")\n'                                       # 7: a variable is not a literal
         'describe(cfg, cell="c")\n'                                # 8: config_args.describe's shape
         'other(field="not_a_refusal_kw")\n'                        # 9: field= on ANY call counts
-        'require_below("nor_this_pair", lo, hi)\n'                 # 10: the ordered-pair rule
-        'require_seed(seed, key="nor_this_seed")\n'                # 11: a keyed rule's key=
-        '_positive_list("nor_this_list", values)\n'                # 12: the probe checks' list rule
-        'sorted(rows, key=len)\n')                                 # 13: a key= that is no literal
+        'require_seed(seed, key="nor_this_seed")\n'                # 10: a keyed rule's key=
+        '_positive_list("nor_this_list", values)\n'                # 11: the probe checks' list rule
+        'sorted(rows, key=len)\n')                                 # 12: a key= that is no literal
     assert [k for _, k in sorted(_field_key_literals(snippet))] == [
-        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw", "nor_this_pair",
-        "nor_this_seed", "nor_this_list"]
+        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw", "nor_this_seed",
+        "nor_this_list"]
 
     # (f) the tree: every key literal under CODE_ROOTS and CODE_FILES is a registered key
     from tests._fixtures import CODE_FILES, CODE_ROOTS

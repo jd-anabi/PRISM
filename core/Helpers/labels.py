@@ -45,16 +45,9 @@ def rescale_axis_label(name: str, *, length_unit: str | None = None, time_unit: 
 
 
 # ── Qt GUI rich text (Unicode + <sub>) ────────────────────────────────────────────────────────────
-# Keyed by the EXACT label strings the panels pass to add_help_row (grep add_help_row to keep in sync).
-# Non-math labels (Model, Cell, Bounds, Preset, "Steps / frame", "Max FPS", …) are passthrough.
-GUI_HTML = {
-    "T_obs (s)":                 "T<sub>obs</sub> (s)",
-    "n_freqs":                   "n<sub>freqs</sub>",
-    "M_ensemble":                "M<sub>ensemble</sub>",     # "freqs / batch" needs no entry
-    "F0 (ND forcing amplitude)": "F<sub>0</sub> (ND forcing amplitude)",
-    "S grid  (T_a/T = 1)":       "S grid  (T<sub>a</sub>/T = 1)",
-    "T_a/T grid  (S = 0)":       "T<sub>a</sub>/T grid  (S = 0)",
-}
+# Keyed by the EXACT label strings the pages pass to a form's row or to add_help_row. No label a page
+# passes today needs one: every label is passthrough, and an entry here is the place for the first that does.
+GUI_HTML: dict[str, str] = {}
 
 # Pretty symbols for the (dynamically built) forcing-parameter labels in the Infer tab.
 GUI_FORCING = {"amp": "A", "amp_y": "A<sub>y</sub>", "freq": "f", "phase": "φ", "offset": "offset"}
