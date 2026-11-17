@@ -15,7 +15,9 @@ The tasks go by area: what removed code left, the words in comments, the store a
 the command line, the memory planner's edges, the window's run controller, the tests, and the retrain's window route.
 A measurement of the time-stride lead comes first if the owner says yes.
 
-**Written:** 2026-11-17, by the controller, from the sorted table. The owner's answers it waits on are Q1 to Q3 below.
+**Written:** 2026-11-17, by the controller, from the sorted table. **The owner's answers (2026-11-17, 10:36 PST):**
+Q1 "Measure it first" (A0 runs first); Q2 "All eight" (pyqtgraph, imageio, imageio-ffmpeg, h5py, pandas, pyarrow,
+antropy and pybispectra leave `requirements.txt`); Q3 "Yes, all sixteen"; the plan "Yes, build it".
 
 ## Global Constraints
 
@@ -159,7 +161,8 @@ found in use), S5-17, S5-20, S5-21, S4-24, 68, the pointer P1's two files with n
   `take_prior`) and `ArtifactPicker(allow_new=)` with `NEW_LABEL`; `_GLYPH_PX["px_i_nav"]` and the icon names "back"
   and "settings" (the font's code points stay). `theming.active_appearance` is kept where a test reads the product's
   state through it.
-- [ ] On Q2's yes: the lines of the dropped packages and their comment out of `requirements.txt`.
+- [ ] On Q2's answer ("All eight"): the lines of pyqtgraph, imageio, imageio-ffmpeg, h5py, pandas, pyarrow, antropy
+  and pybispectra, and the comment over imageio's two, out of `requirements.txt`; nothing uninstalled.
 - [ ] Tests: the suites that named a removed name pass whole; a removed test's carried-over row closed; the window
   built and every step, Records and Settings opened in one test that already exists (named in the report).
 - [ ] Gate: fast + real-screen; no tensors move (no card gate); registered engine changes.
