@@ -34,8 +34,9 @@ extra usage switched on, nothing spent): STAGE 5'S EXIT IS DONE. Every gate of r
   drafter (0.44 M), the gates (machine time, about 3 h 40 min).
 - **Unpushed:** everything after `cdc80d2`.
 
-NEXT: the code audit (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`), in a
-new chat; then the retrain from the window, started by the owner; then one last stage.
+NEXT: the code audit (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`), in a new chat from
+`docs/superpowers/prompts/2026-11-17-code-audit.md` (checked by a Sonnet reader, 3 Important and 9 Minor, all folded);
+then the retrain from the window, started by the owner; then one last stage.
 
 What follows is the head as the evening of 15 November left it:
 
