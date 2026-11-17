@@ -45,8 +45,8 @@ NEEDS_PRIOR_TEXT = "Needs a prior: build or load one in step 2."
 NEEDS_POSTERIOR_TEXT = "Needs a posterior: train one in step 3, or load a saved one."
 OTHER_PRIOR_NAMED_TEXT = "The prior in use is not the one this posterior was trained on ({}). Load it in step 2."
 #: The same once that prior is no longer in Records, or cannot be named: nothing that cannot be loaded is asked for.
-OTHER_PRIOR_GONE_TEXT = ("The prior in use is not the one this posterior was trained on, and that prior is no longer in "
-                         "Records.")
+OTHER_PRIOR_GONE_TEXT = ("The prior in use is not the one this posterior was trained on, and that prior is no longer "
+                         "in Records.")
 #: How both of those begin, which a check's button is greyed by.
 _OTHER_PRIOR_OPENING = "The prior in use is not the one this posterior was trained on"
 NO_SIMULATIONS_TEXT = "This posterior was trained without keeping its simulations, and this check reads them."

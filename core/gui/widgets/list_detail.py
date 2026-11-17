@@ -5,8 +5,8 @@ the list's place, with a plain link above it that goes back to the whole list.
 The switch reads the page's width, as the page's body is told it, and nothing else: the low window is a rule on the
 window's height and says nothing of the room beside a list. Beside, neither part is ever narrower than it needs to be:
 the detail stands beside the list only where the width holds the width the list asks for, the gap and the detail's least
-width as it stands in the room left, and from the width the caller names, which it scales. Beside, each stands at the top
-of its column, as tall as it is, whatever the other holds.
+width as it stands in the room left, and from the width the caller names, which it scales. Beside, each stands at the
+top of its column, as tall as it is, whatever the other holds.
 """
 from PySide6.QtCore import QCoreApplication, QEvent, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget

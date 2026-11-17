@@ -2632,10 +2632,10 @@ def test_a_groups_heading_is_no_row_a_click_or_the_keyboard_stops_on(tmp_path):
 
 
 def test_a_groups_heading_is_drawn_as_a_heading_over_its_checks(tmp_path, monkeypatch):
-    """Each group's heading ("Before the run", "After simulating", "After the fit", "Tools") is drawn as a heading in the
-    whole table and in the narrow one: set as the table's header sets its words, small and semibold, with a little space
-    above it, so that its row stands taller than a check's row of one line by that space; none of its cells can be
-    chosen, so that neither a click nor the arrow keys stop on it; and a check's row is drawn in the body's type."""
+    """Each group's heading ("Before the run", "After simulating", "After the fit", "Tools") is drawn as a heading in
+    the whole table and in the narrow one: set as the table's header sets its words, small and semibold, with a little
+    space above it, so that its row stands taller than a check's row of one line by that space; none of its cells can
+    be chosen, so that neither a click nor the arrow keys stop on it; and a check's row is drawn in the body's type."""
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage, QPainter
     from PySide6.QtWidgets import QStyleOptionViewItem
@@ -2651,7 +2651,8 @@ def test_a_groups_heading_is_drawn_as_a_heading_over_its_checks(tmp_path, monkey
             for at in page.listing.headings:
                 cell = model.index(at, 0).data(Qt.UserRole)
                 assert isinstance(cell, rt.TextCell) and cell.heading, (at, cell)
-                assert view.rowHeight(at) == one_line + design.scaled(design.GAP["head_table"]), (at, view.rowHeight(at))
+                assert view.rowHeight(at) == one_line + design.scaled(design.GAP["head_table"]), (
+                    at, view.rowHeight(at))
                 assert all(model.flags(model.index(at, column)) == Qt.NoItemFlags
                            for column in range(model.columnCount())), at
             for row, faces in ((page.listing.headings[0], ["title"]), (page.listing.row_of["card_test"], ["text"])):
