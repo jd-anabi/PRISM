@@ -16,17 +16,15 @@ Each choice resolves to light or dark; then an apply does, in order:
     the control that shows it.
 
 An apply whose resolved scheme is the one this Appearance already applied stops after the first
-of these: it sets neither the palette nor the sheet and signals nothing. ``should_apply``
+of these: it sets neither the palette nor the sheet. ``should_apply``
 decides, and an Appearance's first apply always goes on.
 
 ``build_app`` constructs the one Appearance. A test that builds the window directly has none.
 
-The ``theme_changed`` signal is for a drawing surface that sits outside the palette and follows the
-theme; none listens to it now, since the live view of a simulation that did was removed. The figures the
-engine draws do not follow the theme: their settings are the light ones, written once when the
+The figures the engine draws do not follow the theme: their settings are the light ones, written once when the
 application is built (mpl_theme.install, called in app.build_app).
 """
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtWidgets import QWidget
 
 from . import design, fonts, style
@@ -41,7 +39,7 @@ _ACTIVE: "Appearance | None" = None
 def active_appearance():
     """The app's live Appearance (constructed in build_app), or None when nothing has built one (a
     test that builds the window directly). Lets a surface the style sheet does not reach read
-    the current theme + subscribe to changes without a hard import."""
+    the current theme without a hard import."""
     return _ACTIVE
 
 
@@ -61,8 +59,6 @@ def should_apply(applied: "tuple | None", wanted: tuple) -> bool:
 
 class Appearance(QObject):
     """Owns the appearance mode and applies the palette and the style sheet for it."""
-
-    theme_changed = Signal(bool)         # emitted with the resolved `dark` after every apply that went on
 
     def __init__(self, app):
         super().__init__(app)
@@ -105,7 +101,7 @@ class Appearance(QObject):
             self._dark = (effective == Qt.ColorScheme.Dark)      # Unknown -> light fallback
             wanted = (self._dark,)
             if not should_apply(self._applied, wanted):
-                return                                           # nothing changed: set nothing, say nothing
+                return                                           # nothing changed: set nothing
             # While the work is under way nothing is known to be applied, so an apply that fails
             # part-way is never mistaken for one that was made.
             self._applied = None
@@ -126,4 +122,3 @@ class Appearance(QObject):
             self._applied = wanted                               # only once all of it is done
         finally:
             self._applying = False
-        self.theme_changed.emit(self._dark)

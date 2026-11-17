@@ -102,7 +102,7 @@ GAP = {                           # the spaces between the blocks of a page, top
     "status": (12, 10), "stages": (36, 6), "stage_parts": 7, "now": (8, 4), "axis_key": 8, "status_to_body": 12,
     "run_columns": (668, 354, 16), "health_columns": (118, 56), "figure_inset": 28, "caption_inset": 8, "figure_caption": 6, "trace_caption": 4,
     "block": 14, "side_block": 10, "head_table": 6, "switch": 16,
-    "rail_rest": 5, "rail_group": 12,
+    "rail_group": 12,
 }
 STEP = {                          # one step of the chain, as painted
     "marker": (22, 7), "marker_one": (22, 8), "line_x": 30, "line_from": 26, "line_in": 4,
@@ -563,8 +563,8 @@ INTERIM_SELECTORS = (
     "QProgressBar::chunk", "QToolButton", "QToolButton:hover", "QToolButton:pressed",
     "QToolBar#figureToolbar QToolButton:checked", "QToolButton#helpBadge", "QToolButton#helpBadge:hover")
 
-# the icon font's glyph sizes at the ordinary text size; only rules of the old layout read them
-_GLYPH_PX = {"px_i_icon": 18, "px_i_nav": 20, "px_i_badge": 13}
+# the icon font's glyph sizes at the ordinary text size: an icon button's and the help badge's
+_GLYPH_PX = {"px_i_icon": 18, "px_i_badge": 13}
 
 
 def _sheet_sizes() -> dict[str, int]:

@@ -35,7 +35,6 @@ from .session import SbiSession
 from .widgets.artifact_picker import StorePicker
 from .widgets.ask import ask
 from .widgets.page import Scroller
-from .widgets.page_names import PageNames
 
 log = logging.getLogger(__name__)
 
@@ -114,14 +113,13 @@ _OWN_INSET = {"records": 9, "models": 0, "help": 9}
 
 
 def _is_a_button(widget: QWidget) -> bool:
-    """Whether ``widget`` does something when pressed: a button, or a tab bar or a row of page names (a row of
-    such buttons)."""
-    return isinstance(widget, (QPushButton, QToolButton, QTabBar)) or isinstance(widget.parentWidget(), PageNames)
+    """Whether ``widget`` does something when pressed: a button, or a tab bar (a row of such buttons)."""
+    return isinstance(widget, (QPushButton, QToolButton, QTabBar))
 
 
 def _is_setting(widget: QWidget) -> bool:
     """Whether ``widget`` is something a person sets: not a button that does something when pressed, nor a tab
-    bar or a row of page names (a row of such buttons), nor an area that only shows or scrolls what stands in it
+    bar (a row of such buttons), nor an area that only shows or scrolls what stands in it
     -- a scrolling area, a plot's view, a text that can only be read. A list and a text one types in are
     settings."""
     if _is_a_button(widget):
@@ -654,7 +652,7 @@ class MainWindow(QMainWindow):
             # A training of this launch whose page still holds its own call: its page opened and its own button pressed,
             # the exact call into the session as it stands, with nothing applied, loaded or asked again.
             self._open_run(offer.run)
-            if offer.kind in ("resume", "round"):
+            if offer.kind == "resume":
                 held.resume_training(offer.run)
             else:
                 held.continue_run(offer.run)

@@ -408,7 +408,6 @@ def test_the_parts_and_steps_are_the_rails_in_order():
                                             "Narrowing round"]
     assert [s.keys for s in keys.STEPS] == [(f"Alt+{n}",) for n in range(1, 7)]
     assert all(s.line == "" for s in keys.STEPS)
-    assert keys.PAGES == {}
     assert keys.part("records") is keys.PARTS[2] and keys.step("infer") is keys.STEPS[4]
     assert [keys.step_number(s.key) for s in keys.STEPS] == [1, 2, 3, 4, 5, 6]
     for lookup, name in ((keys.part, "training"), (keys.step, "records"), (keys.step_number, "home")):

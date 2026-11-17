@@ -1165,17 +1165,15 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
-    (b) every tuple names places of the window by their keys -- a step, a part, or a page of a part --
-        listed in the window's own order (the parts as the rail lists them, a part's steps or pages as
-        it shows them), and never a part that has steps or pages by its name alone, which would send a
-        person to whichever step or page it showed last; every place named is read off the built window:
-        moved there, it is the place in sight, and the rail has its part's row; a tuple has a non-empty
-        label and renders the box sentence, which names its places in their order in the words the
-        rail's places are written in; a sentence entry is returned verbatim, has no label, and types no
-        place's words itself (read off the table's own source), so a place renamed in the table of places
-        is renamed in it too; a None entry says nothing and has no label; no sentence names a tab or a
-        screen; and none of the three ever raises from fix_sentence, which runs while a refusal is being
-        shown;
+    (b) every tuple names places of the window by their keys -- a step or a part -- listed in the window's own order
+        (the parts as the rail lists them, a part's steps as it shows them), and never a part that has steps by its
+        name alone, which would send a person to whichever step it showed last; every place named is read off the
+        built window: moved there, it is the place in sight, and the rail has its part's row; a tuple has a
+        non-empty label and renders the box sentence, which names its places in their order in the words the rail's
+        places are written in; a sentence entry is returned verbatim, has no label, and types no place's words
+        itself (read off the table's own source), so a place renamed in the table of places is renamed in it too; a
+        None entry says nothing and has no label; no sentence names a tab or a screen; and none of the three ever
+        raises from fix_sentence, which runs while a refusal is being shown;
     (c) every sentence a user can read under a refusal, verbatim, in one table: one for each key the
         window has a control for, among them each way places are joined (one step, two steps, one part)
         and the consents, which quote
@@ -1205,26 +1203,23 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     qt_app()
     window = build_window()
     steps, parts = {step.key for step in keys.STEPS}, {part.key for part in keys.PARTS}
-    pages = {f"{part}/{page.key}" for part, held in keys.PAGES.items() for page in held}
     rail = [part.key for part in keys.PARTS]
 
     def order(name):
-        """Where a place stands in the window: its part in the rail, then its step or page in the part."""
+        """Where a place stands in the window: its part in the rail, then its step in the part."""
         if name in steps:
             return rail.index("inference"), [step.key for step in keys.STEPS].index(name)
-        whole, _, page = name.partition("/")
-        return rail.index(whole), ([held.key for held in keys.PAGES[whole]].index(page) if page else -1)
+        return rail.index(name), -1
 
     named = set()
     for key, entry in gui_fields.CONTROL.items():
         if isinstance(entry, tuple):
             place, text = entry
             names = place if isinstance(place, tuple) else (place,)
-            assert names and all(n in steps | parts | pages for n in names), f"{key}: {place!r} is not a place"
+            assert names and all(n in steps | parts for n in names), f"{key}: {place!r} is not a place"
             assert len(set(names)) == len(names), f"{key}: a place named twice: {place!r}"
             assert list(names) == sorted(names, key=order), f"{key}: places not in the window's order: {place!r}"
-            assert not set(names) & ({"inference"} | set(keys.PAGES)), \
-                f"{key}: a part that has steps or pages named by its name alone: {place!r}"
+            assert "inference" not in names, f"{key}: a part that has steps named by its name alone: {place!r}"
             named |= set(names)
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
@@ -1253,8 +1248,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         assert not re.search(r"\b(tab|screen)\b", gui_fields.fix_sentence(key)), gui_fields.fix_sentence(key)
     # A sentence entry names its places through the table of places and never types their words: read off
     # the table's own source, no literal part of a sentence entry holds a place's words.
-    words = ({keys.place_words(p.key) for p in keys.PARTS + keys.STEPS} | {p.name for p in keys.PARTS + keys.STEPS}
-             | {keys.place_words(f"{whole}/{p.key}") for whole, held in keys.PAGES.items() for p in held})
+    words = {keys.place_words(p.key) for p in keys.PARTS + keys.STEPS} | {p.name for p in keys.PARTS + keys.STEPS}
     table = next(node.value for node in ast.walk(ast.parse(inspect.getsource(gui_fields)))
                  if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "CONTROL")
     typed = [(k.value, w) for k, v in zip(table.keys, table.values)

@@ -58,7 +58,7 @@ LOOK_MODULES = ("core.gui.design", "core.gui.fonts", "core.gui.theming", "core.g
                 "core.gui.widgets.rule_table", "core.gui.widgets.time_axis",
                 "core.gui.widgets.message_row", "core.gui.widgets.page",
                 "core.gui.widgets.choice", "core.gui.widgets.ask", "core.gui.widgets.rail",
-                "core.gui.widgets.page_names", "core.gui.run.loss", "core.gui.step_facts", "core.gui.widgets.facts",
+                "core.gui.run.loss", "core.gui.step_facts", "core.gui.widgets.facts",
                 "core.gui.widgets.in_use")
 # what the look may never load: the engine, and the modules that reach it
 FORBIDDEN_MODULES = ("torch", "core.config", "core.registry", "core.gui.fields", "core.Helpers.file_manager", "tests._fixtures")
@@ -75,7 +75,7 @@ EXPECTED_COLOURS = {
     "disabled_fill": ("#F2F2F2", "#232323"), "disabled_line": ("#C4C4C4", "#4A4A4A"), "disabled_ink": ("#636363", "#9C9C9C"), "hatch": ("#4D4D4D", "#B8B8B8"),
     "elapsed": ("#1A1A1A", "#C8C8C8"), "series_2": ("#0072B2", "#56B4E9"), "series_6": ("#56B4E9", "#0072B2"), "series_7": ("#CC79A7", "#CC79A7"),
 }
-SIZES_DIGEST = "b7bf76276dca53ed1b1ae072ad415ad363c1b2ac1f73e12ca3786d560f792c41"
+SIZES_DIGEST = "b0bf4ba8b29e1161025351aa7beb10c18961527b4c05da55c430c551f988b6c3"
 
 
 def test_the_colour_table_is_the_32_named_pairs_in_order():
@@ -99,7 +99,7 @@ def test_type_has_five_sizes_two_weights_and_three_faces():
 def test_the_size_tables_are_the_agreed_numbers():
     size, dialog = design.SIZE, design.DIALOG
     tables = {name: getattr(design, name) for name in ("TYPE", "SIZE", "GAP", "STEP", "AXIS", "DIALOG", "FIGURE")}
-    assert [len(tables[name]) for name in ("SIZE", "GAP", "STEP", "AXIS", "DIALOG", "FIGURE")] == [54, 40, 11, 11, 6, 11]
+    assert [len(tables[name]) for name in ("SIZE", "GAP", "STEP", "AXIS", "DIALOG", "FIGURE")] == [54, 39, 11, 11, 6, 11]
     assert size["window"] == (1300, 820) and size["window_min"] == (900, 600)
     assert (size["small_below"], size["two_columns_from"], size["rail"]) == (700, 940, 220)
     assert size["page_pad"] == (22, 20, 20, 14) and size["page_pad_small"] == (16, 16, 14, 14)
@@ -575,7 +575,7 @@ def stand_in_app():
 def test_the_first_apply_goes_on_and_a_repeat_of_the_same_scheme_sets_nothing(stand_in_app):
     """Windows is light and so is an Appearance's starting state, yet its first apply must set the
     palette and the sheet: nothing was applied before it. After that, choosing the scheme already
-    shown sets neither and signals nothing, while the frames Windows draws are still told. What
+    shown sets neither, while the frames Windows draws are still told. What
     was applied is each Appearance's own: a second one on the same application starts from
     nothing applied, and applies even the scheme the first one left."""
     from PySide6.QtCore import Qt
@@ -583,16 +583,14 @@ def test_the_first_apply_goes_on_and_a_repeat_of_the_same_scheme_sets_nothing(st
 
     app = stand_in_app
     appearance = theming.Appearance(app)
-    signalled = []
-    appearance.theme_changed.connect(signalled.append)
     appearance.set_mode("system")
-    assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [False]), "the first apply"
+    assert (len(app.palettes), len(app.sheets), appearance.is_dark()) == (1, 1, False), "the first apply"
     appearance.set_mode("light")
     appearance.set_mode("light")
-    assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [False]), "a repeat set something"
+    assert (len(app.palettes), len(app.sheets)) == (1, 1), "a repeat set something"
     assert app.hints.asked == [Qt.ColorScheme.Unknown, Qt.ColorScheme.Light, Qt.ColorScheme.Light]
     appearance.set_mode("dark")
-    assert (len(app.palettes), len(app.sheets), signalled) == (2, 2, [False, True])
+    assert (len(app.palettes), len(app.sheets)) == (2, 2)
     assert appearance.is_dark() is True and appearance.mode() == "dark"
     another = theming.Appearance(app)
     another.set_mode("dark")
@@ -609,20 +607,18 @@ def test_follow_windows_follows_a_change_made_while_open_and_a_chosen_scheme_doe
 
     app = stand_in_app
     appearance = theming.Appearance(app)
-    signalled = []
-    appearance.theme_changed.connect(signalled.append)
     appearance.set_mode("system")
     app.hints.windows = Qt.ColorScheme.Dark
     app.hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
-    assert (len(app.sheets), signalled, appearance.is_dark()) == (2, [False, True], True)
+    assert (len(app.sheets), appearance.is_dark()) == (2, True)
     app.hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
-    assert (len(app.sheets), signalled) == (2, [False, True])
+    assert len(app.sheets) == 2
     appearance.set_mode("dark")
     app.hints.windows = Qt.ColorScheme.Light
     app.hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
-    assert (len(app.sheets), signalled, appearance.is_dark()) == (2, [False, True], True)
+    assert (len(app.sheets), appearance.is_dark()) == (2, True)
     appearance.set_mode("system")
-    assert (len(app.sheets), signalled, appearance.is_dark()) == (3, [False, True, False], False)
+    assert (len(app.sheets), appearance.is_dark()) == (3, False)
 
 
 def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_runs(stand_in_app):
@@ -639,33 +635,12 @@ def test_a_retired_mode_handed_to_the_appearance_is_follow_windows_and_no_clock_
     assert appearance.findChildren(QTimer) == []
 
 
-def test_a_listener_of_the_theme_signal_may_choose_a_mode(stand_in_app):
-    """A listener that is told the theme changed may choose a mode itself, and its choice is applied.
-    The signal is sent once the apply is over: sent from inside it, the listener's choice would meet
-    the guard against an apply entered twice and be dropped without a word."""
-    from core.gui import theming
-
-    app = stand_in_app
-    appearance = theming.Appearance(app)
-    heard = []
-
-    def listener(dark):
-        heard.append(dark)
-        if heard == [True]:                    # told for the first time that the theme went dark
-            appearance.set_mode("light")
-
-    appearance.theme_changed.connect(listener)
-    appearance.set_mode("dark")
-    assert (len(app.palettes), len(app.sheets)) == (2, 2), "the listener's own choice was not applied"
-    assert heard == [True, False] and appearance.mode() == "light" and appearance.is_dark() is False
-
-
 @pytest.mark.parametrize("step", ["setPalette", "setStyleSheet", "setFont", "retheme", "refresh_focus"])
 def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is_chosen(stand_in_app, step):
     """An apply that raises part-way -- at the palette, at the sheet, at the fonts of the widget
     classes, in a widget's own ``retheme()`` or, last of all, where the focus ring is put back on
     its control -- leaves a look that is not whole: half one scheme and half the other, or the new
-    scheme with its ring not put back. The error comes out, nothing is signalled, and the
+    scheme with its ring not put back. The error comes out, and the
     Appearance can be used again. Nothing counts as applied while the work is under way, so
     neither scheme is taken for a repeat when it is chosen next: not the one shown before the
     failure, and not the one that failed. Either sets the palette and the sheet again."""
@@ -701,11 +676,9 @@ def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is
 
     def after_a_failed_dark():
         """A new Appearance on the stand-in: light applied, then dark refused at ``step``, which is
-        repaired before this returns. What the Appearance signalled comes with it."""
+        repaired before this returns."""
         appearance = theming.Appearance(app)
-        signalled = []
-        appearance.theme_changed.connect(signalled.append)
-        assert chosen(appearance, "light") == (1, 1, 1) and signalled == [False], "the first apply"
+        assert chosen(appearance, "light") == (1, 1, 1), "the first apply"
 
         def refuse(*args):
             raise RuntimeError("this step could not be made")
@@ -723,20 +696,18 @@ def test_an_apply_that_fails_part_way_is_made_again_when_the_scheme_before_it_is
         now = (len(app.palettes), len(app.sheets), len(app.fonts))
         assert tuple(n - was for n, was in zip(now, before)) == set_before_the_step, \
             "the apply did not stop at the step that refused"
-        assert signalled == [False], "an apply that failed signalled"
-        return appearance, signalled
+        return appearance
 
     try:
         # the scheme shown before the failure, chosen again: it is half gone, so it is made again
-        appearance, signalled = after_a_failed_dark()
+        appearance = after_a_failed_dark()
         assert chosen(appearance, "light") == (1, 1, 1), \
             "the scheme shown before the failure was taken for a repeat (or the Appearance stayed shut)"
-        assert signalled == [False, False]
         # the scheme that failed, chosen again once the step works: it was never finished, so it is made
-        appearance, signalled = after_a_failed_dark()
+        appearance = after_a_failed_dark()
         assert chosen(appearance, "dark") == (1, 1, 1), \
             "the scheme that failed was taken for one that was applied, and the half-set look stayed"
-        assert signalled == [False, True] and appearance.is_dark() is True
+        assert appearance.is_dark() is True
         assert app.sheets[-1] == design.build_qss(True)
         assert app.palettes[-1].color(QPalette.ColorRole.Window).name().upper() == design.tokens(True)["paper"]
     finally:
@@ -1142,7 +1113,7 @@ def test_the_sheets_lengths_follow_the_text_factor_and_its_line_weights_do_not()
     with text_size(2.0):
         two = {tuple(selectors): d for selectors, d in _rules(design.build_qss(False))}
         sizes = design._sheet_sizes()
-    assert len(sizes) == 31 and all(name.startswith("px_") for name in sizes) and not set(sizes) & set(design.COLOURS)
+    assert len(sizes) == 30 and all(name.startswith("px_") for name in sizes) and not set(sizes) & set(design.COLOURS)
     button, field, bad = ("QPushButton",), ("QLineEdit", "QComboBox"), ('QLineEdit[state="error"]',)
     title = ('QLabel[type="title"]',)
     assert (one[button]["min-height"], two[button]["min-height"]) == ("32px", "66px")
@@ -1339,10 +1310,9 @@ def test_an_apply_runs_its_steps_in_one_order_and_stops_when_nothing_changed(mon
     monkeypatch.setattr(QWidget, "update", lambda widget, *region: calls.append("update"))
     try:
         appearance = theming.Appearance(stand_in)
-        appearance.theme_changed.connect(lambda dark: calls.append(("theme_changed", dark)))
         appearance.set_mode("dark")
         assert calls == ["scheme", ("set_dark", True), "palette", "sheet", "class_fonts",
-                         "retheme", "retheme", "update", "ring", ("theme_changed", True)]
+                         "retheme", "retheme", "update", "ring"]
         del calls[:]
         appearance.set_mode("dark")
         assert calls == ["scheme"], "an apply that changes nothing stops after the colour scheme"
@@ -1389,7 +1359,7 @@ def test_an_apply_rethemes_each_widget_once_also_in_a_window_that_has_a_parent(s
 def test_an_apply_reaches_a_top_level_list_without_failing(stand_in_app):
     """A list, a tree or a table refuses the plain repaint when it is asked on the widget itself: on those
     classes the name stands for the repaint of one row, which wants the row. An apply that asked it so of a
-    list that is a window of its own stopped there, with the new look set and nothing recorded or signalled.
+    list that is a window of its own stopped there, with the new look set and nothing recorded.
     Asked through the widget class, every widget takes it."""
     from PySide6.QtWidgets import QListWidget
     from core.gui import theming
@@ -1397,12 +1367,10 @@ def test_an_apply_reaches_a_top_level_list_without_failing(stand_in_app):
     app.tops.append(QListWidget())                   # a window of its own; never shown
     try:
         appearance = theming.Appearance(app)
-        signalled = []
-        appearance.theme_changed.connect(signalled.append)
         appearance.set_mode("dark")
-        assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [True])
+        assert (len(app.palettes), len(app.sheets)) == (1, 1)
         appearance.set_mode("dark")                  # recorded as applied: the same scheme again sets nothing
-        assert (len(app.palettes), len(app.sheets), signalled) == (1, 1, [True])
+        assert (len(app.palettes), len(app.sheets)) == (1, 1)
     finally:
         del app.tops[:]                              # the list must not wait for the stand-in to go
 
@@ -1943,15 +1911,13 @@ def test_the_figure_settings_are_the_light_column_and_nothing_else():
 
 
 def test_the_figure_settings_do_not_follow_the_theme_or_the_text_size():
-    """Neither way a theme reaches the window moves a figure setting: not the look's own flag
-    (nor the text factor beside it), and not the signal a change of appearance sends."""
+    """No theme the window is in moves a figure setting: not the look's own flag (nor the text factor beside it),
+    and not a dark appearance handed to the install."""
     import matplotlib
-    from PySide6.QtCore import QObject, Signal
+    from PySide6.QtCore import QObject
     from core.gui import mpl_theme
 
     class DarkAppearance(QObject):            # all that install() may ask of an appearance
-        theme_changed = Signal(bool)
-
         def is_dark(self):
             return True
 
@@ -1963,13 +1929,6 @@ def test_the_figure_settings_do_not_follow_the_theme_or_the_text_size():
         mpl_theme.install(appearance)
         assert {name: matplotlib.rcParams[name] for name in light} == light, \
             "under a dark appearance the settings written are not the light ones"
-        matplotlib.rcdefaults()   # matplotlib's own back, so a setting install wrote would show if written again
-        matplotlib.rcParams["figure.facecolor"] = "#123456"      # a mark no setting of the look has
-        before = dict(matplotlib.rcParams)
-        appearance.theme_changed.emit(False)
-        appearance.theme_changed.emit(True)
-        rewritten = sorted(name for name, value in dict(matplotlib.rcParams).items() if before[name] != value)
-        assert not rewritten, f"a change of theme rewrote these figure settings: {rewritten}"
 
 
 def test_the_figure_settings_name_inter_only_when_both_files_reached_matplotlib(monkeypatch):
@@ -7088,18 +7047,18 @@ def test_the_question_opens_with_the_systems_title_bar_on_a_real_display():
         _gone(host)
 
 
-# the rail down the window's left edge, its foot, and the row of a part's page names
+# the rail down the window's left edge and its foot
 _RAIL_BARS = {1.0: 4, 1.25: 5, 1.5: 6, 2.0: 8}       # the accent's bar of 4 in device pixels at each scaling
 _RAIL_FREE = 206                                     # a column of the rail where no row writes its name
 
 
 def _rail_kit():
-    """The application, then the two device modules and the rules they show: imported inside each test, so that
+    """The application, then the device module and the rules it shows: imported inside each test, so that
     until the modules exist only these tests fail."""
     QApplication.instance() or QApplication([])
     from core.gui import chain, keys
-    from core.gui.widgets import page_names, rail
-    return SimpleNamespace(rail=rail, names=page_names, chain=chain, keys=keys)
+    from core.gui.widgets import rail
+    return SimpleNamespace(rail=rail, chain=chain, keys=keys)
 
 
 @contextlib.contextmanager
@@ -7797,58 +7756,6 @@ def test_the_foot_keeps_one_height_in_every_state_and_the_rows_above_it_stay_whe
                 places.add(tuple(row.mapTo(rail, QPoint(0, 0)).y() for row in rows) + (rail.foot.y(),))
                 lines.add(len(rail.foot._laid_out()[0]))
             assert (len(heights), len(places), lines) == (1, 1, {1, 2}), (factor, heights, len(places), lines)
-
-
-def test_the_page_names_mark_the_current_page_and_move_with_the_arrows(monkeypatch):
-    """The row of a part's page names: the current name semibold in the first ink with the accent's line under it
-    as wide as its words, the others in the second ink, a hairline under the whole row, at four scalings in both
-    themes, shown on a row of two pages made here. It is one stop of the Tab key, at the current name; Left and
-    Right choose the name beside it, stopping at either end, and the ring follows; a click chooses a name; a choice
-    is told, a mark set from the program is not, and a page the row does not hold is refused."""
-    from core.gui import style
-    app = QApplication.instance() or QApplication([])
-    from PySide6.QtWidgets import QAbstractButton
-    kit = _rail_kit()
-    names = kit.names.PageNames((kit.keys.Place("list", "Your models"), kit.keys.Place("builder", "Model builder")))
-    one, sweep = names.findChildren(QAbstractButton)
-    with _standing(names, 400, 80) as window, _focus_as_on_a_screen(monkeypatch) as given:
-        chosen = []
-        names.chosen.connect(chosen.append)
-        assert (names.current(), [w.text() for w in (one, sweep)], _tab_stops(window)) == (
-            "list", ["Your models", "Model builder"], [one])
-        for dark, ratio in itertools.product((False, True), _SCALINGS):
-            with _the_look(dark):
-                image = _rendered(window, ratio)
-                where = _spots(image, "accent")[1]
-                wide = QFontMetricsF(fonts.inter("strong")).horizontalAdvance("Your models")
-                under = _device_edge(one.mapTo(window, QPoint(0, 0)).y() * ratio + one.height() * ratio)
-                assert (where.left(), where.bottom() + 1, where.height()) == (0, under, _HEAVY_RULE[ratio]), (dark, ratio)
-                assert abs(where.width() - wide * ratio) <= 1.5, (dark, ratio, where, wide)
-                quiet = design.colour("rule_light").rgb()
-                assert [n for pixel, n in _down(image, int(300 * ratio)) if pixel == quiet] == [_HAIR_RULE[ratio]]
-        assert names.height() == one.height() + 12 + 1
-        assert [line[1:] for line in _painted_words(monkeypatch, one)] == [(600, 14, design.hex_colour("ink"))]
-        assert [line[1:] for line in _painted_words(monkeypatch, sweep)] == [(400, 14, design.hex_colour("ink_2"))]
-        follows = style.FocusFollower(app, style.PrismStyle())
-        try:
-            QApplication.sendEvent(QObject(), QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
-            QApplication.sendEvent(one, QFocusEvent(QEvent.FocusIn, Qt.TabFocusReason))
-            QTest.keyClick(one, Qt.Key_Right)
-            assert (chosen, names.current(), given, _tab_stops(window)) == (["builder"], "builder", [sweep], [sweep])
-            assert follows.target() is sweep and follows.ring().geometry() == sweep.geometry().adjusted(-4, -4, 4, 4)
-            QTest.keyClick(sweep, Qt.Key_Right)
-            QTest.keyClick(sweep, Qt.Key_Left)
-            QTest.keyClick(one, Qt.Key_Left)
-            assert (chosen, names.current(), given[-1]) == (["builder", "list"], "list", one)
-        finally:
-            follows.stop()
-        QTest.mouseClick(sweep, Qt.LeftButton)
-        QTest.mouseClick(sweep, Qt.LeftButton)
-        names.set_current("list")
-        assert (chosen, names.current()) == (["builder", "list", "builder"], "list")
-        with pytest.raises(KeyError):
-            names.set_current("compare")
-        assert one.geometry().topLeft() == QPoint(0, 0) and sweep.x() == one.width() + 16
 
 
 def test_the_rail_ignores_a_place_it_does_not_list():

@@ -17,8 +17,6 @@ _ICON_DIR = Path(__file__).resolve().parent / "assets" / "icons"
 # Semantic name -> (icon-font codepoint, unicode text fallback). The private-use codepoints match
 # assets/icons/build_prism_icons.py CODEPOINTS; the fallbacks are the glyphs these buttons used pre-B-e.
 NAMES = {
-    "back":     (chr(0xE000), "←"),   # left arrow
-    "settings": (chr(0xE001), "⚙"),   # gear
     "refresh":  (chr(0xE002), "⟳"),   # circular arrow
     "help":     (chr(0xE003), "?"),
     "close":    (chr(0xE004), "✕"),   # remove-a-row (the chi probe table)

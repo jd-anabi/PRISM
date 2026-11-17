@@ -65,23 +65,17 @@ _DARK_BY_HAND = {
     "xtick.labelcolor": "#B8B8B8", "ytick.labelcolor": "#B8B8B8",
 }
 def _fake_appearance(dark):
-    """A minimal Appearance stand-in (is_dark + a real theme_changed Signal) so the test of the figure
-    settings never touches theming._ACTIVE / the app styleHints wiring a real Appearance installs."""
-    from PySide6.QtCore import QObject, Signal
+    """A minimal Appearance stand-in (is_dark alone) so the test of the figure settings never touches
+    theming._ACTIVE / the app styleHints wiring a real Appearance installs."""
+    from PySide6.QtCore import QObject
 
     class _FakeAppearance(QObject):
-        theme_changed = Signal(bool)
-
         def __init__(self, d):
             super().__init__()
             self._dark = d
 
         def is_dark(self):
             return self._dark
-
-        def flip(self, d):
-            self._dark = d
-            self.theme_changed.emit(d)
 
     return _FakeAppearance(dark)
 def _settings_that_changed(before) -> list:
@@ -741,24 +735,15 @@ def test_mpl_theme_install_none_is_a_noop():
         written = _settings_that_changed(before)
         assert not written, f"install(None) wrote these figure settings: {written}"
 
-def test_a_change_of_theme_changes_no_figure_setting():
-    """install(appearance) writes the light settings once, under a dark appearance too, and listens
-    to nothing afterwards: a later change of theme leaves every figure setting as it finds it."""
+def test_install_writes_the_light_figure_settings_under_a_dark_appearance():
+    """install(appearance) writes the light settings, under a dark appearance too."""
     import matplotlib
     from core.gui import mpl_theme
     qt_app()
     with _rcparams_guard():
-        ap = _fake_appearance(True)
-        mpl_theme.install(ap)
+        mpl_theme.install(_fake_appearance(True))
         assert matplotlib.rcParams["figure.facecolor"] == "#FFFFFF"
         assert matplotlib.rcParams["text.color"] == "#1A1A1A"
-        matplotlib.rcdefaults()     # matplotlib's own back, so a setting install wrote would show if written again
-        matplotlib.rcParams["figure.facecolor"] = "#123456"        # a mark no setting of the look has
-        before = dict(matplotlib.rcParams)
-        ap.flip(False)
-        ap.flip(True)
-        rewritten = _settings_that_changed(before)
-        assert not rewritten, f"a change of theme rewrote these figure settings: {rewritten}"
 
 def test_plot_ppc_summary_box_takes_its_ground_from_the_figure_settings():
     """The two PPC summary boxes read plt.rcParams, so under dark figure settings they are NOT the old
