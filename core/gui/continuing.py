@@ -278,9 +278,11 @@ def _history_offer(record: dict, kept_on: set, set_batches) -> "Offer | None":
         return None                              # a round run before its settings were kept: Home says how it ended
     what = "narrowing round" if step == "narrowing" else "training"
     if whole:
-        # The history holds the set's folder as the run's line names it, its whole path; a kept training, its name.
+        # The history holds the set's folder as the run's line names it, its whole path; a kept training, its name. A
+        # set a kept training is on offers no fit again: its kept training is resumed instead, or, where a record that
+        # training's Resume loads is gone, the press would refuse a fit again for that same record.
         if os.path.basename(os.path.normpath(folder)) in kept_on:
-            return None                          # its kept training is resumed instead
+            return None
         return Offer("fit_again", run, None, done, _ended_sentence(name, how, at, done, whole=True, what=what), "",
                      label=name, how=how, at=at, step=step)
     return Offer("continue", run, None, done, _ended_sentence(name, how, at, done, whole=False, what=what), "",
@@ -329,6 +331,8 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
         if ran:
             newest.append(ran[-1][1])
     kept = [_kept_offer(row, runs, prior_label, label, gone) for row in kept_rows]
+    # The sets of the kept trainings whose own records let them be resumed, one whose Resume would load a record no
+    # longer in Records among them: a fit again on that set would be refused for the same record.
     kept_on = {getattr(row, "parents", {}).get("simulation") for row in kept_rows
                if getattr(row, "can_resume", False) and isinstance(getattr(row, "parents", None), dict)}
     found = list(kept)
