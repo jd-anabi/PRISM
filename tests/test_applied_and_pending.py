@@ -5554,6 +5554,36 @@ def test_an_inference_that_returns_its_records_empties_the_names_and_the_note_it
         assert "taken" not in page.foot.reason.text(), page.foot.reason.text()
 
 
+@pytest.mark.parametrize("end", ["stopped", "failed", "stopped, another name typed since"])
+def test_an_inference_that_ends_once_its_observation_is_saved_empties_that_name(end, tmp_path, monkeypatch):
+    """An inference stopped, or failed, once its observation was saved under the name it was handed: the observation's
+    name is emptied, since that observation holds it now and the next press would be refused for it, unless another
+    name was typed there while the run went, which stands; the inference's name and the note, which no record holds,
+    stand as typed."""
+    from core.gui.run.controller import controller
+    from tests._runs import turn_until
+    with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, runs):
+        _ready(page, tmp_path, mode="simulated")                    # the observation named cell_b
+        page.names.name.setText("retrain_inf")
+        page.names.note.setText("a note")
+        page.read_facts()
+        page._main_clicked()
+        assert runs["simulated"].started.wait(5), page.foot.reason.text()
+        if end.endswith("typed since"):
+            page.names.other_name.setText("cell_c")
+        _an_observation("cell_b")                                   # the observation the stage saved
+        if end == "failed":
+            runs["simulated"].fail(RuntimeError("the sampler found no finite value"))
+        else:
+            controller().request_stop()
+        turn_until(qt_app(), lambda: not controller().is_live(), 10.0)
+        assert (page.names.other_value(), page.names.name_value(), page.names.note.text()) == (
+            "cell_c" if end.endswith("typed since") else "", "retrain_inf", "a note"), (
+            "the observation's name, now taken, still stands, or another name went")
+        page.read_facts()
+        assert "taken" not in page.foot.reason.text(), page.foot.reason.text()
+
+
 def test_an_inference_name_taken_meanwhile_empties_the_observations_name_and_says_why(tmp_path, monkeypatch):
     """An inference whose own name another inference took while the run went is refused once its observation is saved:
     the run's page says the refusal, and Inference empties the observation's name, which that observation now holds, and

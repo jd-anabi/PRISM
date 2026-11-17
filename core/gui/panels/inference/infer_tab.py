@@ -896,7 +896,10 @@ class InferPanel(StepPage):
         names and the note it was handed each emptied while it still holds what the run was handed, as the Training
         step's are at its run's end, so that one typed since stands. One of this page's that failed once its
         observation was saved under the name asked for, its inference refused the name another inference took
-        meanwhile: the observation's name emptied, and the page says why. Then the reading."""
+        meanwhile: the observation's name emptied, and the page says why. One of this page's that ended any other way
+        once its observation was saved: the observation's name emptied while it still holds what the run was handed and
+        the name check finds it taken, as a stop or a failure leaves the observation it saved in Records. Then the
+        reading."""
         made, self._made = self._made, None
         handed, self._handed = self._handed, None
         if made is not None:
@@ -910,12 +913,15 @@ class InferPanel(StepPage):
                 names.other_name.clear()
             if names.note.text().strip() == note:
                 names.note.clear()
-        elif handed is not None and getattr(status, "outcome", None) == "failed" and getattr(status, "place", None) == (
-                _PLACE):
+        elif handed is not None and getattr(status, "place", None) == _PLACE:
             name, other, _note = handed
-            if name and other and name_trouble("observation", other) and name_trouble("inference", name):
+            failed = getattr(status, "outcome", None) == "failed"
+            if (failed and name and other and name_trouble("observation", other)
+                    and name_trouble("inference", name)):
                 self._names.other_name.clear()
                 self.own_line(OBSERVATION_KEPT_TEXT.format(other), "warning")
+            elif other and self._names.other_value() == other and name_trouble("observation", other):
+                self._names.other_name.clear()
         super()._run_ended(status)
 
     def _units(self) -> dict:
