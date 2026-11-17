@@ -49,7 +49,8 @@ class _Sideways(QScrollArea):
     narrower than the least width the table keeps, its first column's words whole among it, the table scrolls sideways
     inside the block, its bar under it. The block asks for no more width than the table's first column, so that a page
     beside a list stays beside it; it is as tall as the table and, while it scrolls, its bar. While it scrolls it is a
-    stop of the Tab key, so that the keyboard can scroll it, as a page's own middle is."""
+    stop of the Tab key, so that the keyboard can scroll it, as a page's own middle is; the region lists it among its
+    stops all the same, so that it has its place in the page's order before it first scrolls."""
 
     def __init__(self, table: RuleTable, parent=None) -> None:
         super().__init__(parent)
@@ -108,9 +109,12 @@ class _Sideways(QScrollArea):
 
 class ResultRegion(QWidget):
     """A page's result after its run, made inside ``parent``. ``next_pressed`` carries the ``NextStep`` whose button was
-    pressed. A region with no parent is a window of its own: the first words it is handed would show it as one."""
+    pressed; ``joined`` says a stop of the Tab key joined the region or left it (a table's block, "Copy", a next step's
+    button, a button of its own), so that the page that holds it orders its keys again. A region with no parent is a
+    window of its own: the first words it is handed would show it as one."""
 
     next_pressed = Signal(object)
+    joined = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -238,6 +242,7 @@ class ResultRegion(QWidget):
         self.footnote.setText(table.footnote if table is not None else "")
         self.footnote.setVisible(table is not None and bool(table.footnote))
         self._judge()
+        self.joined.emit()
 
     def table_words(self) -> "TableWords | None":
         return self._table
@@ -277,6 +282,7 @@ class ResultRegion(QWidget):
             button.setText(steps[at].words if at < len(steps) else "")
             button.setVisible(at < len(steps))
         self._judge()
+        self.joined.emit()
 
     def next_steps(self) -> tuple:
         return self._steps
@@ -294,6 +300,7 @@ class ResultRegion(QWidget):
         for part in (self.lines, self.copy_button):
             part.setVisible(bool(text))
         self._judge()
+        self.joined.emit()
 
     def _copy(self) -> None:
         QApplication.clipboard().setText(self.lines.text())
@@ -322,16 +329,18 @@ class ResultRegion(QWidget):
             said.setVisible(True)
         self._actions.append(button)
         self._judge()
+        self.joined.emit()
 
     def actions(self) -> list:
         """The buttons of the result's own, in their order."""
         return list(self._actions)
 
     def stops(self) -> list:
-        """What the Tab key stops at here: the table's block while it scrolls sideways, the lines' "Copy" while it is
-        offered, then the next steps' buttons offered, in their order, then the result's own buttons that can be
-        pressed."""
-        sideways = [self.table_block] if self.table_block is not None and self.table_block.scrolls() else []
+        """What the Tab key stops at here, in the order it is read: the table's block whenever there is one, a stop
+        only while it scrolls sideways but in its place all the same, so that a page orders its keys with it at any
+        moment; the lines' "Copy" while it is offered, then the next steps' buttons offered, in their order, then the
+        result's own buttons that can be pressed."""
+        sideways = [self.table_block] if self.table_block is not None else []
         return [*sideways, *([self.copy_button] if self.lines.text() else []), *self.next_buttons[:len(self._steps)],
                 *(button for button in self._actions if button.isEnabled())]
 

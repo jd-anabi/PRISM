@@ -5413,9 +5413,9 @@ SUMMARY = [{"name": "k", "q05": 0.11, "median": 0.2345, "q95": 0.4, "assumed": F
 
 
 def _inferred(page, tmp_path, *, mode="simulated", coverage=0.93, observation="cell_b", saved_as="cell_b", truth=True,
-              digest=None):
+              digest=None, summary=SUMMARY):
     """Run an inference on ``page`` in ``mode`` to its end, its stand-in run returning an observation saved as
-    ``saved_as`` (asked ``observation``), and an inference saved as retrain_inf whose record holds ``SUMMARY``, the
+    ``saved_as`` (asked ``observation``), and an inference saved as retrain_inf whose record holds ``summary``, the
     truth when ``truth``, ``coverage`` and three figures; the observation's record holds its trace, and the observation
     the digest ``digest``. The observation's id."""
     from core import orchestrator
@@ -5431,7 +5431,7 @@ def _inferred(page, tmp_path, *, mode="simulated", coverage=0.93, observation="c
     made = _an_observation(saved_as or "unnamed_made_here")        # the observation the stage saves
     held = _a_record(tmp_path / "observation", ["simulated_observation.png"], kind="observation", id=made,
                      name=saved_as, digest=digest)
-    results = {"posterior_summary": SUMMARY, "ppc": {"coverage_90": coverage},
+    results = {"posterior_summary": summary, "ppc": {"coverage_90": coverage},
                "ground_truth": {"k": 0.2, "x_scale": 31.0, "t_scale": 3.0, "T": 300.0} if truth else None}
     inference = _a_record(tmp_path / "inference", ["posterior_predictive_check.png", "posterior_corner.png",
                                                    "eye_test.png"],
@@ -5466,6 +5466,52 @@ def test_the_result_names_each_parameters_values_with_units_and_the_true_value(t
                                                                     "Run another inference"]
         assert not page.result.isHidden() and page.figure_stack.isHidden()
         assert getattr(screen.session.observation, "name", None) == "cell_b"
+
+
+#: A parameter named by one long word, which a result's table keeps whole: the table scrolls sideways in its block at
+#: the window's least size.
+_LONG_NAMED = {"name": "the_ratio_of_the_bundles_stiffness_to_its_drag_at_the_lowest_frequency_the_drive_reaches",
+               "q05": 1.0, "median": 2.0, "q95": 3.0, "assumed": False}
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+@pytest.mark.parametrize("wide", [False, True], ids=["fits", "scrolls sideways"])
+def test_the_results_table_block_is_a_stop_of_the_tab_key_where_the_page_is_read(wide, factor, tmp_path, monkeypatch):
+    """At the window's least size, at both text sizes, the block the result's table stands in, made after the page set
+    the Tab key's order, has its place in that order where the page is read, before the result's next steps and the
+    foot, whether its table fits it or scrolls sideways in it; while it scrolls, the Tab key stops on it there."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from core.gui import design
+    from tests._look_helpers import _settle, text_size
+    from tests._window_helpers import in_front
+    with text_size(factor), _fifth_step(tmp_path, monkeypatch) as (window, _screen, page, _runs):
+        _inferred(page, tmp_path, summary=[*SUMMARY, _LONG_NAMED] if wide else SUMMARY)
+        window.resize(design.scaled(900), design.scaled(600))
+        _settle()
+        block, after = page.result.table_block, page.result.next_buttons[0]
+        assert block.scrolls() is wide, (factor, "the table does not stand as this case says")
+        chain, at = [], page.help_button.nextInFocusChain()
+        while at is not page.help_button and len(chain) < 2000:
+            chain.append(at)
+            at = at.nextInFocusChain()
+        foot = [page.foot.facts.scroller, *page.foot.stops()]
+        assert chain.index(block) < chain.index(after) < min(chain.index(stop) for stop in foot), (
+            "the table's block stands out of the page's order")
+        walked = []
+        with in_front(window):
+            page.help_button.setFocus(Qt.TabFocusReason)
+            for _ in range(80):
+                QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+                _settle()
+                if QApplication.focusWidget() in walked:
+                    break
+                walked.append(QApplication.focusWidget())
+        reached = [walked.index(stop) for stop in foot if stop in walked]
+        assert (block in walked) is wide and after in walked and reached, [type(stop).__name__ for stop in walked]
+        assert (not wide or walked.index(block) < walked.index(after)) and walked.index(after) < min(reached), (
+            factor, [type(stop).__name__ for stop in walked])
 
 
 def test_the_coverage_sentence_is_left_out_when_the_record_holds_none(tmp_path, monkeypatch):

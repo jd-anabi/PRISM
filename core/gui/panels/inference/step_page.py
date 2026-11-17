@@ -148,6 +148,7 @@ class StepPage(RunHost, QWidget):
         self._next_step = None
         self.result = ResultRegion()
         self.result.next_pressed.connect(self._next_step_pressed)
+        self.result.joined.connect(self._a_stop_joined)
         self.form = self.controls = Form()
         self.form.edited.connect(self._edited)
         self.form.joined.connect(self._a_stop_joined)
@@ -277,18 +278,19 @@ class StepPage(RunHost, QWidget):
 
     def order_the_keys(self) -> None:
         """The Tab key's order, as the page is read: the heading's buttons, the run's page, which stands in place of what
-        comes next, what stands over the form, the form, then what scrolls while it scrolls, and the foot. Figures stand on
-        the run's page or over the form, so they follow both. Widgets take their turn as they come to the window, and a
-        page adds its rows after this page is built, so the order is set here, once they stand, as a page first comes into
-        sight, and again as a row joins the form or a figure joins the stack. A part that is a stop only at times has its
-        place all the same. A control that makes its own fields again after that, as a grid does, calls this when it
-        has. A form the page handed the foot (``use_form``) stands inside what the page lists, a detail's: its stops come
-        right after the stops the page lists before it."""
+        comes next, what stands over the form, the result's stops, the form, then what scrolls while it scrolls, and
+        the foot. Figures stand on the run's page or over the form, so they follow both. Widgets take their turn as
+        they come to the window, and a page adds its rows after this page is built, so the order is set here, once
+        they stand, as a page first comes into sight, and again as a row joins the form, a figure joins the stack or a
+        stop joins the result, its table's block among them. A part that is a stop only at times has its place all the
+        same. A control that makes its own fields again after that, as a grid does, calls this when it has. A form the
+        page handed the foot (``use_form``) stands inside what the page lists, a detail's: its stops come right after
+        the stops the page lists before it."""
         region, after = self.region_stops(), self.region_after_the_form()
         own = self.form is self._own_form
         listed = region if own else [*region, *self.form.stops()]
         stops = [*self.head.findChildren(QPushButton), *self.run_view.stops(), *([] if after else listed),
-                 *self.result.next_buttons, self.run_view.how_link, *self.figure_stack.stops(), self.next_button,
+                 *self.result.stops(), self.run_view.how_link, *self.figure_stack.stops(), self.next_button,
                  *(self.form.stops() if own else []), *(listed if after else []), self.scroller,
                  self.foot.facts.scroller, *self.foot.stops()]
         policies = [(stop, stop.focusPolicy()) for stop in stops]
@@ -318,7 +320,8 @@ class StepPage(RunHost, QWidget):
             self._back_to_the_form()
 
     def _a_stop_joined(self) -> None:
-        """A row or a figure joined the page: it takes its place in the order, once there is one."""
+        """A row, a figure or a stop of the result joined the page, or left it: the order is set again, once there is
+        one."""
         if self._keys_ordered:
             self.order_the_keys()
 

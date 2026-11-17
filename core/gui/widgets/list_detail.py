@@ -36,9 +36,12 @@ def _wanted(part: QWidget) -> int:
 
 
 def _stops_of(part: QWidget) -> list:
-    """What the Tab key stops at in ``part``, in its own order where it names one."""
+    """What the Tab key stops at in ``part``: where it names its stops, those, in its own order, a stop that is one only
+    at times among them, which has its place all the same; else the part, or what it holds, that is a stop now."""
     own = getattr(part, "stops", None)
-    found = own() if callable(own) else ([part] if part.focusPolicy() & Qt.TabFocus else part.findChildren(QWidget))
+    if callable(own):
+        return list(own())
+    found = [part] if part.focusPolicy() & Qt.TabFocus else part.findChildren(QWidget)
     return [stop for stop in found if stop.focusPolicy() & Qt.TabFocus]
 
 

@@ -4711,6 +4711,56 @@ def test_the_comparisons_table_beside_the_list_keeps_its_row_names_whole(factor,
             factor, block.width(), one.width())
 
 
+def _tab_walk(window, start, steps=80) -> list:
+    """Where the Tab key takes the keyboard, press after press, from ``start``, the window in front: each stop once, in
+    the order it is reached."""
+    from PySide6.QtTest import QTest
+    from tests._window_helpers import in_front
+    walked = []
+    with in_front(window):
+        start.setFocus(Qt.TabFocusReason)
+        _settle()
+        for _ in range(steps):
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+            _settle()
+            found = QApplication.focusWidget()
+            if found is start or found in walked:
+                break
+            walked.append(found)
+    return walked
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.5])
+def test_the_comparisons_table_block_is_a_stop_of_the_tab_key_where_the_page_is_read(factor, tmp_path):
+    """The comparison's page opened beside the list in a wide window, where its table fits its block, and the window
+    then made as small as its opening size, where the table scrolls sideways in its block and the page still stands
+    beside the list: at both text sizes, the block is a stop of the Tab key in the order the page is read, after the
+    list, before the result's own button and before the foot, though it did not scroll when the check was opened and
+    the order set."""
+    from core.gui import design
+    with text_size(factor), _checks_page(tmp_path, records=_an_audit,
+                                         size=(design.scaled(2400), design.scaled(820))) as (window, screen, page,
+                                                                                            store):
+        audit, = _audit_ids(store)
+        _a_set_of(tmp_path, store, screen, compared={"audit": audit, "audit_fraction": 0.379})
+        page.read_facts()
+        page.open_check("comparison")
+        _settle()
+        one = page.check_pages["comparison"]
+        block, accept = one.result.table_block, one.result.actions()[0]
+        assert page.list_detail.beside() and not block.scrolls(), (
+            factor, "the table does not fit, so this says nothing")
+        window.resize(design.scaled(1300), design.scaled(820))
+        _settle()
+        assert page.list_detail.beside() and block.scrolls() and accept.isEnabled(), (
+            factor, "the table fits its block, or nothing follows it, so this says nothing")
+        walked = _tab_walk(window, page.help_button)
+        foot = [walked.index(stop) for stop in (page.foot.facts.scroller, *page.foot.stops()) if stop in walked]
+        assert block in walked and foot, (factor, [type(stop).__name__ for stop in walked])
+        assert walked.index(page.listing.narrow.view) < walked.index(block) < walked.index(accept) < min(foot), (
+            factor, [type(stop).__name__ for stop in walked])
+
+
 def test_an_acceptance_lapses_when_another_audit_counts(tmp_path):
     """An acceptance is of the audit it names: once another audit counts for the prior, the check reads the difference
     from that audit again, to look closer at, and says no acceptance."""

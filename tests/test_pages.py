@@ -2628,8 +2628,11 @@ def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_ste
     steps = (NextStep("Narrow around this observation", "narrowing", {"observation": "20261003T031200"}),
              NextStep("Run another inference", "infer"))
     region.set_next_steps(steps)
-    assert [button.text() for button in region.stops()] == ["Narrow around this observation", "Run another inference"]
-    assert all(button.property("cls") is None for button in region.stops())
+    # the table's block is listed first, a stop of the Tab key only while it scrolls sideways, which it does not here
+    block, *buttons = region.stops()
+    assert block is region.table_block and not block.scrolls()
+    assert [button.text() for button in buttons] == ["Narrow around this observation", "Run another inference"]
+    assert all(button.property("cls") is None for button in buttons)
     from PySide6.QtTest import QTest
     with in_front(window):
         page.help_button.setFocus(Qt.TabFocusReason)
@@ -2638,7 +2641,7 @@ def test_the_result_region_shows_a_ruled_table_pictures_and_at_most_two_next_ste
             QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
             _settle()
             walked.append(QApplication.focusWidget())
-    assert walked == [*region.stops(), page.form.stops()[0]], "the next steps are not where the page is read"
+    assert walked == [*buttons, page.form.stops()[0]], "the next steps are not where the page is read"
     with pytest.raises(ValueError):
         region.set_next_steps(steps + (NextStep("A third", "checks"),))
     assert region.next_steps() == steps

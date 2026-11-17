@@ -388,11 +388,15 @@ class ValidatePanel(StepPage):
         seen = {row.key: row for row in shown or ()}
         kept = getattr(self._screen, "checks_held", None)
         records = kept.records if kept is not None else ()
+        opened = self.check_pages.get(self.open_key)
+        shown = getattr(opened, "result", None)
         for key, page in self.check_pages.items():
             row = by_key.get(key)
             result, source = self._result(key, row, found, kept, read=read, page=page)
             page.show_row(seen.get(key), result,
                           earlier=check_lineage.earlier_lines(row, records) if row is not None else (), source=source)
+        if self._keys_ordered and opened is not None and opened.result is not shown:
+            self.order_the_keys()            # the open check's result made again: its stops take their place
 
     def _live_comparison(self, row) -> "tuple | None":
         """While a training or a narrowing round is live, its own comparison after simulating, from its run's model in
