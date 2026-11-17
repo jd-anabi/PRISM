@@ -12,9 +12,6 @@
 
 numpy==2.3.3
 scipy==1.16.2
-pandas==2.3.3
-pyarrow==20.0.0
-h5py==3.15.1
 matplotlib==3.10.7
 tqdm==4.67.1
 sympy==1.14.0
@@ -31,17 +28,9 @@ pint==0.25
 sbi==0.26.1
 skorch==1.4.0
 tabulate==0.10.0
-antropy==0.1.9
-pybispectra==1.2.4
 scikit-learn==1.7.2
 corner==2.2.3
 hdbscan==0.8.41
 PySide6==6.9.3
-pyqtgraph==0.13.7
-# imageio and imageio-ffmpeg wrote the live simulation's videos (a GIF, or an MP4 through an ffmpeg binary
-# that in the biophys-env came from the conda `ffmpeg` package). The live simulation was taken out of PRISM,
-# and nothing in PRISM uses either package now; they stay pinned so that the environment is unchanged.
-imageio==2.37.0
-imageio-ffmpeg==0.6.0
 # Test runner. Fast gate: pytest -m "not slow"; full: pytest.
 pytest==9.1.1
