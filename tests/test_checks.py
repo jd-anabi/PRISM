@@ -449,9 +449,9 @@ def _expected(states, *, posterior: bool, chi: bool) -> dict:
     closer = [name for name, state in zip(names, states) if state == "Look closer"]
     still = sum(1 for state, apply in zip(states, applies) if apply and state != "Passed")
     if failed:
-        sentence = "Failed: " + ", ".join(failed) + "."
+        sentence = f"Failed: {_set_off(failed, 'and')}."
     elif closer:
-        sentence = "Look closer: " + ", ".join(closer) + "."
+        sentence = f"Look closer: {_set_off(closer, 'and')}."
     elif not posterior:
         sentence = ("Three of the six do not apply to a posterior trained without the frequency response." if not chi
                     else "The other four are made after simulating and after the fit.")
@@ -467,6 +467,13 @@ def _expected(states, *, posterior: bool, chi: bool) -> dict:
               else f"{states.count('Not run yet')} not run yet" if "Not run yet" in states else "")
     return {"headline": head, "sentence": sentence, "passed": passed, "of": of, "failed": bool(failed),
             "look_closer": bool(closer), "open": bool(still), "can_check": True, "second_line": second}
+
+
+def _set_off(names, last: str) -> str:
+    """Checks' ``names`` as the headline's sentence names them: each set off in quotes, joined by commas and ``last``
+    ("and", or "or") before the last."""
+    quoted = [f"'{name}'" for name in names]
+    return f"{', '.join(quoted[:-1])} {last} {quoted[-1]}" if len(quoted) > 1 else "".join(quoted)
 
 
 def _with_never(states):
@@ -506,12 +513,11 @@ def _expected_never(states) -> dict:
     still = sum(1 for state in states if state not in ("Passed", "never"))
     opened = ("" if not still else "Inference can be run now; 1 deciding check is still open." if still == 1
               else f"Inference can be run now; {still} deciding checks are still open.")
-    quoted = [f"'{name}'" for name in never]                 # each set off; "or" before the last
-    named = f"{', '.join(quoted[:-1])} or {quoted[-1]}" if len(quoted) > 1 else "".join(quoted)
+    named = _set_off(never, "or")
     if failed:
-        sentence = "Failed: " + ", ".join(failed) + "."
+        sentence = f"Failed: {_set_off(failed, 'and')}."
     elif closer:
-        sentence = "Look closer: " + ", ".join(closer) + "."
+        sentence = f"Look closer: {_set_off(closer, 'and')}."
     elif opened and never:
         sentence = f"{opened} No run can pass {named} for this posterior."
     elif opened:
@@ -582,8 +588,9 @@ def test_the_headline_over_every_combination_of_states():
 
 def test_the_headlines_sentence_is_the_first_that_applies():
     """The seven sentences under the headline, each where it is the first that applies: with no prior, any failed
-    (named in the list's order), any to look closer at, three that do not apply with no posterior, no posterior, a
-    check still open (one, and several), and every one that applies passed (of six, and of three)."""
+    (named in the list's order, each set off in quotes, "and" before the last), any to look closer at (the same way),
+    three that do not apply with no posterior, no posterior, a check still open (one, and several), and every one that
+    applies passed (of six, and of three)."""
     def sentence(states, **over):
         held = _held(**over)
         return check_lineage.headline(_rows_of(states), held=held)[1]
@@ -591,9 +598,13 @@ def test_the_headlines_sentence_is_the_first_that_applies():
     six = ["Passed"] * 6
     assert sentence(six, prior=None) == "Nothing can be checked yet. Build or load a prior in step 2."
     assert sentence(["Failed", "Passed", "Passed", "Failed", "Look closer", "Passed"]) == (
-        "Failed: Frequency band, Calibration.")
+        "Failed: 'Frequency band' and 'Calibration'.")
+    assert sentence(["Failed", "Failed", "Passed", "Failed", "Passed", "Passed"]) == (
+        "Failed: 'Frequency band', 'Unusable driven recordings: audit' and 'Calibration'.")
     assert sentence(["Passed", "Look closer", "Passed", "Passed", "Passed", "Not run yet"]) == (
-        "Look closer: Unusable driven recordings: audit.")
+        "Look closer: 'Unusable driven recordings: audit'.")
+    assert sentence(["Passed", "Passed", "Look closer", "Passed", "Passed", "Not run yet"]) == (
+        "Look closer: 'Unusable driven recordings: simulation set against the audit'.")
     assert sentence(["Does not apply"] * 3 + ["Waiting for a posterior"] * 3, posterior=None, chi=False) == (
         "Three of the six do not apply to a posterior trained without the frequency response.")
     assert sentence(["Passed", "Not run yet", "Waiting for the simulations"] + ["Waiting for a posterior"] * 3,
@@ -609,8 +620,8 @@ def test_the_headlines_sentence_is_the_first_that_applies():
 def test_a_check_no_run_can_pass_is_set_off_in_quotes_where_the_sentence_names_it():
     """The headline's sentence names a deciding check that no run can pass for the posterior in use in passing, set off
     in quotes as the window sets off a name inside a sentence, so that the sentence reads: one alone, two joined by
-    "or", three with commas and "or" before the last. The checks that failed or need a closer look stand after a colon,
-    where a name reads, as they did."""
+    "or", three with commas and "or" before the last. The checks that failed or need a closer look are set off the same
+    way, "and" before the last."""
     def sentence(states):
         return check_lineage.headline(_with_never(states), held=_held())[1]
 
@@ -623,7 +634,8 @@ def test_a_check_no_run_can_pass_is_set_off_in_quotes_where_the_sentence_names_i
     assert sentence(["Passed", "Passed", "never", "Passed", "never", "never"]) == (
         "Inference can be run now; no run can pass 'Unusable driven recordings: simulation set against the audit', "
         "'Use of each part of the input' or 'Identifiability of the posterior' for this posterior.")
-    assert sentence(["Failed", "Passed", "never", "Failed", "never", "Passed"]) == "Failed: Frequency band, Calibration."
+    assert sentence(["Failed", "Passed", "never", "Failed", "never", "Passed"]) == (
+        "Failed: 'Frequency band' and 'Calibration'.")
 
 
 def test_the_summarys_second_line_counts_the_first_that_applies():

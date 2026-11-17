@@ -74,9 +74,11 @@ ALL_PASSED_TEXT = "This posterior has passed every deciding check."
 ALL_THAT_APPLY_TEXT = "This posterior has passed every deciding check that applies to it."
 NO_RUN_PASSES_TEXT = "Inference can be run now; no run can pass {} for this posterior."
 OPEN_AND_NO_RUN_TEXT = "{} No run can pass {} for this posterior."
-#: A check's name inside a sentence that names it in passing, set off as the window sets off a name in a sentence; two
-#: or more are joined by commas, and "or" before the last.
+#: A check's name inside a sentence that names it, set off as the window sets off a name in a sentence; two or more are
+#: joined by commas, and before the last the word of the sentence: "or" where no run can pass any of them, "and" where
+#: each failed, or each needs a closer look.
 NAMED_IN_PASSING = "'{}'"
+EITHER_WORD, EACH_WORD = "or", "and"
 #: The reasons a deciding check's row gives that no run can lift for the posterior in use: it was made without what
 #: the check reads.
 CANNOT_PASS_REASONS = (NO_SIMULATIONS_TEXT, NO_ROTATION_TEXT)
@@ -572,10 +574,10 @@ def _counts(found, held: Held) -> tuple[int, int, int]:
     return passed, len(DECIDING) - away, away
 
 
-def _in_passing(names: Sequence[str]) -> str:
-    """Checks' ``names`` as a sentence names them in passing: each set off, the last joined by "or"; "" for none."""
+def _in_passing(names: Sequence[str], last: str = EITHER_WORD) -> str:
+    """Checks' ``names`` as a sentence names them: each set off, the last joined by ``last``; "" for none."""
     quoted = [NAMED_IN_PASSING.format(name) for name in names]
-    return " or ".join([", ".join(quoted[:-1]), quoted[-1]]) if len(quoted) > 1 else "".join(quoted)
+    return f" {last} ".join([", ".join(quoted[:-1]), quoted[-1]]) if len(quoted) > 1 else "".join(quoted)
 
 
 def headline(found: Sequence[CheckRow], *, held: Held) -> tuple[str, str]:
@@ -585,7 +587,7 @@ def headline(found: Sequence[CheckRow], *, held: Held) -> tuple[str, str]:
     deciding = _deciding(found)
 
     def names(state: str) -> str:
-        return ", ".join(entry(row.key).name for row in deciding if row.state == state)
+        return _in_passing([entry(row.key).name for row in deciding if row.state == state], EACH_WORD)
 
     if held.prior is None:
         return said, NOTHING_YET_TEXT
