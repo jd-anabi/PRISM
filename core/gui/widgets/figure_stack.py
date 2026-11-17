@@ -1,14 +1,13 @@
 """A tabbed container of figure images. Figures are rendered to PNG on the worker thread (see
 base_panel._png_fig_sink) and shown here as QPixmaps -- deliberately NOT live FigureCanvasQTAgg widgets:
 painting a matplotlib figure that was created on a worker thread deadlocks on matplotlib's global
-lock. Static PNGs sidestep that entirely and unify with a runner that saves its PNGs to disk
-itself.
+lock. Static PNGs sidestep that entirely.
 
 Each tab carries a "Pop out" button that re-opens the figure in its own window where it CAN be zoomed,
 panned and saved (core/gui/widgets/figure_window.py), a window of its own that no window owns:
   * SBI-panel figures also arrive as a pickled Figure -> a true interactive matplotlib window,
     reconstructed on the GUI thread (never painting the worker's original -- see above).
-  * disk-PNG figures (and any figure whose pickle is missing / unloadable) -> a pan/zoom image viewer.
+  * a figure whose pickle is missing or unloadable -> a pan/zoom image viewer.
 While a run is live every figure pops out as its picture, in the image viewer, and says so on its button, and an
 interactive window already open shows its picture until the run has ended (``hold``): the window's thread lays out
 no figure while a run builds its own.
@@ -87,14 +86,9 @@ class FigureStack(QTabWidget):
         pix = QPixmap()
         if png_bytes:
             pix.loadFromData(png_bytes, "PNG")
-        self._add_tab(title, pix, fig_pickle=fig_pickle, png_path=None)
+        self._add_tab(title, pix, fig_pickle=fig_pickle)
 
-    def add_png(self, title: str, path):
-        """Show a PNG that a runner saved to disk. No Figure exists for
-        these, so "Pop out" is a pan/zoom image viewer over the file."""
-        self._add_tab(title, QPixmap(str(path)), fig_pickle=None, png_path=str(path))
-
-    def _add_tab(self, title: str, pix: QPixmap, *, fig_pickle, png_path):
+    def _add_tab(self, title: str, pix: QPixmap, *, fig_pickle):
         # FIT TO WIDTH. Stage figures are rendered at dpi=110 with bbox_inches="tight", routinely
         # 1200-1800px wide, and were shown at full resolution in a scroll area with no scaling -- so
         # an embedded figure was ALWAYS scrolled in both axes, while only the pop-out window had
@@ -116,7 +110,6 @@ class FigureStack(QTabWidget):
         # Stash everything the pop-out needs directly on the tab widget, so it travels with the tab
         # (tabs are movable) and is freed when the tab closes.
         container._fig_pickle = fig_pickle
-        container._png_path = png_path
         container._pix = pix
         container._title = title
         container._pop = pop
@@ -165,12 +158,7 @@ class FigureStack(QTabWidget):
             except Exception:      # noqa: BLE001 -- a version-skewed / unloadable pickle: fall back
                 window = None
         if window is None:
-            pix = container._pix
-            if container._png_path:                       # prefer the crisp full-res file on disk
-                disk = QPixmap(container._png_path)
-                if not disk.isNull():
-                    pix = disk
-            window = ImageZoomWindow(pix, title, on_close=self._drop_window)
+            window = ImageZoomWindow(container._pix, title, on_close=self._drop_window)
         self._windows.add(window)
         window.show()
         window.raise_()
@@ -277,12 +265,6 @@ class FigureStack(QTabWidget):
 
     def _drop_window(self, window):
         self._windows.discard(window)
-
-    def png_path(self, index: int) -> "str | None":
-        """The file the tab at ``index`` shows when ``add_png`` opened it; None for a figure that
-        arrived as bytes (``add_figure``) and for an index with no tab, so that a viewer of a saved
-        run need not open a second time a PNG the run's own watcher already put up."""
-        return getattr(self.widget(index), "_png_path", None)
 
     def tabRemoved(self, index: int) -> None:
         """A tab has gone, by whatever closed it: said, as a tab added is."""

@@ -302,13 +302,31 @@ class StandIn:
         return False
 
 
+@contextmanager
+def a_worker_that_cannot_be_made():
+    """Inside the block the run's controller cannot make a run's worker: a start raises ``TypeError`` once every page is
+    locked, its page handed the run and its status published, and before its worker is queued, as a start that
+    cannot be finished does, and is taken back."""
+    from core.gui.run.controller import RunController
+    made = RunController._worker
+
+    def refused(self, run, kwargs):
+        raise TypeError("the run's worker cannot be made")
+
+    RunController._worker = refused
+    try:
+        yield
+    finally:
+        RunController._worker = made
+
+
 def start_run(host, stand_in, *, spec=None, **kwargs) -> None:
     """Start ``stand_in`` through ``host``'s own ``dispatch``, the host's ``run_spec`` standing in for this one
     start only: ``spec`` when it is handed, else a run of the stand-in's word at the place the window gives the host's
     class (``PLACES``), or at none for a bare run host (the class every ``build_run_host()`` makes, named ``P``). A
     host of any other class is refused with a ``KeyError`` naming it when no spec is handed: it would be started with
     no place, and every test that leaned on the default would stay green with none. ``kwargs`` are the dispatch's own
-    (``watch_dir``, ``provide_fig_sink``, ``on_result``). Fails when a run is live already."""
+    (``provide_fig_sink``, ``on_result``). Fails when a run is live already."""
     from core.gui.run.model import RunSpec
     given = spec
     if given is None:

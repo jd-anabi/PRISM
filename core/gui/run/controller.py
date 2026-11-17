@@ -32,9 +32,7 @@ Its two files are removed, the controller is idle again with nothing to acknowle
 as it shows one made at the click.
 
 A run that only loads a record keeps no file and ends straight into idle, with nothing to acknowledge; a run that
-keeps no file and does more than load (no page of the window starts one now) ends so too, but when it fails it leaves
-an end of its own, its failure, which the foot says until it is seen or the next run starts, with nothing written for it: its id names no file, and the end
-that waited to be seen as it started is given back once its own is seen, as a run that ends into idle gives it back.
+keeps no file and does more than load (no page of the window starts one now) ends so too.
 
 A stop asked for (``request_stop``) is taken at the run's next point where a stop is taken and can be withdrawn
 until then (``withdraw_stop``); asked by the window's close, it carries the close, and the window closes once the
@@ -202,7 +200,6 @@ class _Run:
         self.sink: _Text | None = None             # what its worker writes its text to
         self.worker = None
         self.token: CancelToken | None = None
-        self.watchers: list = []
         self.solver_at_start = 0
         self.real_start: datetime | None = None    # the computer's own time at the start, for the store's records
         self.outcome: str | None = None            # "finished", "stopped" or "failed"
@@ -347,7 +344,7 @@ class RunController(QObject):
 
     # ── a run's start ──
     def dispatch(self, fn, *args, spec: RunSpec, host=None, on_result=None, provide_fig_sink: bool = False,
-                 provide_stream: bool = False, on_chunk=None, watch_dir=None, **kwargs) -> bool:
+                 **kwargs) -> bool:
         """Start ``fn(*args, **kwargs)`` as the process's run, described by ``spec``, for the page ``host``. False,
         and nothing started, while a run is live. Else, in this order: the memory limit in force is read once; the
         spec is given the call, the limit, where it was set and this computer's name, and what it hands for the run's
@@ -359,23 +356,15 @@ class RunController(QObject):
         host's results given back, the status idle again, the run's two files removed -- and the error is raised as
         it came: a page that cannot be drawn fails the start, and leaves nothing locked. ``on_result`` hears the
         run's result while the run is still live;
-        ``provide_fig_sink`` hands the call a sink for its figures, which go to the host's stack of pictures;
-        ``provide_stream`` hands it ``emit_chunk`` and ``should_stop``, and ``on_chunk`` hears each chunk;
-        ``watch_dir`` is one folder, or several, whose new pictures go to the host's stack. None of these is handed
-        on to ``fn``. An end that waits to be seen as the run starts is noted: the run sets it aside when it ends with
-        an end of its own, and gives it back when it ends into idle or is taken back (``_set_aside``); a run that keeps
-        no file and fails leaves an end of its own, sets nothing aside, and gives it back once that end is seen
-        (``acknowledge``)."""
+        ``provide_fig_sink`` hands the call a sink for its figures, which go to the host's stack of pictures, and is
+        not handed on to ``fn``. An end that waits to be seen as the run starts is noted: the run sets it aside when it
+        ends with an end of its own, and gives it back when it ends into idle or is taken back (``_set_aside``)."""
         if self.is_live():
             return False
-        if self._unfiled_end():
-            waiting = self._run.waiting          # the failure of a run that keeps no file goes; the end before it waits
-        else:
-            waiting = self._status if self._status.unacknowledged_end and self._status.run is not None else None
+        waiting = self._status if self._status.unacknowledged_end and self._status.run is not None else None
         from core.artifacts import default_store
         from core.progress import SOLVER
         from ..panels.run_host import RunHost
-        from ..plot_watcher import NewPngWatcher
         clock = self._clock or _local_now
         force = memory_limit.memory_limit_in_force()
         limit_text = memory_limit.limit_words(force)
@@ -389,8 +378,7 @@ class RunController(QObject):
         run = _Run(spec, host, store, folder)
         run.asked = _asked(kwargs) or (spec.name if "resume_fit" in kwargs else "")
         run.waiting = waiting
-        run.keywords = {"on_result": on_result, "provide_fig_sink": provide_fig_sink,
-                        "provide_stream": provide_stream, "on_chunk": on_chunk}
+        run.keywords = {"on_result": on_result, "provide_fig_sink": provide_fig_sink}
         run.solver_at_start, run.real_start = SOLVER.steps, datetime.now(timezone.utc)
         # The page's next run: what its last run offered goes, with that run's call; so does the offer of a page that
         # has gone. A run that only loads a record is handed no page, and leaves the page's offer as it is.
@@ -436,17 +424,6 @@ class RunController(QObject):
             self.status_changed.emit(self._status)
 
             worker, token = self._worker(run, kwargs)
-            stack = getattr(host, "figure_stack", None)
-            # One watcher for each folder: a watcher reads one folder and not the folders under it, and a run may
-            # write more than one record. The controller holds them, so a page deleted during the run takes none
-            # with it.
-            for one in ([] if watch_dir is None else
-                        [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
-                watcher = NewPngWatcher(one, self)
-                run.watchers.append(watcher)
-                if stack is not None:
-                    watcher.png_ready.connect(stack.add_png)
-                watcher.start()
         except BaseException:
             self._take_back(run)
             raise
@@ -468,7 +445,7 @@ class RunController(QObject):
 
     def _worker(self, run: _Run, kwargs: dict):
         """A worker for the run's own call, its keywords ``kwargs``, with a new token: the run's text file its line
-        sink; its figures, its stream and its result handed where the run's start said; every signal it says heard
+        sink; its figures and its result handed where the run's start said; every signal it says heard
         here. Returns the worker and its token."""
         from ..panels.base_panel import _png_fig_sink
         keywords = run.keywords
@@ -480,12 +457,6 @@ class RunController(QObject):
         signals = worker.signals
         if keywords.get("provide_fig_sink"):
             worker.kwargs["fig_sink"] = _png_fig_sink(signals.figure)
-        if keywords.get("provide_stream"):
-            # A long-lived streaming run hands each chunk to ``emit_chunk`` and polls ``should_stop`` to unwind.
-            worker.kwargs["emit_chunk"] = signals.chunk.emit
-            worker.kwargs["should_stop"] = token.requested.is_set
-            if keywords.get("on_chunk") is not None:
-                signals.chunk.connect(keywords["on_chunk"])
         stack = getattr(run.host, "figure_stack", None) if _alive(run.host) else None
         if stack is not None:
             signals.figure.connect(stack.add_figure)
@@ -501,14 +472,11 @@ class RunController(QObject):
         return worker, token
 
     def _take_back(self, run: _Run) -> None:
-        """A start that raised before its worker was queued, taken back: its watchers let go, the timer stopped
+        """A start that raised before its worker was queued, taken back: the timer stopped
         (once there is one), the run's two files removed, every panel free, the host's results given back (a load
         never took them), and the status published idle again, or, when an end waited to be seen as it started, that
         end's again: a start taken back sets nothing aside."""
         from ..panels.run_host import RunHost
-        for watcher in run.watchers:
-            watcher.deleteLater()
-        run.watchers = []
         if self._timer is not None:
             self._timer.stop()
         if run.text is not None:
@@ -807,36 +775,23 @@ class RunController(QObject):
     def acknowledge(self, run: str) -> None:
         """Someone has seen how the run ``run`` ended: its history file says so, and when its end is the one the
         status says (the run the controller holds, or one of an earlier launch whose end the status was filled
-        with), the controller is idle again; or, for the failure of a run that keeps no file, which writes nothing,
-        the end that waited to be seen as that run started is the status again. A run still live is not seen: its end
+        with), the controller is idle again. A run still live is not seen: its end
         is to come. An end seen while a later run is live is no longer that run's to set aside or give back."""
-        unfiled = self._unfiled_end() and self._status.run == run
         self._write_seen(run)
         live = self._run
         if live is not None and live.waiting is not None and live.waiting.run == run:
             live.waiting = None
         if self._status.unacknowledged_end and self._status.run == run:
-            given = None
-            if unfiled:
-                given, live.waiting = live.waiting, None
-            self._status = given or IDLE
+            self._status = IDLE
             self.status_changed.emit(self._status)
-
-    def _unfiled_end(self) -> bool:
-        """Whether the status is the end of the run the controller holds that keeps no file: a run that does more
-        than load and failed, said with nothing written for it, until it is seen or the next run starts."""
-        held = self._run
-        return (held is not None and not held.spec.keeps_files and held.id is not None
-                and self._status.unacknowledged_end and self._status.run == held.id)
 
     def _set_aside(self, run: _Run) -> None:
         """The run ``run`` has ended with an end of its own to say while the end that waited to be seen as it started
         still waits: the window says this run's end from now on, and never says two, so that end is written seen in
         its history, as though it had been looked at, and is not said again at the next launch. Only a run that keeps
         a history file and leaves an end of its own sets an end aside: one that ends into idle (a refusal before
-        anything was spent, a load, a run that keeps no file and did not fail) or is taken back gives that end back
-        instead, as the status (``_end``, ``_take_back``); a run that keeps no file and fails leaves an end of its own,
-        sets nothing aside, and gives that end back once its own is seen (``acknowledge``)."""
+        anything was spent, a load, a run that keeps no file) or is taken back gives that end back instead, as the
+        status (``_end``, ``_take_back``)."""
         waiting, run.waiting = run.waiting, None
         if waiting is not None:
             self._write_seen(waiting.run)
@@ -1182,12 +1137,10 @@ class RunController(QObject):
         QThreadPool.globalInstance().start(run.worker)
 
     def _end(self, run: _Run, refused_early: bool) -> None:
-        """The run's end, in this order: its watchers' last look; its state (ended, or idle for a run that leaves
+        """The run's end, in this order: its state (ended, or idle for a run that leaves
         nothing to acknowledge), with how and when it ended and what it kept in words, read from the history it
         leaves (``ends.words``; a failure's sentence is its page's own); the end that waited to be seen as the run
-        started set aside when the run leaves an end of its own, or else the status again (``_set_aside``), but for the
-        failure of a run that keeps no file, which leaves an end of its own and holds that end until it is seen (its
-        id read from the folder of runs, or made without it when the folder cannot be read: nothing is written); the
+        started set aside when the run leaves an end of its own, or else the status again (``_set_aside``); the
         history's end written, and kept for every later write, and the text file closed, or both removed for a
         refusal made before anything was spent; every panel unlocked; the computer let sleep again and the reason
         against ending the session withdrawn; the payload let go, and the run's own call with it unless its page
@@ -1199,25 +1152,12 @@ class RunController(QObject):
         record, which has no page of its own."""
         from ..panels.run_host import RunHost
         model = self._model
-        for watcher in run.watchers:
-            watcher.stop()                       # one last look: the last figure often lands right at the end
-            watcher.deleteLater()
-        run.watchers = []
         if self._timer is not None:
             self._timer.stop()
         spec, failure = run.spec, run.failure
         model.ended(run.outcome, kept_fit=run.kept_fit)
         run.ended = (self._clock or _local_now)()
-        # A run that keeps no file and has a place, and does more than load, that failed once something was
-        # spent leaves an end of its own all the same: an id names it, which names no file, and nothing is written.
-        unfiled = (not spec.keeps_files and not spec.loads_only and not refused_early and run.outcome == "failed"
-                   and spec.place is not None)
-        if unfiled:
-            try:
-                run.id = history.run_id(spec.word, model.started, run.folder)
-            except OSError:                      # the folder of runs cannot be read: as nothing is written, the stem
-                run.id = history.run_id(spec.word, model.started, None)
-        idle = refused_early or spec.loads_only or (not spec.keeps_files and not unfiled)
+        idle = refused_early or spec.loads_only or not spec.keeps_files
         last = RunStatus(state="idle" if idle else "ended", word=spec.word, name=spec.name,
                          run=None if refused_early else run.id, place=spec.place, loading=spec.loads_only,
                          stage=model.stage, outcome=None if refused_early else run.outcome, started=model.started,
@@ -1238,7 +1178,7 @@ class RunController(QObject):
                   and not run.reopen and (run.continue_from is not None or run.kept_fit is not None)
                   and _alive(run.host))
         self._status = (run.waiting or IDLE) if idle else last
-        if not idle and not unfiled:
+        if not idle:
             self._set_aside(run)
         if spec.keeps_files:
             if refused_early:

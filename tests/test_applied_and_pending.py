@@ -2649,8 +2649,7 @@ def test_every_argument_of_the_table_reaches_the_stage(tmp_path, monkeypatch):
             "name": "retrain_2", "note": "a second try", "num_runs": 777, "run_size_cap": 256, "hidden_features": 64,
             "num_transforms": 3, "learning_rate": 0.0007, "stop_after_epochs": 7, "max_num_epochs": 200,
             "checkpoint_every": 25, "resume": "never", "new_run": False, "fisher_m": 12, "fisher_dz": 0.03,
-            "fisher_points": 2, "if_name_taken": "unnamed", "provide_fig_sink": True, "provide_stream": False,
-            "on_chunk": None, "watch_dir": None}
+            "fisher_points": 2, "if_name_taken": "unnamed", "provide_fig_sink": True}
         assert kwargs["on_result"] == page._on_posterior and kwargs["host"] is page
         assert (spec.expected_epochs, spec.epoch_limit, spec.patience, spec.name) == (150, 200, 7, "retrain_2")
         rows["max_num_epochs"].widget.ticked_box.setChecked(True)
@@ -3452,8 +3451,7 @@ def test_a_load_reads_none_of_the_training_settings(tmp_path, monkeypatch):
         spec = kwargs.pop("spec")
         assert fn is orchestrator.build_posterior
         assert args == (screen.session.cfg, screen.session.inf_prior, trained, False)
-        assert sorted(kwargs) == ["accept", "host", "on_chunk", "on_result", "provide_fig_sink", "provide_stream",
-                                  "watch_dir"], sorted(kwargs)
+        assert sorted(kwargs) == ["accept", "host", "on_result", "provide_fig_sink"], sorted(kwargs)
         assert kwargs["provide_fig_sink"] is False and spec.loads_only and spec.word == "Posterior load"
 
 

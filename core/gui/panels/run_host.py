@@ -69,12 +69,10 @@ class RunHost:
         raise NotImplementedError(f"{type(self).__name__} does not say where its figures go back")
 
     # ── background dispatch ──────────────────────────────────────────────────
-    def dispatch(self, fn, *args, provide_fig_sink: bool = False, provide_stream: bool = False,
-                 on_chunk=None, watch_dir=None, on_result=None, **kwargs) -> bool:
+    def dispatch(self, fn, *args, provide_fig_sink: bool = False, on_result=None, **kwargs) -> bool:
         """Ask the process's run controller to run ``fn(*args, **kwargs)`` on a worker thread, described by this
-        panel's ``run_spec`` for it, this panel its host: figures (when ``provide_fig_sink``) and the pictures that
-        land in ``watch_dir`` (one folder, or several) go to the figure stack, and the return value to
-        ``on_result``. The run's lines go to its text, which the controller keeps.
+        panel's ``run_spec`` for it, this panel its host: figures (when ``provide_fig_sink``) go to the figure stack,
+        and the return value to ``on_result``. The run's lines go to its text, which the controller keeps.
 
         ONE RUN AT A TIME IN THE WHOLE PROCESS, not merely per panel: redirect_streams swaps sys.stdout/stderr
         process-wide, so two concurrent runs would fight over the console. While a run is live this says so
@@ -90,8 +88,7 @@ class RunHost:
         focus = QApplication.focusWidget()
         from_here = focus is not None and self.isAncestorOf(focus)
         started = held.dispatch(fn, *args, spec=self.run_spec(fn, *args, **kwargs), host=self, on_result=on_result,
-                                provide_fig_sink=provide_fig_sink, provide_stream=provide_stream, on_chunk=on_chunk,
-                                watch_dir=watch_dir, **kwargs)
+                                provide_fig_sink=provide_fig_sink, **kwargs)
         stop = self.run_view.stop_button
         if started and from_here and stop.isVisibleTo(self) and stop.isEnabled():
             stop.setFocus(Qt.OtherFocusReason)

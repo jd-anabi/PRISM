@@ -304,7 +304,7 @@ def test_the_end_of_a_test_stops_a_run_it_left_live_before_its_panel_goes_and_fa
 
     at_start = _built.noted()
     host, heard = build_run_host(), RunText(controller())
-    host.dispatch(ticking, watch_dir=tmp_path)
+    host.dispatch(ticking)
     with pytest.raises(AssertionError, match="ended with a run still live; it was asked to stop, and its end"):
         _built.end_of_test(at_start)
     assert [status.outcome for status in heard.ended] == ["stopped"] and not controller().is_live(), (

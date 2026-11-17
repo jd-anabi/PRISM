@@ -604,10 +604,9 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     in_the_fit.fail(_device_failure(in_the_simulation=False))
     _ended(app, held)
     assert (len(in_the_fit.calls), held.status.reopen, _failure(view), _said_alone(view),
-            view.command_line.isVisibleTo(view), view.resume_button.isVisibleTo(view),
-            view.continue_button.isVisibleTo(view)) == (
+            view.resume_button.isVisibleTo(view), view.continue_button.isVisibleTo(view)) == (
         1, True, f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again; Home and the Training step "
-                 f"will offer to resume the training, kept up to epoch 2.", "", False, False, False), _failure(view)
+                 f"will offer to resume the training, kept up to epoch 2.", "", False, False), _failure(view)
 
 
 def _laid_out(label):
@@ -1747,7 +1746,6 @@ def test_the_reopening_page_says_what_home_will_offer(tmp_path, store):
     assert _failure(view) == (f"{_DEVICE.format(_ILLEGAL.splitlines()[0])} Close PRISM and open it again; the "
                               "Narrowing round step will offer 'Resume', and Home will lead there."), _failure(view)
     stops = view.stops()
-    assert view.command_line.text() == "" and not view.command_line.isVisibleTo(view), "a command stands on the page"
     assert "--resume-fit" not in _failure(view)
     assert view.failure_message.isVisibleTo(view) and view.failure_message in stops
 

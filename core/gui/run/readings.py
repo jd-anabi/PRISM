@@ -32,7 +32,7 @@ _BATCH_TAG = r"(?:\w+: )?training batch (?P<batch>\d[\d,]*)/(?P<batches>\d[\d,]*
 _PLACES: dict[str, str] = {
     **{name: _WHOLE for name in (
         "batches", "rows", "simulations", "k", "n", "every", "a", "b", "new", "nonfinite", "constant",
-        "overflow", "bad", "masked", "total", "epoch", "since", "passes", "attempt", "attempts", "half", "i",
+        "overflow", "bad", "masked", "total", "epoch", "since", "passes", "attempt", "attempts", "half",
         "kept", "dropped", "probes")},
     **{name: _REAL for name in (
         "spread", "need", "free", "share", "low", "high", "median", "peak", "reserved", "available", "card",

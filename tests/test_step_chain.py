@@ -211,8 +211,6 @@ for line in ("Writing", "the next line"):
     cell.feed([(line, "info")])
     look(cell)
 own = model.RunModel(model.RunSpec("Export", ("inference", "infer")), clock=clock)
-own.set_count(1, 9, "samples")
-look(own)
 own.set_stage("Watching")
 look(own)
 counted = model.RunModel(model.RunSpec("Check", ("inference", "checks")), clock=clock)

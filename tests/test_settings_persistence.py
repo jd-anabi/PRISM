@@ -832,7 +832,7 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     # part or step. So a class a later change adds, or a folder it adds beside the window's, fails here
     # until it is placed.
     by_hand_still = set()                    # none today
-    no_window = {"Place", "Claim", "NewPngWatcher", "WorkerCancelled", "PrismStyle", "FocusRing",
+    no_window = {"Place", "Claim", "WorkerCancelled", "PrismStyle", "FocusRing",
                  "FocusFollower", "Appearance", "WorkerSignals", "Worker", "RunController", "LossCurve",
                  "FigureNotShown", "SessionWatch", "LoadChain"}
     placed = built | by_hand_still | no_window

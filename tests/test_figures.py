@@ -200,27 +200,6 @@ def test_pop_out_without_a_pickle_uses_the_image_viewer():
     win.close()
     pump(app, 0.1)
 
-def test_disk_png_pop_out_is_an_image_viewer():
-    import tempfile
-    import matplotlib.pyplot as plt
-    from PySide6.QtWidgets import QGraphicsView
-    from core.gui.widgets.figure_stack import FigureStack
-    from core.gui.widgets.figure_window import ImageZoomWindow
-
-    app = qt_app()
-    png = Path(tempfile.mkdtemp()) / "sweep.png"
-    fig = _tiny_fig()
-    fig.savefig(str(png), format="png")
-    plt.close("all")
-
-    fs = FigureStack()
-    fs.add_png("Sweep", str(png))
-    fs._pop_out(fs.widget(0))
-    win = next(iter(fs._windows))
-    assert isinstance(win, ImageZoomWindow)
-    assert isinstance(win.view, QGraphicsView), "the disk-PNG pop-out has no zoom/pan view"
-    win.close()
-    pump(app, 0.1)
 
 def test_a_popped_out_figure_survives_a_worker_plt_close_all():
     """Worker.run runs plt.close("all") after every run and every cancel. A figure the user has popped

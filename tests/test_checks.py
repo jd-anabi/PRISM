@@ -2871,7 +2871,7 @@ def test_the_checks_lists_walk_run_alone_ends_its_process_cleanly(tmp_path):
 #: The cell file a check that reads one is given, in the model's own folder: one that loads on the master bounds file.
 CELL_KEY = "master_spont.txt"
 #: What a dispatch is handed that is the controller's and no argument of the stage.
-_CONTROLLERS = ("spec", "host", "on_result", "provide_fig_sink", "provide_stream", "on_chunk", "watch_dir")
+_CONTROLLERS = ("spec", "host", "on_result", "provide_fig_sink")
 #: Each check whose form is built: its stage by the module that holds it and its name there, and what the stage is
 #: handed at the form's usual values (the calibration's seed, left blank, drawn) and at changed ones, each by the
 #: stage's own name, the cell typed and the name and note as a press hands them.

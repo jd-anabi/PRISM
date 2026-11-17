@@ -128,30 +128,18 @@ _LINES = {
     "tarp_atc": "TARP: ATC=0.0123  KS p=0.512",
     "sbc_repeat": "[sbc] repeat 3/10: n_valid=1995  worst KS p=0.0123",
 }
-# One line of each of the rows ``_other_rows`` adds: a run of another kind than a training, whose stages begin and
-# are counted by lines of its own, and one of whose lines leaves out the stage in progress.
-_OTHER = {"skipped": "Skipping the checks.", "part_one": "Part one begins.", "part_two": "Part two begins.",
-          "phase": "--- Phase temp ---", "warm_up": "  [warm-up 3/8] temp=1.5", "point": "  [3/8] temp=1.5"}
+# One line of each of the rows ``_other_rows`` adds: a run of another kind than a training, whose stages begin with
+# lines of its own.
+_OTHER = {"part_one": "Part one begins.", "part_two": "Part two begins."}
 
 
 def _other_rows(monkeypatch):
     """The rows of a run of another kind than a training, added to the table of the engine's lines for one test: no
-    page of the window starts such a run now, and the model still reads one -- stages begun by a line, a stage
-    counted by a line's count, a line that leaves out the stage in progress."""
-    from core.gui.run import model as run_model
-    added = (readings._row("skipped", "Skipping the checks.", __name__),
-             readings._row("part_one", "Part one begins.", __name__),
-             readings._row("part_two", "Part two begins.", __name__),
-             readings._row("phase", "--- Phase <param> ---", __name__),
-             readings._row("warm_up", "[warm-up <i>/<n>] <param>=<value>", __name__),
-             readings._row("point", "[<i>/<n>] <param>=<value>", __name__))
+    page of the window starts such a run now, and the model still reads one -- stages begun by a line."""
+    added = (readings._row("part_one", "Part one begins.", __name__),
+             readings._row("part_two", "Part two begins.", __name__))
     monkeypatch.setattr(readings, "ROWS", readings.ROWS + added)
     monkeypatch.setattr(readings, "_BY_NAME", {**readings._BY_NAME, **{row.name: row for row in added}})
-    monkeypatch.setattr(run_model, "LEAVES_OUT", ("skipped",))
-
-
-# Two stages counted alike, each begun by its own phase line
-_SWEEPS = (Stage("S sweep", ("phase",), "point"), Stage("T_a/T sweep", ("phase",), "point"))
 
 # The engine's lines that begin as the run's lines do and that the window reads as text, each with why: no row of
 # the table reads them, and a warning or an error among them is said from the engine as it stands.
@@ -589,39 +577,6 @@ def test_a_training_reads_through_its_stages_with_their_words(monkeypatch):
     converged.rows([_status("Neural network successfully converged after 131 epochs.")])
     assert converged.stage == "Saving"
 
-    _other_rows(monkeypatch)
-    sweep = RunModel(RunSpec("Study", ("inference", "checks"), name="sweep", stages=_SWEEPS), clock=clock)
-    _feed(sweep, "--- Phase s ---", "  [warm-up 1/8] s=0", "--- the second half of s ---", "  [1/8] s=0")
-    assert _status_line(sweep) == [("S sweep", "now", "Now"), ("T_a/T sweep", "later", "To come")]
-    assert (sweep.axis().end_by, sweep.axis().unknown) == (None, "No end time yet: the first steps are being timed.")
-    _feed(sweep, _OTHER["phase"])
-    assert _status_line(sweep) == [("S sweep", "done", "Done"), ("T_a/T sweep", "now", "Now")]
-
-
-def test_a_short_counted_stage_gets_an_end_time_from_a_quarter_of_its_count(monkeypatch):
-    """A counted stage that is not the simulation takes its own pace once a quarter of its count is timed: a sweep of
-    eight points has a firm end from its third point and not before. The second of two sweeps counted alike is
-    counted, and timed, from its own phase line."""
-    _other_rows(monkeypatch)
-    clock = _Clock(_at(8, 19, 2, 11))
-    sweep = RunModel(RunSpec("Study", ("inference", "checks"), name="sweep", stages=_SWEEPS), clock=clock)
-    for param, step in (("s", 1800), ("temp", 900)):
-        _feed(sweep, f"--- Phase {param} ---")
-        began = clock()
-        for i in range(1, 9):
-            clock.advance(600)
-            _feed(sweep, f"  [warm-up {i}/8] {param}={i}")
-        _feed(sweep, f"--- the second half of {param} ---")
-        for i in range(1, 4):
-            clock.advance(step)
-            _feed(sweep, f"  [{i}/8] {param}={i}")
-            axis = sweep.axis()
-            if i < 3:
-                assert (axis.start, axis.end_by, axis.unknown) == (
-                    began, None, "No end time yet: the first steps are being timed."), (param, i)
-        assert (axis.start, axis.end_from, axis.end_by, axis.unknown) == (
-            began, clock() + timedelta(seconds=5 * step), clock() + timedelta(seconds=5 * step), ""), param
-
 
 def test_a_run_with_no_stages_says_and_times_the_count_of_its_driving_row():
     """A run with no stages whose progress row counts says its count, "<done> of <total>", and has a time axis from
@@ -654,8 +609,8 @@ def test_a_run_with_no_stages_says_and_times_the_count_of_its_driving_row():
 def test_once_a_run_has_ended_nothing_begins_or_moves_a_stage(monkeypatch):
     """An end is the last word on the stage line. A finished run's stages all read done but those passed over,
     among them the saving after a fit the training library counted without a record and ended at its limit
-    without a word; and a line, a row or a record that would begin, end or leave out a stage, read after any end,
-    moves nothing and raises nothing."""
+    without a word; and a line, a row or a record that would begin or end a stage, read after any end, moves nothing
+    and raises nothing."""
     clock = _Clock(_at(8, 19, 2, 11))
     finished = RunModel(_training(patience=None), clock=clock)
     _fitting(finished, clock)
@@ -679,7 +634,7 @@ def test_once_a_run_has_ended_nothing_begins_or_moves_a_stage(monkeypatch):
     cell = RunModel(RunSpec("Study", ("inference", "checks"), name="cell_a", stages=_PARTS), clock=clock)
     _feed(cell, "Writing record 20261008T190211 at C:\\x")
     cell.ended("stopped")
-    _feed(cell, _OTHER["skipped"], _OTHER["part_one"])
+    _feed(cell, _OTHER["part_one"])
     assert _status_line(cell) == [("Checks", "half", "Stopped"), ("Part one", "later", "To come"),
                                   ("Part two", "later", "To come")]
 
@@ -704,8 +659,8 @@ def test_each_state_says_its_sentence(monkeypatch):
     """One sentence says where the run stands, in the words the page uses: starting, the rotation, the simulation
     with its pace and its end, the fit before its first epoch (with the pace of an earlier training of this size
     when there is one), the fit with its epoch of the expected ones, past the estimate, and the saving. A time
-    within seven days carries its weekday and no year, any other its year. A run of another kind says its stage, and
-    one that counts for itself says its count; a stop asked for and an end each say theirs, and the stage an end
+    within seven days carries its weekday and no year, any other its year. A run of another kind says its stage;
+    a stop asked for and an end each say theirs, and the stage an end
     cuts short is drawn half done, with the end's word."""
     clock = _Clock(_at(8, 19, 2, 11))
     run = RunModel(_training(), clock=clock)
@@ -801,12 +756,10 @@ def test_each_state_says_its_sentence(monkeypatch):
     assert cell.sentence() == "Study cell_a is starting."
     _feed(cell, "Writing record 20261008T190211 at C:\\x")
     assert cell.sentence() == "Study cell_a is running: Checks."
-    _feed(cell, _OTHER["skipped"], _OTHER["part_one"])
+    _feed(cell, _OTHER["part_one"])
     assert cell.sentence() == "Study cell_a is running: Part one."
-    assert _status_line(cell) == [("Part one", "now", "Now"), ("Part two", "later", "To come")]
-    counted = RunModel(RunSpec("Export", ("inference", "infer")), clock=clock)
-    counted.set_count(1_200, 5_000, "samples")
-    assert counted.sentence() == "Export is running: 1,200 of 5,000 samples."
+    assert _status_line(cell) == [("Checks", "done", "Done"), ("Part one", "now", "Now"),
+                                  ("Part two", "later", "To come")]
     card = RunModel(RunSpec("Card test", ("inference", "checks")), clock=clock)
     card.set_stage("Simulation")
     assert (card.stage, card.sentence()) == ("Simulation", "Card test is running: Simulation.")
@@ -1929,7 +1882,7 @@ def test_every_place_that_starts_a_run_hands_the_controller_a_spec():
                 assert [stage.name for stage in spec.stages] == ["Prior", "Training", "Calibration", "Inference"]
         elif not trains:
             assert (spec.stages, spec.facts) == ((), {}), kind
-        assert not spec.own_view and spec.records == (), kind
+        assert spec.records == (), kind
     assert specs["calibration"].name == "Calibration"
     for kind, narrowed in (("training", False), ("narrowing round", True)):
         spec = specs[kind]
@@ -3082,53 +3035,31 @@ def test_a_stop_over_a_failure_and_a_stop_too_late_leave_the_full_text_in_the_fi
 
 
 def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_and_no_file(tmp_path, monkeypatch):
-    """A start that raises once every panel is locked and before its worker is queued -- here a page hands its
-    run a folder to watch of a shape no folder has -- raises to the page as it came, and is taken back: no run is
-    live, the status is published idle again, every panel is free, the page's results are given back from the
-    run's page, the run's two files are removed, and a folder it had begun to watch is watched no more. A load
-    taken back so, which never took the column, leaves a stopped run's page where it was."""
+    """A start that raises once every panel is locked and before its worker is queued -- here its worker cannot be
+    made -- raises to the page as it came, and is taken back: no run is live, the status is published idle again,
+    every panel is free, the page's results are given back from the run's page, and the run's two files are removed.
+    A load taken back so, which never took the column, leaves a stopped run's page where it was."""
     from core.gui.panels.run_host import RunHost
     from core.gui.run.model import IDLE
     from tests._fixtures import build_run_host, choose, qt_app
-    from tests._runs import Clock, RunText, StandIn, start_run, turn_until
+    from tests._runs import Clock, RunText, StandIn, a_worker_that_cannot_be_made, start_run, turn_until
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     text, host, other = RunText(held), build_run_host(), build_run_host()
-    with pytest.raises(TypeError):
-        start_run(host, StandIn(), spec=_training(), watch_dir=5)
+    with pytest.raises(TypeError), a_worker_that_cannot_be_made():
+        start_run(host, StandIn(), spec=_training())
     assert (held.is_live(), held.status) == (False, IDLE), held.status
     assert [status.state for status in text.statuses] == ["starting", "idle"], text.statuses
     assert all(panel.controls.isEnabled() for panel in RunHost._instances) and other.controls.isEnabled()
     assert (host.results.currentWidget() is host.figures, host.run_view.isAncestorOf(host.figure_stack)) == (
         True, False), "the run's page kept the page's results for a run that never started"
     assert list((tmp_path / "runs").iterdir()) == [], "a start taken back left a file"
-    from PySide6.QtCore import QCoreApplication, QEvent
-    from core.gui.plot_watcher import NewPngWatcher
-    real_start, began = NewPngWatcher.start, []
-
-    def start(watcher):
-        """The first folder is watched; the second cannot be."""
-        began.append(watcher)
-        if len(began) > 1:
-            raise OSError("the second folder cannot be watched")
-        real_start(watcher)
-
-    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    watching = set(map(id, held.findChildren(NewPngWatcher)))
-    monkeypatch.setattr(NewPngWatcher, "start", start)
-    with pytest.raises(OSError):
-        start_run(host, StandIn(), spec=_training(), watch_dir=[tmp_path / "one", tmp_path / "two"])
-    monkeypatch.setattr(NewPngWatcher, "start", real_start)
-    began.clear()
-    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    assert [one for one in held.findChildren(NewPngWatcher) if id(one) not in watching] == [], (
-        "a start taken back went on watching a folder it had begun to watch")
     start_run(host, StandIn(), spec=_training())
     choose(monkeypatch, words="Stop training")
     host.run_view.stop_button.click()
     turn_until(app, lambda: not held.is_live())
-    with pytest.raises(TypeError):
-        start_run(host, StandIn(word="Prior load"), spec=_load(), watch_dir=5)
+    with pytest.raises(TypeError), a_worker_that_cannot_be_made():
+        start_run(host, StandIn(word="Prior load"), spec=_load())
     assert (host.results.currentWidget() is host.run_view, host.run_view.mode, host.run_view.sentence.text()) == (
         True, "ended", "Training was stopped on Thu 8 Oct, 19:02, as it started. Nothing was simulated."), (
         "a load taken back lost the stopped run's page")
@@ -3896,7 +3827,7 @@ def test_an_end_waiting_to_be_seen_is_set_aside_only_by_a_run_that_leaves_an_end
     from core.gui.run import history
     from core.refusals import Refusal
     from tests._fixtures import asked as box_asked, build_run_host, qt_app
-    from tests._runs import Clock, StandIn, start_run, turn_until
+    from tests._runs import Clock, StandIn, a_worker_that_cannot_be_made, start_run, turn_until
     app = qt_app()
     held, host = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host()
     first = StandIn()
@@ -3916,8 +3847,8 @@ def test_an_end_waiting_to_be_seen_is_set_aside_only_by_a_run_that_leaves_an_end
         stand_in.release()
         turn_until(app, lambda: not held.is_live())
         kept_waiting(spec.word)
-    with pytest.raises(TypeError):
-        start_run(host, StandIn(), spec=_training(), watch_dir=5)
+    with pytest.raises(TypeError), a_worker_that_cannot_be_made():
+        start_run(host, StandIn(), spec=_training())
     kept_waiting("a start taken back")
     refused = StandIn()
     start_run(host, refused, spec=_training())
@@ -5390,7 +5321,6 @@ def test_the_run_page_fits_its_column_at_the_windows_least_size(factor, tmp_path
         reopening.fail(torch.AcceleratorError("CUDA error: an illegal memory access was encountered\nCUDA kernel "
                                               "errors might be asynchronously reported at some other API call."))
         turn_until(app, lambda: not held.is_live(), 20)
-        assert view.command_line.text() == "" and not view.command_line.isVisibleTo(view), "a command was shown"
         assert "Narrowing round step will offer 'Resume'" in view.failure_row.sentence.plain_text()
         at(least, "only reopening can help")
         view.back_button.click()
@@ -5894,11 +5824,11 @@ def test_a_start_taken_back_gives_the_pages_column_back(tmp_path):
     again."""
     from core.gui.run.controller import controller
     from tests._look_helpers import _settle, _the_look, text_size
-    from tests._runs import StandIn, start_run
+    from tests._runs import StandIn, a_worker_that_cannot_be_made, start_run
     with text_size(1.0), _the_look(False):
         _window, host, _opening, _least = _in_the_look_at(_LARGE_SCREEN, tmp_path, _ROUND)
-        with pytest.raises(TypeError):
-            start_run(host, StandIn(), spec=_training(stop_button="Stop the run…", place=_ROUND), watch_dir=5)
+        with pytest.raises(TypeError), a_worker_that_cannot_be_made():
+            start_run(host, StandIn(), spec=_training(stop_button="Stop the run…", place=_ROUND))
         _settle()
         assert not controller().is_live()
         assert host.results.currentWidget() is host.figures
@@ -6512,11 +6442,9 @@ def test_the_list_of_kept_trainings_fits_its_column_at_the_windows_least_size(fa
 def test_the_ring_on_a_runs_failure_message_stands_clear_of_its_words(dark, factor, tmp_path):
     """The failure's message quoted on a run's page takes the keyboard, and the ring, which takes the colour of the
     words, stands round it: the words stand inside its edge by the room the ring keeps outside it, on every side, so the
-    ring never touches them, in both themes and at both text sizes. Every selectable block of lines keeps the same
-    room: the command a page sets beneath its sentence, a kept round's command."""
+    ring never touches them, in both themes and at both text sizes, and so does the same block drawn alone."""
     from PySide6.QtGui import QColor
     from core.gui import design
-    from core.gui.run.view import SelectableLines
     from tests._fixtures import build_run_host, qt_app
     from tests._look_helpers import _gone, _the_look, text_size
     from tests._runs import Clock, StandIn, start_run, turn_until
@@ -6532,14 +6460,13 @@ def test_the_ring_on_a_runs_failure_message_stands_clear_of_its_words(dark, fact
         turn_until(app, lambda: not held.is_live())
         message = view.failure_message
         assert message.isVisibleTo(view) and message.text().startswith("CUDA error"), message.text()
-        quoted, command = SelectableLines(), SelectableLines()
+        quoted = type(message)()
         quoted.setText(message.text())
-        command.setText("python -m core tsnpe --resume-fit 20261003T030211 --device cpu")
-        for block in (message, view.command_line, quoted, command):
+        for block in (message, quoted):
             margins = block.contentsMargins()
             assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (room,) * 4, block
         paper = design.hex_colour("paper").upper()
-        for block in (quoted, command):                     # drawn alone, as the run's page draws its own
+        for block in (quoted,):                             # drawn alone, as the run's page draws its own
             block.setFont(message.font())
             block.resize(design.scaled(600), block.heightForWidth(design.scaled(600)))
             image = block.grab().toImage()
@@ -6555,17 +6482,17 @@ def test_the_ring_on_a_runs_failure_message_stands_clear_of_its_words(dark, fact
 @pytest.mark.parametrize("factor", [1.0, 1.5])
 def test_a_selectable_block_asks_the_height_of_its_words_and_their_room(factor):
     """A selectable block of lines asks as much width as its widest line with the ring's room at both sides, and so,
-    for its least height, the height of its words at that width with the room above and below: a command that stands
+    for its least height, the height of its words at that width with the room above and below: a message that stands
     on one line asks one line, not two."""
     from core.gui import design, fonts
-    from core.gui.run.view import SelectableLines
+    from core.gui.run.view import _Lines
     from tests._fixtures import qt_app
     from tests._look_helpers import _gone, text_size
     qt_app()
     with text_size(factor):
-        block = SelectableLines()
+        block = _Lines()
         block.setFont(fonts.fixed())
-        block.setText("python -m core tsnpe --resume-fit 20261003T030211 --device cpu")
+        block.setText("CUDA error: an illegal memory access was encountered")
         margins = block.contentsMargins()
         one = block.heightForWidth(design.scaled(4000))
         assert one < 2 * block.fontMetrics().lineSpacing() + margins.top() + margins.bottom(), one

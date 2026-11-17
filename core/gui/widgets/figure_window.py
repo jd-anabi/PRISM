@@ -10,8 +10,7 @@ Two window types, one per figure source (see FigureStack):
     on matplotlib's global lock -- a silent hang with no traceback. A figure UNPICKLED here is a fresh
     main-thread object, so painting it is safe.
 
-  * ImageZoomWindow -- for figures we only have as a PNG on disk (from a runner that saves PNGs to
-    disk rather than hand a Figure back), and as the fallback when a pickle is
+  * ImageZoomWindow -- for a figure's picture: while a run is live, and as the fallback when a pickle is
     missing or fails to load. A QGraphicsView gives wheel-zoom, drag-pan and fit-to-window over the
     static image.
 
@@ -181,7 +180,7 @@ class _ZoomView(QGraphicsView):
 
 
 class ImageZoomWindow(QWidget):
-    """A pan/zoom viewer over a static image (a QPixmap). Used for disk-PNG figures and as the fallback
+    """A pan/zoom viewer over a static image (a QPixmap). Used while a run is live and as the fallback
     when a figure could not be unpickled."""
 
     def __init__(self, pixmap, title="Figure", on_close=None, parent=None):

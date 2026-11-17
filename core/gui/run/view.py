@@ -14,8 +14,8 @@ with no question); while the stop is pending, "Don't stop after all" withdraws i
 the run before it closes, the page says so. A training saving its posterior is not stopped, and the window's close
 waits for the save with no stop: "Keep PRISM open" withdraws that close. Once a stop of a training has landed, the
 page asks whether to keep the training it kept, never in a box of its own. A run that failed says so on its page,
-never in a box: when and where it failed, what was saved and what was lost, the command line it names on a line of its
-own, the error's message where it adds to that, and its kind and traceback when asked for. While the window waits to
+never in a box: when and where it failed, what was saved and what was lost, the error's message where it adds to that,
+and its kind and traceback when asked for. While the window waits to
 try a run again, the page says when, and "Stop trying" stands in the stop button's place. The page of a training that
 failed or was stopped offers "Continue from batch N" or "Resume the training" while its run's call is kept for it, and
 no longer.
@@ -25,9 +25,8 @@ where the two do not fit one row, as the full text's tools do under its field, a
 failure, the question of keeping a training, what the page offers) stands at the head of what scrolls, so that the
 page's height never cuts it short, and is brought into sight when it comes.
 
-It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. A run
-with a view of its own shows the page in its compact form: the sentence and the stop button. The page lives
-inside the page that started the run, never in the window's own stack of places. Nothing here draws with the
+It is live while the run is, ended once it has ended, and past when it is drawn from a run's files alone. The page
+lives inside the page that started the run, never in the window's own stack of places. Nothing here draws with the
 figure library: the figures it holds are pictures already, and the loss by epoch is painted by the window itself.
 """
 import math
@@ -255,8 +254,8 @@ class _Head(QWidget):
         self._box = QVBoxLayout(self)
         self._box.setContentsMargins(0, 0, 0, 0)
         self._box.setSpacing(design.scaled(design.GAP["head_table"]))
-        # The name's row: the room the buttons leave goes to the name, or, where the name is not shown (the compact
-        # form), to the stretch after it: never to a button, which keeps its own width at the right.
+        # The name's row: the room the buttons leave goes to the name, or, where the name is not shown, to the
+        # stretch after it: never to a button, which keeps its own width at the right.
         self._first = QHBoxLayout()
         self._first.setSpacing(design.scaled(design.GAP["head_buttons"]))
         self._first.addWidget(title, 1)
@@ -462,9 +461,9 @@ class _Lines(_Wrapped):
     whole, and copies as written: the keyboard's copy and select-all and the menu of the right button do that, the
     menu the toolkit's own for a selectable label. A selection is counted as the text layout counts the words, in
     UTF-16 units (two for a character outside the Basic Multilingual Plane), and ends when the keyboard goes to
-    another control, but not when the window or a popup takes it. A command so copied is one line, as it was
-    written. The words stand inside the block by the room the focus ring keeps outside it, so that the ring, which takes
-    the colour of the words, stands clear of them."""
+    another control, but not when the window or a popup takes it. Words wrapped on the page are copied as they
+    were written. The words stand inside the block by the room the focus ring keeps outside it, so that the ring,
+    which takes the colour of the words, stands clear of them."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -583,10 +582,8 @@ class _Lines(_Wrapped):
             QApplication.clipboard().setText(self.selectedText())
 
 
-#: Words wrapped within a page, inside a word wider than the line where they must, for a page's own rows; and the same in
-#: the fixed-width face, selectable and copied as one line, for a command a page sets off.
+#: Words wrapped within a page, inside a word wider than the line where they must, for a page's own rows.
 WrappedWords = _Wrapped
-SelectableLines = _Lines
 
 
 class RunView(QWidget):
@@ -598,7 +595,6 @@ class RunView(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._mode = "live"
-        self._compact = False
         self._model: RunModel | None = None
         self._stopping = False
         self._closing = False
@@ -711,12 +707,6 @@ class RunView(QWidget):
         self.failure_message = _Lines()
         self.failure_message.setFont(fonts.fixed())
         self.failure_message.setFocusPolicy(Qt.StrongFocus)          # read and copied with the keys too
-        # The command line a page sets off beneath its sentence (a kept training resumed outside the window): on a line
-        # of its own, in the fixed-width face given at build, selectable, so that it is copied whole and nothing of
-        # the sentence with it; wrapped within the page, inside a long path where it must, and copied as one line.
-        self.command_line = _Lines()
-        self.command_line.setFont(fonts.fixed())
-        self.command_line.setFocusPolicy(Qt.StrongFocus)
         self.noted = style.set_class(QLabel(retry.NOTED_TEXT), cls="quiet")
         self.file_line = style.set_class(QLabel(retry.FILE_TEXT), cls="quiet")
         for label in (self.noted, self.file_line):
@@ -739,7 +729,7 @@ class RunView(QWidget):
         inside = QVBoxLayout(self._error_holder)
         inside.setContentsMargins(0, 0, 0, 0)
         inside.addWidget(self.full_error)
-        for part in (self.failure_row, self.command_line, self.failure_message, self.noted):
+        for part in (self.failure_row, self.failure_message, self.noted):
             failure.addWidget(part)
         failure.addLayout(where)
         failure.addWidget(self._error_holder)
@@ -768,8 +758,7 @@ class RunView(QWidget):
         for part in (self.notice, self.closing_line):
             self._said.addWidget(part)
         # What the page says once its run has ended -- its failure, the question of keeping the training its stop kept,
-        # and what it offers -- stands at the head of what scrolls, so that no room the page has cuts it short; in the
-        # compact form, which shows nothing that scrolls, under the sentence (``_place_the_end``).
+        # and what it offers -- stands at the head of what scrolls, so that no room the page has cuts it short.
         self.end = QWidget()
         end = QVBoxLayout(self.end)
         end.setContentsMargins(0, 0, 0, 0)
@@ -888,26 +877,18 @@ class RunView(QWidget):
         """"live" while its run is, "ended" once it has ended, "past" when it is drawn from a run's files."""
         return self._mode
 
-    @property
-    def compact(self) -> bool:
-        """Whether the page is in its compact form: the sentence and the stop button, for a run with a view of
-        its own."""
-        return self._compact
-
     # ── what the run's controller hands it ──
     def begin(self, spec: RunSpec, *, text: Path | None = None, folder: Path | None = None, clock=None) -> None:
         """A new run of this page: its name and its stop button's words, its text file and the folder of runs
         (None for a run that keeps none), and the clock its moments are read from; its full text emptied. The
-        page is live, in its compact form for a run with a view of its own."""
-        self._mode, self._compact, self._model, self._stopping = "live", spec.own_view, None, False
-        self._place_the_end()
+        page is live."""
+        self._mode, self._model, self._stopping = "live", None, False
         self._closing, self._run, self._answered, self._past_offer = False, None, False, None
         self._failed = self._noted = self._error_shown = self._resumable = self._close_saves = self._quoted = False
         self._retrying = self._refused = self._ended_words = ""
         self._continue_from = None
         self.failure_row.sentence.set_text("")
         self.failure_message.setText("")
-        self.command_line.setText("")
         self.full_error.setPlainText("")
         self.full_error_button.setText(retry.SHOW_ERROR_TEXT)
         self.notice.setText("")
@@ -970,7 +951,7 @@ class RunView(QWidget):
         """What the Tab key stops at on this page before its figures, as it is read: the buttons at its head, what its end
         offers, and what scrolls."""
         return [self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button, self.stop_trying_button,
-                self.back_button, self.keep_button, self.discard_button, self.command_line, self.failure_message,
+                self.back_button, self.keep_button, self.discard_button, self.failure_message,
                 self.full_error_button, self.full_error, self.continue_button, self.resume_button,
                 self.discard_kept_button, self.comparison_stop_button, self.keep_training_button, self.body]
 
@@ -979,18 +960,16 @@ class RunView(QWidget):
         self.notice.setText(text)
         self._arrange()
 
-    def show_failure(self, sentence: str, message: str, detail: str, noted: bool, kept: bool,
-                     command: str = "") -> None:
+    def show_failure(self, sentence: str, message: str, detail: str, noted: bool, kept: bool) -> None:
         """The run failed: under the page's sentence, which says so, beside the error's marker, ``sentence`` (when and
-        where it failed, what was saved and what was lost); the ``command`` line it names, on its own beneath it (""
-        for none); the error's ``message``, quoted, where it adds to ``sentence``; that a stop had been asked for
+        where it failed, what was saved and what was lost); the error's ``message``, quoted, where it adds to
+        ``sentence``; that a stop had been asked for
         before it, when ``noted``; that the full error is in the run's file, when the run ``kept`` one; and the full
         error, ``detail`` (its kind and traceback), behind "Show the full error". Shown once the run has ended, until
         the page's next run."""
         self._failed, self._noted, self._error_shown = True, noted, False
         self._quoted = retry.adds_to(sentence, message)
         self.failure_row.sentence.set_text(sentence)
-        self.command_line.setText(command)
         self.failure_message.setText(message)
         self.file_line.setText(retry.FILE_TEXT if kept else "")
         self.full_error.setPlainText(detail)
@@ -1089,12 +1068,6 @@ class RunView(QWidget):
         self.sentence.setText(UNREADABLE_TEXT)
         self._arrange()
 
-    def set_count(self, done: int, total: int, unit: str) -> None:
-        """A run that prints no counted row says how far it is: ``done`` of ``total`` ``unit``."""
-        if self._model is not None:
-            self._model.set_count(done, total, unit)
-            self._draw()
-
     def set_stage(self, name: str) -> None:
         """A run that says its stages itself begins the one of that name."""
         if self._model is not None:
@@ -1180,49 +1153,48 @@ class RunView(QWidget):
         return list(self._message_rows)
 
     def _arrange(self) -> None:
-        """What is in sight in the page's mode and form. A control of the page that holds the keyboard and goes, or
+        """What is in sight in the page's mode. A control of the page that holds the keyboard and goes, or
         is greyed, first hands it on, for no key of its own (its ring shows while the keyboard has the turn): the
         stop button to "Don't stop after all" while a stop can be withdrawn, and back; "Keep PRISM open", once it has
         withdrawn its close, to the sentence, the stop button being greyed while the posterior is saved; the stop
         button to "Stop trying" while the run waits to be tried again, and back; an offer pressed to the stop button of
         the run it starts; at a stopped end to "Keep" while the training the stop kept is asked about, else to the
         sentence; at any other end to "Back to the form". A keyboard on a control that stays (the full text's, "Show
-        the full text") stays where it is. When what a run's end leaves to say comes into sight on the full page, at
-        the head of what scrolls, the middle is scrolled to its top, so that it is in sight when it comes."""
-        live, full = self._mode == "live", not self._compact
+        the full text") stays where it is. When what a run's end leaves to say comes into sight, at the head of what
+        scrolls, the middle is scrolled to its top, so that it is in sight when it comes."""
+        live = self._mode == "live"
         retrying = live and bool(self._retrying)
-        axis = self._axis_shown and live and full and not retrying
+        axis = self._axis_shown and live and not retrying
         stops = live and not retrying and not self._stopping and not self._saving()
         withdraws = (live and not retrying and self._stopping and self._model is not None
                      and self._model.spec.stop_asks)
         keeps = self._keeps()
-        asks = (live and full and bool(self._shown_health) and self._model is not None
+        asks = (live and bool(self._shown_health) and self._model is not None
                 and self._model.comparison_asks())
         closing, notice = self._closing and live, bool(self.notice.text())
         keeps_open = closing and not self._stopping          # a close that waits for a save, no stop asked
         self.closing_line.setText(questions.CLOSING_SAVED_TEXT if keeps_open else questions.CLOSING_TEXT)
         failed = self._failed and self._mode == "ended"
-        past = getattr(self._past_offer, "kind", None) if self._mode == "past" and full else None
-        continues = (self._mode == "ended" and full and self._continue_from is not None) or past in ("continue",
-                                                                                                    "fit_again")
+        past = getattr(self._past_offer, "kind", None) if self._mode == "past" else None
+        continues = (self._mode == "ended" and self._continue_from is not None) or past in ("continue", "fit_again")
         # a kept narrowing round is resumed from here too, but deleted only on its row of the round's page, which asks
-        resumes = (self._mode == "ended" and full and self._resumable) or past in ("resume", "round")
+        resumes = (self._mode == "ended" and self._resumable) or past in ("resume", "round")
         main = "" if keeps else "primary"        # while Keep is asked, Keep is the main button and Resume beside it
         if self.resume_button.property("cls") != main:
             style.set_class(self.resume_button, cls=main)
         ended = keeps or failed or continues or resumes
-        shown = ((self.said, closing or notice or (ended and self._compact)), (self.notice, notice),
-                 (self.closing_line, closing), (self.end, ended), (self._end_gap, ended and not self._compact),
+        shown = ((self.said, closing or notice), (self.notice, notice),
+                 (self.closing_line, closing), (self.end, ended), (self._end_gap, ended),
                  (self.failure, failed), (self.failure_message, failed and self._quoted),
-                 (self.command_line, failed and bool(self.command_line.text())), (self.noted, failed and self._noted),
+                 (self.noted, failed and self._noted),
                  (self.file_line, failed and bool(self.file_line.text())),
                  (self._error_holder, failed and self._error_shown), (self.keep_block, keeps),
                  (self.offers, continues or resumes), (self.continue_button, continues),
                  (self.resume_button, resumes), (self.discard_kept_button, past == "resume"),
                  (self.stop_button, live and not retrying),
                  (self.withdraw_button, withdraws), (self.keep_open_button, keeps_open),
-                 (self.stop_trying_button, retrying), (self.back_button, not live and full))
-        comes = ended and full and self.end.isHidden()       # what the run's end leaves to say comes into sight
+                 (self.stop_trying_button, retrying), (self.back_button, not live))
+        comes = ended and self.end.isHidden()       # what the run's end leaves to say comes into sight
         for widget, on in shown:                 # what takes the keyboard is in sight before what holds it goes
             if on:
                 widget.setVisible(True)
@@ -1242,25 +1214,25 @@ class RunView(QWidget):
             if not on:
                 widget.setVisible(False)
         self.stop_button.setEnabled(stops)
-        self.title.setVisible(full)
-        self.text_button.setVisible(full)
-        self.stage_line.setVisible(full and bool(self.stage_line.words()))
+        self.title.setVisible(True)
+        self.text_button.setVisible(True)
+        self.stage_line.setVisible(bool(self.stage_line.words()))
         self.axis.setVisible(axis)
         self.axis_caption.setVisible(axis)
         self.follows.setVisible(axis and bool(self.follows.text()))
-        health = bool(self._shown_health) and full
+        health = bool(self._shown_health)
         for part in (self.health_head, self._health_head_gap, self.health, self._health_gap):
             part.setVisible(health)
         self.answers.setVisible(asks)
-        self.loss.setVisible(full and self._fit_shown)
-        self._loss_gap.setVisible(full and self._fit_shown)
-        messages = bool(self._message_rows) and full
+        self.loss.setVisible(self._fit_shown)
+        self._loss_gap.setVisible(self._fit_shown)
+        messages = bool(self._message_rows)
         for part in (self.messages_head, self._messages_gap, self.messages):
             part.setVisible(messages)
         count = getattr(self._held, "in_sight", None) or getattr(self._held, "count", None)
-        self.figures.setVisible(full and self._held is not None and (count is None or count() > 0))
-        self.body.setVisible(full)
-        self.text_block.setVisible(full and self._text_shown)
+        self.figures.setVisible(self._held is not None and (count is None or count() > 0))
+        self.body.setVisible(True)
+        self.text_block.setVisible(self._text_shown)
         self.head.fit()
         self.tools.fit()
         self._hold_width()
@@ -1275,22 +1247,10 @@ class RunView(QWidget):
         super().hideEvent(event)
         self._hold_width()
 
-    def _place_the_end(self) -> None:
-        """What the page says once its run has ended at the head of what scrolls; in the compact form, which shows
-        nothing that scrolls, under the sentence."""
-        if (self._said.indexOf(self.end) >= 0) == self._compact:
-            return
-        if self._compact:
-            self._column.removeWidget(self.end)
-            self._said.addWidget(self.end)
-        else:
-            self._said.removeWidget(self.end)
-            self._column.insertWidget(0, self.end)
-
     def _hold_width(self) -> None:
-        """The page asks for its least width while it shows in full, and for nothing more of its own while it is out
-        of sight or compact: its least width is then what its parts ask, and no more."""
-        least = design.scaled(LEAST_W) if self.isVisible() and not self._compact else 0
+        """The page asks for its least width while it shows, and for nothing more of its own while it is out of
+        sight: its least width is then what its parts ask, and no more."""
+        least = design.scaled(LEAST_W) if self.isVisible() else 0
         if self.minimumWidth() != least:
             self.setMinimumWidth(least)
 
@@ -1303,7 +1263,7 @@ class RunView(QWidget):
                       else self.stop_button if stops else self.sentence)
         elif keeps:
             target = self.keep_button
-        elif self._compact or (self._model is not None and self._model.outcome == "stopped"):
+        elif self._model is not None and self._model.outcome == "stopped":
             target = self.sentence
         else:
             target = self.back_button
@@ -1324,7 +1284,7 @@ class RunView(QWidget):
         """Whether the page asks to keep the training its run's stop kept: once the stop has landed with a note of
         one, until it is answered."""
         model = self._model
-        return (self._mode == "ended" and not self._compact and not self._answered and model is not None
+        return (self._mode == "ended" and not self._answered and model is not None
                 and model.outcome == "stopped" and model.kept_fit is not None)
 
     @staticmethod

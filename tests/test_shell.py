@@ -26,9 +26,9 @@ from core.gui.widgets.rule_table import StateCell, TextCell
 from tests._fixtures import (build_part, build_run_host, build_step_page, build_window,
                              card_and_programs as _card_and_programs, qt_app)
 from tests._dialogs import all_asked, asked, choose
-from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn, at as _at,
-                         epoch_line as _epoch, running, start_run, training_spec as _training_spec, turn_until,
-                         writing as _writing)
+from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn,
+                         a_worker_that_cannot_be_made, at as _at, epoch_line as _epoch, running, start_run,
+                         training_spec as _training_spec, turn_until, writing as _writing)
 from tests._window_helpers import (given as _given, in_front as _in_front, press as _press, session as _session,
                                    shown_off_screen as _shown_off_screen)
 
@@ -1487,10 +1487,6 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     builds.release()
     turn_until(app, lambda: not held.is_live())
     seen()
-    counted = RunModel(RunSpec("Export", ("inference", "infer"), keeps_files=False, stop_asks=False), clock=clock)
-    counted.set_count(1_200, 4_000, "samples")
-    assert (counted.sentence(), counted.doing()) == ("Export is running: 1,200 of 4,000 samples.",
-                                                     "1,200 of 4,000 samples")
     loads = StandIn(word="Prior load")
     start_run(host, loads, spec=RunSpec("Prior load", ("inference", "prior"), loads_only=True, keeps_files=False,
                                         stop_asks=False))
@@ -1505,96 +1501,6 @@ def test_the_foot_says_each_state_of_a_run_in_its_words(tmp_path, monkeypatch):
     assert foot() == ("err", "Training failed", "Sat 3 Oct, 03:12. What it had saved by then is kept.", True)
     seen()
     assert [words for words in written if "-" in words] == [], "a hyphen in the foot's own words"
-
-
-def test_a_run_that_keeps_no_file_and_fails_is_said_at_the_foot_until_it_is_seen_and_writes_nothing(tmp_path,
-                                                                                                    monkeypatch):
-    """A run that keeps no history file and does more than load a record keeps none, and its failure is said at the
-    foot all the same, with its time, as every other end is, and in Home's next step: until it is seen, as an end is
-    seen (here by the foot pressed, which shows its page), or the next run starts. Nothing is written for it: the
-    folder of runs holds what it held, and Home's "Last runs", which reads the runs' histories, lists what it listed.
-    The end that waited to be seen before it is neither set aside nor lost: its history still says it was not seen,
-    once the failure is seen it is said again, and a run started while the failure waits takes it as the end that
-    waited, which such a run that ends without failing gives back, as before. A failure whose end cannot read the
-    folder of runs ends all the same: its id is made without the folder. No page of the window starts such a run
-    now; the stand-in run is one."""
-    from pathlib import Path
-    from core.gui.panels.inference_tabs import InferPanel
-    from core.gui.run import history
-    from core.gui.run.model import RunSpec
-    app = qt_app()
-    held, clock = _on_the_runs_clock(tmp_path)
-    hooked = []
-    monkeypatch.setattr(sys, "excepthook", lambda kind, error, trace: hooked.append(f"{kind.__name__}: {error}"))
-    window = build_window()
-    home, folder = window.part("home"), tmp_path / "runs"
-    host = window.panel(InferPanel)
-    place = ("inference", "infer")
-    _shown_off_screen(window)
-    try:
-        window.go_to("home")                            # Home in sight: it reads what it states at each change
-        with running(host, StandIn(word="Inference"),
-                     spec=RunSpec("Inference", place, stop_button="Stop the inference…", kinds=("inference",))):
-            pass
-        waiting = held.status
-        inferred = ("done", "Inference finished", "Thu 8 Oct, 19:02.", True)
-        assert _foot(window) == inferred and waiting.unacknowledged_end, _foot(window)
-        listed, rows = sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)
-
-        def exported(how):
-            """A run that keeps no file, started on the page, which ends ``how``."""
-            stand_in = StandIn(word="Export")
-            start_run(host, stand_in, spec=RunSpec("Export", place, stop_button="Stop the export…",
-                                                   keeps_files=False))
-            clock.advance(20)
-            how(stand_in)
-            turn_until(app, lambda: not held.is_live() or hooked)
-
-        def failed(stand_in):
-            stand_in.fail(RuntimeError("the export could not be written"))
-
-        exported(failed)
-        run = held.status.run
-        assert (_foot(window), held.status.unacknowledged_end) == (
-            ("err", "Export failed", "Thu 8 Oct, 19:02.", True), True), (
-            "the foot does not say the export's failure", _foot(window))
-        assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table), run is not None) == (
-            listed, rows, True), "a file was written for the export's failure, or Home's last runs changed"
-        assert history.read(folder / f"{waiting.run}.json")["acknowledged"] is False, (
-            "the end that waited was written seen")
-        assert (home.next_heading.label.text(), home.next_button.text()) == (
-            "Next: see what happened to the export", "&See what happened"), home.next_heading.label.text()
-        window.go_to_run()                              # the foot pressed: the failure's page, and it is seen
-        assert (window.current_place(), held.status, _foot(window)) == (place, waiting, inferred), (
-            "once seen, the failure did not give back the end that waited before it", held.status)
-        assert sorted(path.name for path in folder.iterdir()) == listed, "seeing the failure wrote a file"
-        window.go_to("home")
-
-        exported(failed)
-        assert _foot(window)[:2] == ("err", "Export failed")
-        exported(lambda stand_in: stand_in.release())   # the next start takes the end that waited before it
-        assert (held.status, _foot(window)) == (waiting, inferred), (
-            "a run started while the failure waited did not take the end before it, or one that ended without failing "
-            "did not give it back", held.status)
-        assert (sorted(path.name for path in folder.iterdir()), _cells(home.runs_table)) == (listed, rows)
-
-        exists = Path.exists
-
-        def unreadable(path, *args, **kwargs):
-            """The folder of runs cannot be read, as when access to it is denied."""
-            if Path(path).parent == folder:
-                raise PermissionError(13, "Access is denied", str(path))
-            return exists(path, *args, **kwargs)
-
-        with monkeypatch.context() as patched:
-            patched.setattr(Path, "exists", unreadable)
-            exported(failed)
-        ended = (held.is_live(), _foot(window)[:2], hooked)
-        assert (ended, sorted(path.name for path in folder.iterdir())) == (
-            (False, ("err", "Export failed"), []), listed), (
-            "a failure whose end could not read the folder of runs held up that end, or a file was written", ended)
-    finally:
-        window.hide()
 
 
 def test_an_end_is_acknowledged_once_its_page_has_been_seen_in_the_active_window(tmp_path):
@@ -7521,8 +7427,8 @@ def test_a_start_taken_back_leaves_what_a_page_said_as_it_was(tmp_path):
         return page.foot.reading.text(), [(row.kind, row.sentence.plain_text()) for row in page.foot.facts.rows()]
 
     before = said()
-    with pytest.raises(TypeError):
-        start_run(runner, StandIn(), spec=_training_spec(place=("inference", "infer")), watch_dir=5)
+    with pytest.raises(TypeError), a_worker_that_cannot_be_made():
+        start_run(runner, StandIn(), spec=_training_spec(place=("inference", "infer")))
     assert not controller().is_live()
     assert said() == before
     assert before[0] != NOT_READ_YET_TEXT

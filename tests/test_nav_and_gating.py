@@ -78,31 +78,6 @@ def _chi_built_cfg():
     return cfg
 
 
-# ── the figure watcher ───────────────────────────────────────────────────────────────────────────
-def test_plot_watcher_only_reports_pngs_written_after_start():
-    """A runner that saves its figures to disk never returns their paths, so a panel picks them up off
-    disk. Pre-existing figures must not be re-shown, and each new one must be emitted once."""
-    import tempfile
-    from pathlib import Path
-
-    from core.gui.plot_watcher import NewPngWatcher
-
-    app = qt_app()
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp)
-        (d / "old_plot_20260101_000000.png").write_bytes(b"stale")
-
-        seen = []
-        watcher = NewPngWatcher(d)
-        watcher.png_ready.connect(lambda title, path: seen.append((title, Path(path).name)))
-        watcher.start()
-
-        (d / "fdt3d_vs_S_20260714_120301.png").write_bytes(b"new")
-        watcher.stop()                      # stop() forces a final scan, ignoring the settle delay
-        app.processEvents()
-
-        assert seen == [("fdt3d vs S", "fdt3d_vs_S_20260714_120301.png")], seen
-
 def test_no_module_of_the_window_reaches_for_the_old_box_that_named_no_cause():
     """``_config_error`` -- the box that read "The configuration could not be built." over whatever it had caught,
     a blank number and a bug in the parser alike -- is gone from the run host, and no module under core/gui names
@@ -117,32 +92,6 @@ def test_no_module_of_the_window_reaches_for_the_old_box_that_named_no_cause():
         named = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "_config_error"]
         assert not named, f"{path.name} still routes a failure through _config_error"
 
-
-def test_dispatch_watches_every_directory_it_is_given(tmp_path):
-    """A run may write TWO records, so its figures land in two separate ``figures/`` directories -- and
-    NewPngWatcher globs ONE directory and does not recurse (core/gui/plot_watcher.py:
-    ``self._dir.glob("*.png")``). One watcher would therefore show the first record's plot and silently
-    lose the second's, which is the half of a long run you waited longest for.
-
-    A single path still means one watcher, because every other caller passes one."""
-    from pathlib import Path
-    from tests._fixtures import qt_app
-
-    app = qt_app()
-    a, b = tmp_path / "a", tmp_path / "b"
-    a.mkdir(); b.mkdir()
-    panel = build_run_host()
-    seen = []
-    panel.figure_stack.add_png = lambda title, path: seen.append((title, Path(path).name))
-    panel.dispatch(lambda: None, watch_dir=[a, b])
-    (a / "fdt3d_vs_S_20260922_120000.png").write_bytes(b"s")
-    (b / "fdt3d_vs_T_20260922_130000.png").write_bytes(b"t")
-    # `finished` is QUEUED to this thread; the run's controller stops BOTH watchers at the run's end and
-    # each stop() does the final scan that ignores the settle delay. Wait for it as the module's other
-    # dispatch tests do, so no run is live before the next test dispatches anything.
-    _wait_for_run(app, panel, limit=30.0)
-    assert sorted(n for _t, n in seen) == ["fdt3d_vs_S_20260922_120000.png",
-                                           "fdt3d_vs_T_20260922_130000.png"], seen
 
 # ── PRISM navigation redesign ────────────────────────────────────────────────────────────────────
 def test_the_window_offers_three_appearance_choices_and_no_ticks():

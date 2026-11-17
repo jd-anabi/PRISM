@@ -56,8 +56,6 @@ SIMULATION_ROW = "Generating training data"
 #: What the model itself says when a record of the fit shows that the fit has ended: its count since the best
 #: has reached the patience, or its epoch is the limit plus one. A stage may begin with it.
 FIT_ENDED = "fit_ended"
-#: The readings that leave out the stage in progress: it is not drawn on the stage line. No reading does so now.
-LEAVES_OUT: tuple[str, ...] = ()
 #: The opening word of a message of each kind.
 LEADS = {"warn": "Attention", "err": "Error", "info": "Information"}
 
@@ -69,7 +67,7 @@ _COUNTER = re.compile(r"Training neural network\. Epochs trained: (\d+)")
 _SINCE = re.compile(r"(\d+) passes since the best")      # in a resumed training's line, when a loss was finite
 _DONE_OF = re.compile(r"\s*(\d+)/(\d+)")
 _DIGITS = re.compile(r"\d+(?:[.,]\d+)*")
-_OWN = "own"        # the samples of a run counted by its driving row or by set_count, not by a stage
+_OWN = "own"        # the samples of a run counted by its driving row, not by a stage
 
 
 @dataclass(frozen=True)
@@ -126,7 +124,6 @@ class RunSpec:
     expected_epochs: int | None = None
     retries: bool = False
     stop_asks: bool = True
-    own_view: bool = False
     plan: dict | None = None
     settings: dict | None = None
     check: dict | None = None
@@ -301,12 +298,10 @@ class RunModel:
         self._stages = list(spec.stages)
         self._began: dict[int, datetime] = {}
         self._done: set[int] = set()
-        self._left_out: set[int] = set()
         self._current: int | None = None
         self._rows: tuple = ()
         self._samples: dict = {}            # a counted stage's index, or _OWN: [(when, done)]
         self._totals: dict = {}             # the same keys: the total counted to
-        self._unit = ""
         self._budget: dict | None = None
         self._folder: str | None = None
         self._every: int | None = None
@@ -406,12 +401,6 @@ class RunModel:
             self._silence_needs_you = quiet >= SILENCE_NEEDS_YOU_S
         when = self._silence.when if self._silence is not None and self._silence.kind == kind else now
         self._silence = Message(kind, sentence, when, 1)
-
-    def set_count(self, done: int, total: int, unit: str) -> None:
-        """A run that prints no counted row says how far it is itself: ``done`` of ``total`` ``unit``."""
-        self._hear()
-        self._unit = unit
-        self._add_sample(_OWN, int(done), int(total))
 
     def set_stage(self, name: str) -> None:
         """A run that says its stages itself begins the one of that name (a name its spec does not hold is added
@@ -534,12 +523,10 @@ class RunModel:
         return f"{who} is starting." if self._stages or self._state == "starting" else f"{who} is running."
 
     def stage_line(self) -> tuple[StageWord, ...]:
-        """The run's stages with their markers and words, those left out not drawn."""
+        """The run's stages with their markers and words."""
         out = []
         latest = max(self._began, default=-1)
         for index, stage in enumerate(self._stages):
-            if index in self._left_out:
-                continue
             kind = self._kind_of(index)
             passed = index not in self._began and latest > index
             if passed or (kind == "rotation" and self.spec.facts.get("rotated") is False):
@@ -786,12 +773,6 @@ class RunModel:
                                                                        or index > self._current):
                 self._begin(index)
                 break
-        counted = self._counted_by(lambda stage: stage.counts == name) if {"i", "n"} <= values.keys() else None
-        if counted is not None:
-            self._begin(counted)
-            self._add_sample(counted, values["i"], values["n"])
-        if name in LEAVES_OUT and self._current is not None and self._state != "ended":
-            self._left_out.add(self._current)
         said = self._stages[self._current].said if self._current is not None else None
         if said is not None and name in (said.after, said.until):
             self._saying = name == said.after
@@ -991,11 +972,9 @@ class RunModel:
             samples.append((self._clock(), done))
 
     def _own_count(self) -> str:
-        """How far a run that counts itself is, as its sentence says it after "is running: ": "12 of 25", "1,200 of
-        4,000 samples"."""
+        """How far a run that counts itself is, as its sentence says it after "is running: ": "12 of 25"."""
         done, total = self._numbers(_OWN)
-        unit = f" {self._unit}" if self._unit else ""
-        return f"{number_text(done)} of {number_text(total)}{unit}"
+        return f"{number_text(done)} of {number_text(total)}"
 
     def _numbers(self, key) -> tuple[int, int | None]:
         """``(done, total)`` of a counted stage, or of the run's own count: the simulation's from its row, its

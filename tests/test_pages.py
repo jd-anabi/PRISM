@@ -35,7 +35,7 @@ from tests._dialogs import all_asked, asked
 from tests._fixtures import (TWO_LINES, build_part, build_run_host, build_step_page, build_window, qt_app,
                              readings_of_a_run)
 from tests._look_helpers import _gone, _settle, _the_look, text_size
-from tests._runs import Clock, StandIn, at, controller_on, start_run, turn_until
+from tests._runs import Clock, StandIn, a_worker_that_cannot_be_made, at, controller_on, start_run, turn_until
 from tests._window_helpers import in_front, shown_off_screen
 
 BLOCKS = "the name cannot be used"
@@ -1693,8 +1693,8 @@ def test_a_start_taken_back_reads_as_a_runs_end(tmp_path):
     """A start that raises after its page was handed the run sends no end of a run: the page is given back, the reading line
     leaves "A run is live." at once, and the reading comes once, as the timer fires."""
     window, page, _clock = _a_page(tmp_path)
-    with pytest.raises(TypeError):
-        _start(page, StandIn(), watch_dir=5)
+    with pytest.raises(TypeError), a_worker_that_cannot_be_made():
+        _start(page, StandIn())
     assert not controller().is_live() and page.results.currentWidget() is page.figures
     assert page.form.isEnabled() and page.foot.check_again.isEnabled() and page.foot.reason.text() != LIVE_TEXT
     assert page.foot.reading.text().startswith("The saved records were read"), page.foot.reading.text()
