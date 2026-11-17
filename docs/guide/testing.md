@@ -69,16 +69,16 @@ and the session guards).
   minutes. One process, because the session installs its temporary records root once: only a single
   process can catch code that swaps the default store and never puts it back, and a gate split
   across processes hides it. Its time of record is taken in one process on a quiet machine, nothing
-  else running: at commit 850dc23, on 9 November 2026, 3572 passed, 11 skipped (the display-marked
-  tests) and 5 deselected (the slow set) in 43 min 28 s, the card present, so the gpu-marked tests
+  else running: at commit e9c6b5c, on 16 November 2026, 4182 passed, 14 skipped (the display-marked
+  tests) and 3 deselected (the slow set) in 59 min 5 s, the card present, so the gpu-marked tests
   ran on it; the target of 16 minutes is no longer met.
   `--durations=15` named its slowest, all in `tests/test_user_sbi.py` but the last:
-  `test_train_and_validate_without_a_loaded_cell` (257 s),
-  `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` (113 s),
-  `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` (65 s),
-  `test_no_forcing_user_model_full_sbi_pipeline` (64 s),
-  `test_chi_fisher_rotation_builds_over_the_chi_feature_set` (63 s) and
-  `tests/test_tool.py::test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud` (60 s).
+  `test_train_and_validate_without_a_loaded_cell` (192 s),
+  `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` (111 s),
+  `test_no_forcing_user_model_full_sbi_pipeline` (77 s),
+  `test_chi_fisher_rotation_builds_over_the_chi_feature_set` (64 s),
+  `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` (64 s) and
+  `tests/test_tool.py::test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud` (61 s).
 - **The full run** is `python -m pytest`; budget about an hour and a half, and log it to a file.
   `python -m pytest -m slow --collect-only -q` lists the slow set, the real simulations the fast gate
   leaves out.
@@ -86,9 +86,8 @@ and the session guards).
   `tests/test_user_sbi.py::test_chi_mode_full_sbi_pipeline`,
   `tests/test_tier1.py::test_smoke_runs_every_stage_on_the_tier1_box` and
   `tests/test_diagnostics.py::test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin`.
-  At commit e17f1ec, when the set had two more tests (of the effective-temperature analysis, since
-  removed), it ran in 1 h 0 min 49 s, and these three took 1528 s (the chi pipeline), 1142 s (the
-  tier-1 `smoke`) and 7 s (the probes' twin-cell check).
+  At commit e9c6b5c, on 16 November 2026, it ran in 59 min 24 s, and these three took 1944 s (the
+  chi pipeline), 1592 s (the tier-1 `smoke`) and 10 s (the probes' twin-cell check).
 - **The markers**, registered in `pytest.ini` and turned into skips by the root `conftest.py`:
   - `slow`: left out of the fast gate;
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
@@ -397,6 +396,13 @@ masked-probe counts as above; each `[fit] saved after pass N.` followed by that 
 `[fit] epoch N: …` record; run 2 exited 0 in 9 s and run 2b exited 1 in 6 s; run 5's drill ran about
 7 minutes to its cut after pass 3, and its resume exited 0 in 12 s; the diagnostic card's eight
 commands each exited 0 and wrote one record. The whole gate took 31 minutes.
+
+It ran again at commit e9c6b5c, on 16 November 2026, on a day the processor ran slower (each prior
+stage about 20 s longer), and every check held: run 1 141 / 142 / 24 / 58 s, run 3 142 / 43 / 13 /
+23 s and run 4 141 / 233 / 32 / 68 s, with the same masked-probe counts as above; run 2 exited 0 in
+10 s and run 2b exited 1 in 7 s; run 5's drill ran about 7 minutes to its cut after pass 3, and its
+resume exited 0 in 14 s; the diagnostic card's eight commands each exited 0 and wrote one record.
+The gate took 26 minutes and the diagnostic card 7.
 
 sbi 0.26 warns when its calibration tests get fewer than 100 datasets, so runs 1, 3 and 4, which
 calibrate on 40, each log `Number of TARP samples should be on the order of 100s to give reliable results.`
