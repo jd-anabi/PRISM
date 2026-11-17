@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -205,11 +205,12 @@ when it holds nothing but a docstring.
   with these" or a reopening's offer), where each step of parameter inference stands, what each part
   is for, the newest records and the latest runs.
 - `screens/inference_screen.py`: Parameter inference: six steps over one shared `SbiSession`, each a
-  page of its own, and the step gates (`refresh_gates`). It owns what the three rebuilt pages share:
-  the one way a record comes into use (`take_prior`, `take_posterior`; `new_draft` replaces the session), which choices
-  are changed and not applied (`pending`), the plan in use (`plan_source`, `take_plan`), the chain
-  of loads (`load_chain`), the offers a reopened window makes (`read_offers`, `continue_from`,
-  `resume_kept`) and Home's "Continue with these" (`continue_with`).
+  page of its own, and the step gates (`refresh_gates`). It owns what the six pages share: the one way
+  a record comes into use (`take_prior`, `take_posterior`, `take_observation`; `new_draft` replaces
+  the session), which choices are changed and not applied (`pending`), the plan in use (`plan_source`,
+  `take_plan`), the chain of loads (`load_chain`), the offers a reopened window makes (`read_offers`,
+  `continue_from`, `continue_round`, `resume_kept`, `resume_round`) and Home's "Continue with these"
+  (`continue_with`).
 - `screens/artifact_screen.py`: the part Records, over `core.artifacts`.
 - `screens/models_screen.py`: Your own models: the list of the user models, and the model builder.
 - `screens/model_builder_screen.py`: the user-model builder.
@@ -221,23 +222,24 @@ when it holds nothing but a docstring.
 - `panels/run_host.py`: `RunHost`, the mixin that makes a page the host of a run: `dispatch()` to the
   run controller, the set of pages every run locks, and the moves of the run's page in and out of the
   page's column, its figures with it. A page lists it first among its bases.
-- `panels/base_panel.py`: `BasePanel(RunHost, QWidget)`: a controls column, a results column (the
-  page's figures over its own lines, or the run's page in their place), and the refusal box. While
-  the run's page stands beside the form, the form gives way so that nothing of the run's page is
-  hidden under it.
+- `panels/base_panel.py`: `BasePanel(RunHost, QWidget)`, the older frame: a controls column, a
+  results column (the page's figures over its own lines, or the run's page in their place), and the
+  refusal box. No step is built on it now, but the sink that renders a run's figures to PNG on the
+  worker (`_png_fig_sink`) lives here, and a test that needs a bare run host builds one on it.
 - `panels/inference_tabs.py`: the import surface of the six inference steps' panels; Help reads it by
   string path.
-- `panels/inference/base.py`: the steps' shared base classes and the narrowing round's training-budget
-  lines.
+- `panels/inference/base.py`: what a training's page and a narrowing round's share: the stages of
+  their runs (`TRAINING_STAGES`) and the run itself as the page hands it to the controller
+  (`training_spec`).
 - `panels/inference/step_page.py`: `StepPage(RunHost, QWidget)`, what the rebuilt steps are made of: a
   heading, "In use", a form, and the foot ("Before you start", the reason, "Check again" and the one
   main button). A page says what it supplies (`main_words`, `main_pressed`, `read_disk`,
   `selection_rows`, `plan_fields`, `plan_read`); the base reads the saved records only when the page
   is shown, after a pause in typing, at a run's end, on a store change, on "Check again" and at the
   press, and never while a run is live.
-- `panels/inference/resume.py`: a kept training after a reopening: the one reading of the offers, what
-  stops a Resume before anything is read, and the configuration, draft and call made from the
-  training's own record, never from a form.
+- `panels/inference/resume.py`: a kept training or a kept narrowing round after a reopening: the one
+  reading of the offers, what stops a Resume before anything is read, and the configuration, draft
+  and call made from the kept record, never from a form.
 - `panels/inference/config_tab.py`: step 1, Model and options: the model, its options, the units
   (the model's file, units typed, or a units file of any folder) and the plan row.
 - `panels/inference/prior_tab.py`: step 2, Prior, in two views (a saved prior; a new one), which builds
@@ -245,12 +247,29 @@ when it holds nothing but a docstring.
 - `panels/inference/posterior_tab.py`: step 3, Training, in two views (a training; a saved
   posterior): the training's form and its reading of the saved simulation sets, the question before
   simulating from zero, the list of kept trainings, and the load of a posterior.
-- `panels/inference/validate_tab.py`: step 4, Checks, which dispatches `validate_calibration`.
-- `panels/inference/infer_tab.py`: step 5, Inference, which dispatches `simulated_inference` or
-  `experimental_inference`.
-- `panels/inference/tsnpe_tab.py`: step 6, Narrowing round, which dispatches `tsnpe_round`.
+- `panels/inference/validate_tab.py`: step 4, Checks (`ValidatePanel`): the list of the twelve
+  checks in four groups under the headline, one page for each check beside the list or in its place
+  (`widgets/list_detail.py`), and the starts of the checks: each check's press hands its stage the
+  session's configuration or, for a check that simulates from a cell or in another kind of
+  observation, one of its own made at the press, and dispatches its stage (`validate_calibration`,
+  the `probes`, `ablation`, `identifiability` and `sbc` functions, or `check_scratch`'s two).
+- `panels/inference/check_page.py`: one check's page: its name and sentence, its state line, its
+  result, its earlier runs and its form. Made inside the list's page, out of sight until opened, and
+  reading nothing.
+- `panels/inference/check_forms.py`: each check's form as a table keyed by the check's key, the
+  reading of its rows through the rules the check's stage applies again, what a form hands its
+  stage by the stage's own argument names, and the run a press starts.
+- `panels/inference/check_results.py`: a check's result as a widget, from its record's manifest and
+  its folder, or from its run in the history: the verdict, the table and the figures, each captioned
+  in the window's words.
+- `panels/inference/infer_tab.py`: step 5, Inference, in two modes (a simulated cell; your own
+  recordings, with the driven recordings' table), which dispatches `simulated_inference` or
+  `experimental_inference` and says the result, with its next steps, once the run has ended.
+- `panels/inference/tsnpe_tab.py`: step 6, Narrowing round, which dispatches `tsnpe_round`: the
+  round's facts and form, the list of observations, the list of kept rounds with Delete, and Resume
+  when nothing stops it,
+  after a reopening, and the round's result and next steps.
 - `panels/inference/help_text.py`: the steps' help text, keyed by field.
-- `panels/inference/rows.py`: the chi band and probe rows.
 - `run/controller.py`: the one run of the process (`controller()`): its start, its worker, the lock on
   every panel, its two files, its stop, its tries and its end.
 - `run/model.py`: a run as the window reads it (`RunModel`): its state, sentence, stage line, time
@@ -279,8 +298,24 @@ when it holds nothing but a docstring.
 - `step_facts.py`: what a step says before it starts, as values with no widget and no engine: a fact
   (a marker with its lead word and sentence, blocking or not), the order facts stand in, the reason
   beside the main button, where a field's value came from, how long something takes, and the words
-  of each rebuilt step's facts. A fact that blocks and a marker that says it does not agree are
-  refused as the fact is made.
+  of each step's facts. A fact that blocks and a marker that says it does not agree are refused as
+  the fact is made.
+- `check_catalogue.py`: what each of the twelve checks is, as values: its key and place in the list,
+  its name and sentence, its group and role, the words of its buttons and the kind of record it
+  writes. It and the next two import no toolkit, no torch and no engine setting.
+- `check_lineage.py`: which records count for what is in use (matched by id, never by name; the
+  newest that counts decides), the state each check's row reads, the headline over the six deciding
+  checks, and the line "Before you start" says of the two checks made before a training; with the
+  two readings of the disk the screen makes.
+- `check_readings.py`: how a check's record is read: the state each deciding check's record reads,
+  by the rules each is judged by (the engine decides the frequency band and the calibration; the
+  others are judged here, each number a named constant), the comparison of the share of unusable
+  driven recordings a training's set holds with the audit, and the sentence and table of each
+  check's result.
+- `check_scratch.py`: the temporary store of the two checks that keep nothing but a result (the
+  timing of a short fit and the card test), made for the one run and removed however it ends, so
+  that the process's store is never swapped and nothing either check makes reaches the records in
+  use.
 - `plans.py`: plans in the window: a model's plans listed, one read with the two checks its reader
   cannot make (the bounds file is in the model's folder, the units resolve), one saved, the forms of
   every step filled from one, and the origin of each field's value. The folder is handed in, so a
@@ -293,7 +328,10 @@ when it holds nothing but a docstring.
   what is in force.
 - `continuing.py`: what a reopened window can offer, from the run history and the kept trainings,
   with no toolkit, no engine and no reading of its own: Continue from batch N, Fit again on the
-  saved simulations, Resume, and a kept narrowing round's command.
+  saved simulations (each for a training or a narrowing round), Resume for a kept training, and
+  Resume for a kept narrowing round with a sentence of what it loads and puts in use, or, when a
+  record it names is gone, the reason in its place (`records_gone` in `panels/inference/resume.py`), which the
+  Narrowing round step lists.
 - `load_chain.py`: a chain of loads, each started once the run of the one before has returned its
   record, stopped with a reason when one cannot go on.
 - `worker.py`: `Worker`, which runs a callable on the global thread pool with its output routed to Qt
@@ -345,6 +383,12 @@ when it holds nothing but a docstring.
 - `widgets/marker.py`: the state marker, as a widget and as an icon.
 - `widgets/message_row.py`: a message row: a marker and one sentence in the book face.
 - `widgets/rule_table.py`: a table with three ruled lines, and none between its rows or columns.
+- `widgets/list_detail.py`: a list and the detail of one of its items: the list alone, the detail
+  beside it while the page is wide enough for both, or in its place with a link back to the list. The
+  Checks step's list and a check's page.
+- `widgets/result_region.py`: what a page says after its run: a verdict, sentences, a ruled table,
+  captioned pictures, lines to copy and up to two next-step buttons that carry what the step they
+  open is to take. Hidden while it holds nothing.
 - `widgets/ruled.py`: a block with a ruled line along its top or bottom edge, and the section heading
   built on it.
 - `widgets/time_axis.py`: a run's time axis, as plain numbers, the widget that paints them and the
@@ -753,31 +797,42 @@ stage without freezing, shows its output and stops it.
 - **Parts and panels.** `MainWindow` is the rail down the window's left edge beside the page of the
   part in sight (`screens/shell.py`); every part but Home is built the first time it is opened. The
   six steps of parameter inference share one `SbiSession`, owned by `InferenceScreen`, which works out
-  each step's state and greys each step's own buttons through `refresh_gates`. Every page that runs something is a run host (`RunHost`, in
-  `panels/run_host.py`, listed first among its bases): `BasePanel` for the older pages and `StepPage`
-  for the rebuilt steps. A host has a results column that holds the page's figures and, while a run of
+  each step's state and greys each step's own buttons through `refresh_gates`. Every page that runs
+  something is a run host (`RunHost`, in `panels/run_host.py`, listed first among its bases); each of
+  the six steps is a `StepPage`, and no page is built on the older frame, `BasePanel`. A host has a
+  results column that holds the page's figures and, while a run of
   the page shows, the run's page in their place (`core.gui.run.view.RunView`), and `dispatch()`, which
   hands the call to the process's one run controller (`core.gui.run.controller.controller()`). The
   controller starts nothing while a run is live, so one run is live in the whole window
   ([One run at a time](window.md#one-run-at-a-time)); the `_REDIRECT` lock in `streams` is the
   backstop.
-- **The rebuilt steps** (1 to 3) are one `StepPage` each, over the shared `InferenceScreen`. A page
+- **The six steps** are one `StepPage` each, over the shared `InferenceScreen`. A page
   never reads the disk or the card in its constructor and never while a run is live: it marks itself
   stale and reads as it is shown, so that what the foot says is always the reading it names. A step
-  holds a record only after a run has returned it (`take_prior` and `take_posterior` are the
-  one way in; `new_draft`, step 1's Apply, runs nothing), so a build or a training that ends any way but well leaves what was held. A choice on a
+  holds a record only after a run has returned it (`take_prior`, `take_posterior` and
+  `take_observation` are the one way in; `new_draft`, step 1's Apply, runs nothing), so a build or a
+  training that ends any way but well leaves what was held. A choice on a
   form that differs from what the step holds is said "Changed, not applied" and tells the rail
   (`pending`). A refusal the engine gives at a press is shown on its row and blocks the start until the
   facts are next read, since what cures it may be on another page.
-- **Plans, Home's continuing and the offers.** A plan fills the steps' forms only when asked: the plan
-  row's fill, Home's "Continue with these" when a plan was in use last time, or a Continue from batch
-  N, which fills the settings that run was started with from its history; no plan is applied at launch
-  and only the name and time of the plan last used with each model are remembered. "Continue with these" and the offers after a
-  reopening apply step 1, then load the prior (and the posterior) through a `LoadChain`, which starts
-  each link once the run of the one before has returned its record and stops with a reason when one
-  cannot go on. The offers are worked out from the run histories and the kept trainings by
-  `continuing.py` and read, never while a run is live, by `resume.read_offers`. What a Resume runs is
-  rebuilt from the kept training's own record on its device, at its width and with its units file,
+- **Checks.** Step 4 reads what the twelve checks need once, at the page's reading, and works every
+  row from it (`check_lineage`): a check's page and its result are made then, from the record that
+  counts, and never while a run is live. A check that simulates from a cell, or in a kind of
+  observation other than the session's, runs on a configuration of its own, made at the press from
+  the step 1 settings applied and the bounds in use; the session's configuration is never written. The
+  timing of a short fit and the card test run in a scratch store (`check_scratch`) and keep a result
+  in the run's history, never a record.
+- **Plans, Home's continuing and the offers.** A plan fills the forms of every step only when asked:
+  the plan row's fill, Home's "Continue with these" when a plan was in use last time, or a Continue
+  from batch N (or a fit again) of a training or a narrowing round, which fills the settings that run
+  was started with from its history, in the forms that run reads; no plan is applied at launch and
+  only the name and time of the plan last used with each model are remembered. "Continue with these"
+  and the offers after a reopening apply step 1, then load the prior and, for Home's own press and a
+  narrowing round's offers, the posterior and the observation, through a `LoadChain`, which starts each link
+  once the run of the one before has returned its record and stops with a reason when one cannot go
+  on. The offers are worked out from the run histories and the kept trainings by `continuing.py` and
+  read, never while a run is live, by `resume.read_offers`. What a Resume runs is rebuilt from the kept
+  training's, or the kept round's, own record on its device, at its width and with its units file,
   never from the forms.
 - **The memory limit and the keep-awake wish** are Settings' own, kept under this computer's name in
   `core/gui/memory_limit.py`. The limit is the one window setting that reaches a stage through
@@ -869,14 +924,15 @@ stage without freezing, shows its output and stops it.
   which survive the store's string round-trip; `use_ini_file` points it at a test's file. The restore
   order for a picker lives in one place, `ArtifactPicker.repoint`: point at the folder, rescan, then
   re-apply the saved key, because a rescan wipes a selection restored first. What is remembered, and
-  why, is in [What the window remembers](window.md#what-the-window-remembers). The rebuilt steps and
-  This computer write what they remember through `core/gui/remembered.py`, each when it is applied
-  or changed and never at closing, so that a crash loses nothing that was applied; the appearance is written as soon as it is chosen; the older pages
-  still write theirs as the window closes.
+  why, is in [What the window remembers](window.md#what-the-window-remembers). The six steps and
+  This computer write what they remember through `core/gui/remembered.py`, each when it is applied,
+  started or changed and never at closing, so that a crash loses nothing that was applied; the
+  appearance is written as soon as it is chosen; what the window writes as it closes is its geometry
+  and the Records screen's selections.
 - **`core/gui/fields.py`** is the window's half of the refusal-naming rule: which control answers each
-  refusal field. On a rebuilt step the refusal is told in the one shared question and stands on the
-  page after it, on the row it names (`fix_sentence(key, here)` gives the sentence for the page the
-  control is on); the older pages still show the yellow "Check your inputs" box.
+  refusal field. On a step the refusal is told in the one shared question and stands on the page
+  after it, on the row it names (`fix_sentence(key, here)` gives the sentence for the page the
+  control is on); Records and the model builder still show the yellow "Check your inputs" box.
 - **Icons ship as PNGs.** The Qt here has no SVG image plugin, so an icon loaded from an SVG file is
   silently empty; `assets/app/build_app_icon.py` renders the SVG source to the PNGs `app_icon` loads,
   and the small glyphs are a bundled icon font.

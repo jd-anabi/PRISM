@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, how a cell is matched to its bounds file, the three observation modes and
@@ -144,7 +144,7 @@ file's folder, and `--model` overrides it
 
 ## Run plans
 
-A run plan is a text file of the science settings of the window's first three steps, so that a
+A run plan is a text file of the science settings of the window's six steps, so that a
 training can be set up again, or set up the same way for another cell, in one press. It is an input
 like a bounds or cell file: it lives at `Resources/Plans/<model>/<name>.txt`, one folder per model with
 the model's name in lower case (`core.config.PLANS_PATH`), it is hand-edited, and it is tracked in git.
@@ -261,10 +261,23 @@ prints `inputs.bounds` and `config.mode`.
   follows the drive, so that χ measures the drive rather than the bundle.
 
 In the window, step 1's "Kind of observation" list is the chi switch ("Frequency response" is chi
-mode) and step 2's Bounds file list chooses the bounds file. Step 5's "Experimental data" mode then shows the
-page for the mode: Spontaneous, with Forced and the drive boxes in forced mode, or, in chi mode,
-Passive, Drive F₀ (N) and the Forced probes table; each page has its own Recording length box, in s
-([The inference settings](window.md#the-inference-settings)). On the command line,
+mode) and step 2's Bounds file list chooses the bounds file. Step 5, Inference, has two modes, "A
+simulated cell" and "Your own recordings", and the second shows the form the posterior in use reads,
+with a sentence saying which kind that is; with no posterior in use it says so and shows no form.
+For a spontaneous posterior it asks for the **Spontaneous recording** alone. For a forced one it
+asks for that and the **Driven recording**, with a row for each parameter of the drive in SI units.
+For a frequency response it asks for the **Spontaneous recording** and a table of **Driven
+recordings**, each row a file and the frequency it was driven at, in Hz, and for the **Drive
+amplitude**, in N. **Add a driven recording** adds a row, and a row's remove button asks first, with
+"Keep it" as the safe answer, when the row holds a file or a frequency you typed. "Before you start"
+says how many driven recordings the posterior takes at most, and how many to remove when there are
+more. **Plan the driven recordings…**, once the spontaneous recording and the recording length are
+given, measures the cell's own frequency and says the band, fills only the frequencies left blank
+from the band, and says under each row what the engine will do with it (used whole, cut at the
+lock-in limit, too short to be used, or refused, with the reason). The **Recording length**, in s, and
+the **Drive amplitude** open blank at every launch: type them for each recording you bring
+([The inference settings](window.md#the-inference-settings)). The observation the run makes needs a
+name, and the inference may have one. On the command line,
 [infer](command-line.md#infer) lists the flags each mode takes and refuses. One example per mode;
 the recording paths and posterior names are placeholders, the forced drive is `master_weak.txt`'s in
 SI units, and the chi amplitude is the configured chi drive on a master cell:
@@ -293,8 +306,8 @@ python -m core infer --chi --bounds Resources/Bounds/nadrowski/master.txt --post
 - **Displacement unit.** The trace is read in the length unit the units file declares, nanometres
   for Nadrowski: a simulated trace is the model's observable times `x_scale`, in that unit, and a
   recording is compared with it as it stands.
-- **Drive frequencies are given in hertz**, both a chi probe's (`--forced PATH@HZ`, or the Hz box of
-  a Forced probes row) and a forced-mode drive's (`--drive freq=`). PRISM converts them into the
+- **Drive frequencies are given in hertz**, both a chi probe's (`--forced PATH@HZ`, or the frequency
+  box of a driven recording's row) and a forced-mode drive's (`--drive freq=`). PRISM converts them into the
   cell's own frequency unit, the reciprocal of its time unit
   (`core.sim_config.SimConfig.freq_si_to_cell`): 31.64 Hz is 0.03164 cycles per millisecond in a
   Nadrowski cell.
@@ -320,10 +333,11 @@ cell's own oscillation, measured from the passive recording.
   driven recordings than the posterior's probe slots (12 unless it was trained with another number);
   and a set in which no probe survives.
 
-The window's **Plan probes…**, on step 5's chi page, applies the same rules before you make
-the driven recordings: from the passive recording it measures Ω₀, gives the band in hertz, and says
-how long a probe must be at each edge of it. The command line has no equivalent: no subcommand
-measures Ω₀ from a recording.
+The window's **Plan the driven recordings…**, on step 5's frequency-response form, applies the same
+rules before you make the driven recordings: from the passive recording it measures Ω₀ and gives the
+band in hertz, and under each driven recording it says whether the recording is used whole, cut at
+the lock-in ceiling, masked as too short (with how long it must be at its frequency) or refused. The
+command line has no equivalent: no subcommand measures Ω₀ from a recording.
 
 ## Recording length
 
@@ -369,8 +383,9 @@ measures a whole degeneracy map:
 python -m core identifiability jacobian --chi --bounds Resources/Bounds/nadrowski/master.txt --cell Resources/Cells/nadrowski/master_weak.txt --t-obs 4.5
 ```
 
-The window's Plan probes… prints the same two lengths for a passive recording. This project's own
-examples and checks use 4.5 s, above T* on the master cells and under the 7.4 s every t_scale allows.
+The window's Plan the driven recordings… says how long a driven recording that is too short must be
+at its frequency. This project's own examples and checks use 4.5 s, above T* on the master cells and
+under the 7.4 s every t_scale allows.
 
 ## The chi assumptions, and checking them
 
@@ -391,7 +406,8 @@ store refuses a mismatch when it loads one. The command-line tool and the `probe
 `core/config.py`'s values.
 
 A preparation whose oscillation is much sharper or noisier than the master cells' may not share
-these values. The `probes` checks measure whether it does, from the command line only; they
+these values. The `probes` checks measure whether it does, from the Checks step of the window or
+the command line; they
 replaced the scripts that first measured the values
 ([Where the old scripts went](command-line.md#where-the-old-scripts-went)). Each takes the cell file
 that describes your preparation, or, for `mask`, a prior. The file names below are the master

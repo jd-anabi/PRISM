@@ -1,6 +1,6 @@
 # Getting started
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 This page takes you from a fresh installation to a first run in each front end, and shows where
 PRISM keeps what it reads and what it writes.
@@ -68,7 +68,7 @@ PRISM keeps its inputs apart from the records its runs generate.
 - **Inputs** live under `Resources/`, in five folders: `Bounds/` (which parameters are inferred, in
   what order and over what box), `Cells/` (one cell's initial conditions and parameter values),
   `Units/` (the unit system a model's files are written in), `Models/` (the definitions of
-  user-defined models) and `Plans/` (run plans: the settings of the first three steps, one folder per
+  user-defined models) and `Plans/` (run plans: the settings of the six steps, one folder per
   model). `Plans/` does not exist until the first plan is saved from the window, and no plan ships.
   Bounds, cell, units and plan files are edited by hand, and are tracked in git like the rest of the
   inputs: commit a plan you saved before a long run, or every record the run writes is stamped as made
@@ -115,35 +115,36 @@ export PRISM_ARTIFACTS="$HOME/prism-scratch"
 
 The window opens on Home, which says what to do next. The inference chain is the six steps of
 Parameter inference, which the rail lists under that part while it is open; each step is a page of
-its own, Alt+1 to Alt+6 open them from anywhere, and they are used in order. The first three steps
-are the rebuilt pages described here; steps 4 to 6 are still the older pages, with their own
-controls. [The window](window.md) describes the window as it was before its layout was redesigned and
-names the steps by their old tab names, Config, Prior, Posterior, Validate, Infer and TSNPE;
-[The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says what each needs before it can start.
+its own, Alt+1 to Alt+6 open them from anywhere, and they are used in order. All six are built the
+same way and are described here. [The window](window.md) describes the window as it was before its
+layout was redesigned and names the steps by their old tab names, Config, Prior, Posterior, Validate,
+Infer and TSNPE; [The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says what each
+needs before it can start.
 
 **Home.** Home's heading says the next step and its button goes there. PRISM starts every launch
 with nothing loaded. When a model was in use last time and nothing is loaded yet, Home's button reads
 **Continue with these** and its sentence lists what that is: the model, the kind of observation, the
-bounds file, the prior, the posterior and the plan last used, each only while it can still be found as
-it was used. One press applies step 1, loads the prior, then the posterior, one after another, each
-once the one before has returned its record; nothing is loaded until you press. If you changed the
-forms and did not apply them, the press first asks and lists what it would set, with "Keep what is
-there" as its safe answer. A chain that stops says where, under Home's heading, and the step it
-stopped at says why.
+bounds file, the prior, the posterior, the observation and the plan last used, each only while it can
+still be found as it was used. One press applies step 1, then loads the prior, the posterior and the
+observation one after another, each once the one before has returned its record; nothing is loaded
+until you press. If you changed the forms and did not apply them, the press first asks and lists what
+it would set, with "Keep what is there" as its safe answer. A chain that stops says where, under
+Home's heading, and the step it stopped at says why.
 
-**A step's page.** Each of the first three steps has a heading, a line that says what the step holds
-("In use"), the form, and a foot that never scrolls: **Before you start** lists what stops the start
-(marked Error or Blocked), what needs attention and what is fine, with the words that go beside the
-main button, and **Check again** reads the saved records again. A page reads the disk when it is
-shown, 300 ms after your last edit, when a run ends, when the store changes, at **Check again** and
-at the press, and never while a run is live. Under each setting a small word says where its value came
-from: usual, changed from the usual, kept from last time, "from plan NAME", or changed from the plan
-("from run NAME" after a Continue).
+**A step's page.** Each step has a heading, a line that says what the step holds ("In use"), the
+form, and a foot that never scrolls: **Before you start** lists what stops the start (marked Error or
+Blocked), what needs attention and what is fine, with the words that go beside the main button, and
+**Check again** reads the saved records again. A page reads the disk when it is shown, 300 ms after
+your last edit, when a run ends, when the store changes, at **Check again** and at the press, and
+never while a run is live (on Checks an edit reads nothing: a check's form is judged against the
+page's last reading). Under each setting a small word says where its value came from: usual,
+changed from the usual, kept from last time, "from plan NAME", or changed from the plan ("from run
+NAME" after a Continue).
 
 1. **Model and options.** Choose the model, the kind of observation ("Frequency response" is chi
    mode) and the units, then press **Apply model and options**. Applying while records are in use asks
-   first, because it starts a new session. The **Plan** row fills all
-   three steps' settings from a plan file ([Run plans](recordings.md#run-plans)).
+   first, because it starts a new session. The **Plan** row fills every step's settings from a plan
+   file ([Run plans](recordings.md#run-plans)).
 2. **Prior.** Choose a bounds file, give the prior a Name, and press **Build a new prior**, which
    runs the stability sweep and fits the prior. **Use a saved prior instead…** switches the page to
    its list of saved priors, and **Load this prior** loads the one you chose.
@@ -153,19 +154,62 @@ from: usual, changed from the usual, kept from last time, "from plan NAME", or c
    training that finds its simulation set whole or partly saved says so under **Before you start**,
    and **Start training** continues it. With **Only continue** chosen, the button reads **Continue
    from batch N**, or **Fit again on the saved simulations** when the set is whole.
-4. **Checks.** Press **Run calibration** to calibrate the posterior on data simulated from its own
-   prior.
-5. **Inference.** Choose "Simulated (cell ground truth)" and a cell, or "Experimental data" and your
-   recordings, set the recording length T_obs, and press **Run inference**.
-6. **Narrowing round**, when you want it: **Run TSNPE round** trains a narrowed posterior around a
-   recorded observation (step 5 records one each time it runs).
+4. **Checks.** One list of twelve checks, in four groups named by when each is made (before the run,
+   after simulating, after the fit, and tools). Each row gives the check's role (it decides whether
+   the posterior passes, it informs, or it is a tool), its state and when it last ran, and a headline
+   over the list counts how many of the six deciding checks have passed. The group names are headings,
+   not rows. A click, Space or Enter on a check's row opens that check's page, beside the list on a
+   wide window and in its place on a narrow one (**All checks** goes back to the list): what the check
+   asks, its state, the result of the record that counts for what is in use, its earlier runs and its
+   settings. A record counts only for what it was made for, matched by id: a check of the posterior
+   for that posterior, the audit for that prior,
+   so a renamed record still counts and a record of another posterior does not; a check made on a
+   cell counts for the same model and ranges. The foot's main button runs the check that is open; with
+   none open it opens the next deciding check a run can still pass. The calibration, which tests the
+   posterior against data simulated from its own prior, is the fourth check, and the one that writes
+   a record of kind `calibration`; every other check that keeps a record writes a `diagnostic`.
+   Some checks apply only with the frequency response, only without it, or only to the Nadrowski
+   model, and a row says what it waits for (a prior, a posterior, the simulations, the audit) or why
+   it does not apply. The comparison after
+   simulating has no button: it is worked out from the training's own run and the audit of its prior,
+   and while a training is live its row and state line are the running training's, though the
+   headline counts the records. A result's table scrolls sideways in its own block rather than
+   crush its row names.
+   The timing of a short fit and the card test keep nothing in the store; their results stay in the
+   run's history.
+5. **Inference.** Choose what to run the posterior on. "A simulated cell" takes a cell file of the
+   model, or its values typed by hand. "Your own recordings" shows the form the posterior in use
+   reads: a spontaneous recording only; a spontaneous recording and one driven recording with its
+   drive; or, for a frequency response, a spontaneous recording and a table of driven recordings,
+   each a file and the frequency it was driven at, with the drive amplitude in N
+   ([Bringing recordings](recordings.md#observation-modes)). The **Recording
+   length** and the **Drive amplitude** open blank at every launch and must be typed. Give the
+   observation a name, which is required, and the inference one if you wish, then press **Run
+   inference**. A posterior narrowed around one observation asks before every inference, in both
+   modes, whether to run on another observation. Once the run has ended the step says its result: a
+   table of each parameter's 5 %, 50 % and 95 % values with its unit (and, for a simulated cell, the
+   value it was simulated with), the posterior corner figure and the records' other figures, how
+   much of the observation the posterior predicts, and the two records saved. From there
+   **Narrow around this observation**, where a round can be run around it from the posterior in use,
+   opens step 6 with that observation chosen. When the run returns its records, the names and the note
+   it was handed are emptied and the result stays; **Run another inference** clears the result,
+   keeping the rest of the form.
+6. **Narrowing round**, when you want it: it trains a second posterior for one observation only, the
+   prior cut down to the region the posterior in use finds believable there. Choose the observation
+   (the list holds the observations of the kind and width in use, and the one an inference has just
+   made is chosen once its run has ended), the **Region level** and the **Directions narrowed**, the
+   round's budget and its network, give the new posterior a Name, and press **Start the narrowing
+   round**. The posterior it makes comes into use at step 3 and is valid only near that observation;
+   the posterior it came from stays in Records. The result offers **Check this posterior** and **Run
+   inference on the same observation**.
 
 The name is typed before the run and the record is written under it when the run completes; there is
-no Save afterwards on these steps. The name is checked as you type against the store's rule (the
-letters a to z in either case, digits, `_`, `.` and `-`, at most 64 characters, starting with a letter
-or a digit) and against the names already taken. Under a choice on its form that differs from what
-the step holds, a step says "Changed, not applied" and what is in use; "In use" counts such choices,
-and the rail marks the step.
+no Save afterwards on any step. The names of a prior, a posterior and a narrowing round's posterior
+are required; those of a check's record and of an inference are optional, and Inference's observation
+needs one. A name is checked as you type against the store's rule (the letters a to z in either case,
+digits, `_`, `.` and `-`, at most 64 characters, starting with a letter or a digit) and against the
+names already taken. Under a choice on its form that differs from what the step holds, a step says
+"Changed, not applied" and what is in use; "In use" counts such choices, and the rail marks the step.
 
 While a step's run goes, the run's own page stands in place of the step's form: where the run stands,
 its messages and the figures it made, and a stop button that asks before it stops anything that would
@@ -185,21 +229,35 @@ during it), the next launch's Home offers **Continue from batch N** if its saved
 short of the end. If they are whole and no kept training stands on them, it offers **Fit again on
 the saved simulations**. A training you stopped during its simulations is not offered on Home: the
 Training step says how far its simulations reached, and its own button continues them. A training
-kept after some epochs, stopped, failed or cut off during its fit, is offered with **Resume**.
+kept after some epochs, stopped, failed or cut off during its fit, is offered with **Resume** while
+the prior it was trained with is still in Records; with that prior gone it is not Home's next step.
 **Continue from batch N** and **Fit again** ask first if something is in use,
 apply step 1 with the run's own model and options, fill the Training step's form from the settings
 the run was started with, load its prior and open the Training step with "Only continue" chosen and
 the name and note blank; you press the Training step's own button to start. The Training step lists
-every kept training with **Resume** and **Delete** beside it; **Resume** puts the kept training's own
-model and prior in use first, asking if something is in use, then resumes it, and a resume first
-reads the simulation set back. A kept narrowing round is
-resumed from the command line: Home and the Training step print the `tsnpe --resume-fit` command for
-it; the narrowing round's page has no Resume button.
+every kept training with **Delete** beside it, and **Resume** when nothing stops it (the row says
+what does, before any press); **Resume** puts the kept training's own model and prior in use first,
+asking if something is in use, then resumes it, and a resume first reads the simulation set back.
+Home offers a narrowing round that failed or was cut off the same way; the press applies step 1 with
+the round's model and options, fills the settings the round reads from those it was started with,
+loads its prior, the posterior it narrows and its observation, and opens
+the Narrowing round step set to continue it, with the round's level and directions and the name and
+note blank. A narrowing round kept
+after some epochs is listed on that step under what is in use, with what it says, what its Resume
+loads and puts in use (the posterior it was narrowed from, its prior and its observation), and
+**Resume** and **Delete** beside it; Home's button then reads **Open Narrowing round** and leads
+there, and the past view of the round's run offers **Resume the training** as well. A kept round
+whose posterior, prior or observation is no longer in Records is listed with the reason and
+**Delete** only; it is not Home's next step, and its past view offers no button and says why and
+where it can be deleted. A new round
+started with a kept round's settings asks first, "Start a new narrowing round beside a kept one?": a
+new round starts its fit from the first epoch and leaves the kept one as it is. The Training step
+lists only ordinary trainings.
 
 A small training budget (a few batches in the Training step's Batches box) gives a posterior that
 shows the chain working and nothing more: at that size neither the posterior nor its calibration
 means anything. The default budget is a full-size training run. In chi mode, give a simulated cell a
-T_obs of a few seconds rather than the 1 s default, for the reason given for `--t-obs` below.
+recording length of a few seconds (the Inference step opens it blank), for the reason given for `--t-obs` below.
 [The window](window.md) covers every setting, and
 [The inference settings](window.md#the-inference-settings) says what each setting really changes.
 
@@ -256,7 +314,7 @@ named in the singular, and its directory in the plural.
 | `observation` | `observations/` | `infer` | step 5, Inference |
 | `calibration` | `calibrations/` | `validate` | step 4, Checks |
 | `inference` | `inferences/` | `infer` | step 5, Inference |
-| `diagnostic` | `diagnostics/` | `sbc`, `identifiability`, `ablation`, `probes` | none |
+| `diagnostic` | `diagnostics/` | `sbc`, `identifiability`, `ablation`, `probes` | step 4, Checks |
 | `fit` | `fits/` | `train`, `tsnpe` | steps 3 and 6, Training and Narrowing round |
 
 `smoke` writes the first six kinds into its own root; it writes a simulation cache only with
@@ -303,7 +361,7 @@ reads or removes it, and what it holds stays as it is until you move or delete i
   `--record`, an `artifacts` mode's `<ref>`), is its name or its bare id. The directory name
   `_unnamed__<id>` is not a reference.
 - A taken name is refused when the stage starts, before anything is spent; the window checks it as it
-  is typed, and the first three steps ask for it before the run.
+  is typed, and every step that writes a record asks for its name before the run.
 - Naming a record after the fact is a rename (`ArtifactStore.rename`): the manifest is rewritten, then
   the directory is renamed. The window names a record when its run starts and has no control that
   renames one.

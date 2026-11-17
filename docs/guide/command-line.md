@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -17,7 +17,7 @@ flag's entry here ends with the same clause. The examples are run from the repos
   as [The artifact store](getting-started.md#the-artifact-store) describes. That section also says
   what a record holds and what the kinds, names and ids are, and
   [Inputs and records](getting-started.md#inputs-and-records) says where each run saves.
-- **Run plans.** The window fills the settings of its first three steps from a plan file
+- **Run plans.** The window fills the settings of every step from a plan file
   ([Run plans](recordings.md#run-plans)); the tool reads none, and takes most of the same settings as
   flags. The slots, the lock-in limit, the rotation and typed units have none (the tool takes
   `core/config.py`'s values and the model's units file), and the expected epochs are the window's
@@ -238,13 +238,16 @@ Two more are set rather than read as settings:
   refused first as an unsupported model, in the `ValueError` form below. A refusal that carries no
   flag ends at the message: a record
   reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
-  mode's `<ref>`), `--resume require` with no cache to resume, the narrowed-parent rule of
-  [tsnpe](#tsnpe), a missing units file (the tool has no units flag), and a rule two settings
-  answer together. A kept training that cannot be resumed for a reason no setting of the command
+  mode's `<ref>`), `--resume require` with no cache to resume, a missing units file (the tool has no
+  units flag), and a rule two settings answer together. The narrowed-parent rule of
+  [tsnpe](#tsnpe) ends `(--observation)`, and the posterior refusals of [ablation](#ablation) and of
+  [identifiability laplace](#identifiability-laplace) end `(--posterior)`. A kept training that cannot
+  be resumed for a reason no setting of the command
   answers (its code, a constant, a library or its cache changed, or its rows read back do not give its
   fit; [Training-cache flags](#training-cache-flags)) is refused ending `(--resume-fit)`, the flag that
   named it. An error raised as a plain `ValueError`, such as an unsupported `--model`
-  (`core.tool.config_args.make_cfg`) or the cache refusals of [ablation](#ablation), prints
+  (`core.tool.config_args.make_cfg`) or a failed probe measurement that
+  [identifiability](#identifiability) finds after simulating, prints
   `prism <subcommand>: refused: <error class>: <message> [raised at <file>:<line>]`, and so does a
   missing file that no check covers. Anything else is a bug: the traceback, then
   `prism <subcommand>: *** FAILED ***`. An `artifacts sweep` that could not read or remove something
@@ -559,7 +562,8 @@ inside it, then `[prism] posterior <name>__<id>  <path>`.
 - A `--level` below 0.99 raises a pre-flight warning.
 - A narrowed parent drawn around another observation is refused, and no flag overrides it: a region
   drawn from it around another observation would sit where its flow extrapolates. Start from an
-  amortized posterior, or draw the round around the parent's own observation.
+  amortized posterior, or draw the round around the parent's own observation. The refusal ends
+  `(--observation)`.
 - Truth containment: when the observation was simulated from a cell, the round logs, for every
   truncated direction, whether the cell's truth lies inside or outside the region, with the
   direction's interval, and records the answers in the new posterior's `training.truth_containment`.
@@ -705,7 +709,8 @@ other SD is in range units, and the record names which is which.
 **Rules:** the mode measures the single-frequency feature set and reads the cell's own drive, so it
 runs in forced mode only: chi mode is refused, and so is a bounds file with no Forcing section. It
 also refuses a setting out of range, naming its flag, and a `--t-obs` too short to give a single
-sample `(--t-obs)`.
+sample `(--t-obs)`. With `--n-points` above 1, a posterior that carries no training prior to draw
+the other points from is refused `(--posterior)`.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -779,9 +784,11 @@ invisible, constant in training, or non-finite), and a count of the usable chann
 
 **Rules:** the ranges must be the ones this network was trained on, so the mode reads the
 posterior's own simulation cache: the posterior must have trained with checkpointing on. One that
-names no cache is refused, as is a posterior whose summary block has another width than this
-build's, and a cache whose rows are not as wide as the posterior's conditioning, whose shards
-overlap, or that holds no committed rows.
+names no cache is refused, as is a posterior whose network holds no embedding block or whose
+summary block has another width than this build's, and a cache whose rows are not as wide as the
+posterior's conditioning or that holds no committed rows; each of these refusals ends
+`(--posterior)`. A cache whose shards overlap, or whose shards do not hold what it commits, is
+refused as a plain `ValueError`, in the form [Exit codes](#exit-codes) gives.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 

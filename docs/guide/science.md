@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit ae1b21c.
+Checked against commit 0ed7262.
 
 ## Nondimensionalisation
 
@@ -1217,7 +1217,7 @@ and repeat-SBC cannot see probe-design variance. Seeding the probe draw from the
 let it.
 
 **One-probe simulated observations.** The tool accepts `--chi-k 1`: the configuration's own check
-allows one probe, while the window's Config tab refuses fewer than two, and training draws at least
+allows one probe, while the window's Model and options step refuses fewer than two, and training draws at least
 two per batch (`core.config.CHI_K_MIN_TRAIN`). Training rows do end with a single live probe, since
 half of each batch's rows keep only a random number of their live probes
 (`core.SBI.chi_probes._subset_probe_rows`), and a one-probe simulated observation puts its probe at

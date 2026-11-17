@@ -1,6 +1,6 @@
 # The PRISM guide
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 This guide explains how to use PRISM, how to run it at full size, and how it is built. Each fact is
 written once, on the page it belongs to; the reading paths below take each kind of reader through the
@@ -32,15 +32,21 @@ PRISM has two front ends over one core.
   prompts. `python -m core --help` lists the subcommands; its `artifacts` family is the command-line
   twin of the Records screen.
 
-Both front ends call the same stages (`core.orchestrator`); the diagnostics (`core.diagnostics`) are reached from the tool alone. Every setting either front end
-offers reaches its stage as an argument, never as an edit to `core.config`, except the window's
-memory limit. That one is kept in the window's Settings, under This computer, is remembered for the
-computer it was set on, and changes only how a batch is planned in memory, never what is simulated
+Both front ends call the same stages (`core.orchestrator`) and the same diagnostics
+(`core.diagnostics`). The window lists the diagnostics and the calibration, with three checks of its
+own (the comparison of a training's unusable driven recordings with the audit, the timing of a short
+fit, and the card test, the end-to-end run that `smoke` also makes), in one list, step 4, Checks; the
+tool reaches all but the comparison and the timing, as `validate`, `sbc`, `identifiability`,
+`ablation`, `probes` and `smoke`. Every setting either front end offers reaches its stage
+as an argument, never as an edit to
+`core.config`, except the window's memory limit. That one is kept in the window's Settings, under This
+computer, is remembered for the computer it was set on, and changes only how a batch is planned in
+memory, never what is simulated
 ([Memory planning](architecture.md#memory-planning-and-out-of-memory-recovery); the variable
-`PRISM_VRAM_CEILING_GIB`, when it holds a number, takes precedence over it). So a run started from the window and the same run
-started from the tool do the same thing; only the window reads a memory limit that was set in
-Settings; in a run of the tool only the variable sets it, since the tool never assigns the constant,
-which keeps `core/config.py`'s value (0).
+`PRISM_VRAM_CEILING_GIB`, when it holds a number, takes precedence over it). So a run started from the
+window and the same run started from the tool do the same thing; only the window reads a memory limit
+that was set in Settings; in a run of the tool only the variable sets it, since the tool never assigns
+the constant, which keeps `core/config.py`'s value (0).
 
 ## Reading paths
 
@@ -70,7 +76,7 @@ You have recordings of a hair bundle and want to know what they say about its pa
 1. [Getting started](getting-started.md): launching PRISM, where its inputs and records live, and a
    first run in each front end.
 2. [Bringing recordings](recordings.md), read in order: the input files, among them the run plans
-   that fill the first three steps' settings in one press, the observation modes and what each
+   that fill every step's settings in one press, the observation modes and what each
    needs, drive frequencies, recording lengths, and the chi assumptions and how to check them.
 3. [probes](command-line.md#probes): check a preparation, described by its cell file, before you
    record: whether the configured chi band and drive hold for it, and how hard it can be driven.

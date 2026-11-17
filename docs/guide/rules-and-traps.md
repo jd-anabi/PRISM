@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -122,12 +122,23 @@ tab, flag or button; each front end appends the control or flag that answers the
 table (`core/gui/fields.py`, and `FLAG` in `core/tool/fields.py`). A programming error is a plain
 exception, never a refusal. Known gaps, which are not the rule, include:
 
-- plain `ValueError`s: the `ablation` diagnostic's refusals about its simulation cache and its
-  network (`core.diagnostics.ablation.channel_ablation`), the command-line tool's refusal of an
-  unsupported model (`core.tool.config_args.make_cfg`), the Laplace identifiability check's refusal
-  of a posterior with no latent training prior (`core.diagnostics.identifiability`), and a narrowing
-  round's refusal when every direction loads on t_scale (`core.SBI.truncate.region_from_posterior`,
-  reached before any simulation);
+- plain `ValueError`s: the command-line tool's refusal of an unsupported model
+  (`core.tool.config_args.make_cfg`) and a narrowing round's refusal when every direction loads on
+  t_scale (`core.SBI.truncate.region_from_posterior`, reached before any simulation), and the
+  simulation cache reader's refusals that the `ablation` diagnostic reaches (two shards that overlap,
+  a shard of the wrong size, fewer batches than committed: `core.SBI.training_checkpoint.load_rows`).
+  The `ablation` diagnostic's own refusals about its simulation cache and its network
+  (`core.diagnostics.ablation.channel_ablation`) and the Laplace identifiability check's refusal of a
+  posterior with no latent training prior (`core.diagnostics.identifiability`, refused only for more
+  than one evaluation point) are each a `Refusal` with the field `posterior`, so the window names the
+  control and the tool ends the line with `(--posterior)`. A narrowing round's
+  refusal of a narrowed parent drawn around another observation is a `Refusal` with the field
+  `observation`, and ends with `(--observation)`. Pinned by
+  `tests/test_diagnostics.py::test_the_input_use_check_refuses_with_the_posterior_field_before_anything_is_spent`,
+  `tests/test_diagnostics.py::test_the_input_use_check_holds_no_plain_value_error`,
+  `tests/test_diagnostics.py::test_identifiability_across_the_prior_refuses_a_posterior_with_no_training_prior`
+  and
+  `tests/test_conditioning_repair.py::test_a_non_amortized_parent_is_refused_on_another_observation`;
 - a store lookup's error for a reference that resolves to no record carries no field in the loaders
   (`core.artifacts.store.ArtifactStore.load_prior`, `load_posterior`, `load_observation`,
   `load_calibration`, `load_inference`, `load_diagnostic`) and in `get`, `path` and `rename`;
@@ -184,14 +195,18 @@ posterior. Pinned by
 spend.** A remembered preference is harmless; a remembered measurement definition outlives the change
 to `core/config.py` that retired it, which once cost a multi-day run
 ([What the window remembers](window.md#what-the-window-remembers)). So the inference steps remember
-selections (the pickers, the kind of observation, the recording's lengths and drive amplitude, the
-training budget) and no science setting: every science setting opens at `core/config.py` on every
-launch, a plan fills a form only when asked and only its name and time are remembered, as a hint, a consent is answered by
-the session that runs, and the band and drive are read-only displays. `_assert_chi_config_is_deliberate`
+selections (the model and the kind of observation, the bounds file, the pickers of saved records, the
+cell file with its model, the mode, the recording paths and the driven recordings' files and
+frequencies, the training budget and the narrowing round's) and no science setting: every science
+setting opens at `core/config.py` on every launch, the recording length and the drive amplitude open
+blank at every launch, a plan fills a form only when asked and only its name and time are remembered,
+as a hint, a consent is answered by the session that runs, and the band and drive are read-only
+displays. `_assert_chi_config_is_deliberate`
 compares them with `core/config.py`, not with another record, before the first simulation. A setting
 persisted in future that defines the measurement needs the same comparison. Pinned by
 `tests/test_settings_persistence.py::test_science_knobs_open_at_config_and_are_not_written`,
-`tests/test_settings_persistence.py::test_the_config_tab_science_knobs_open_at_config_and_are_not_written`
+`tests/test_settings_persistence.py::test_the_config_tab_science_knobs_open_at_config_and_are_not_written`,
+`tests/test_applied_and_pending.py::test_the_recording_length_and_drive_amplitude_open_blank_at_every_launch`
 and `tests/test_settings_persistence.py::test_the_written_keys_are_exactly_the_remembered_table`.
 
 **A pre-flight reads its configuration from the same place as the run it clears.** Smoke runs that
@@ -233,7 +248,7 @@ enforces it and the test that pins it.
 | **The eigenbasis rule:** the region is cut in the rotation's leading directions, flat ones left full width | barely constrained directions cut on noise | `core.SBI.truncate.region_from_posterior` takes intervals on the leading directions of the parent's latent only; `build_posterior` wraps the truncated prior around the rotated latent prior; `tsnpe_round` refuses more directions than the latent has | `tests/test_conditioning_repair.py::test_the_region_is_built_over_the_leading_fisher_directions_only`; `tests/test_conditioning_repair.py::test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spend` |
 | **The unweighted-draws rule:** the region comes from unweighted posterior draws, not best fits | a second, undeclared likelihood, with the discrepancy measure as a hidden setting | `truncate.region_from_posterior` takes per-direction quantiles of the flow's own draws (20,000, seeded from the observation), with no ranking step | structural, no dedicated test |
 | **The generous-region rule:** a 99.9 % region, with the truth-outside rate watched | a tight region deleting support no later round can recover | `truncate.DEFAULT_HPD`; `tsnpe_round` refuses a level outside (0, 1) and warns below 0.99; `build_posterior` reports, for a round around a simulated cell, whether the truth lies inside each truncated direction (`TruncationRegion.containment`), records it in `training.truth_containment` and warns when it is outside, and logs the fraction of the prior the region kept | `tests/test_conditioning_repair.py::test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spend`; `tests/test_conditioning_repair.py::test_a_tight_hpd_warns_through_the_preflight_channel_and_still_runs`; `tests/test_conditioning_repair.py::test_a_narrowing_round_reports_and_records_whether_the_truth_lies_inside_each_direction`; `tests/test_conditioning_repair.py::test_a_region_reports_containment_per_truncated_direction` |
-| **The cost-on-screen rule** | a round, a full simulation campaign, started without its cost in view | the Training step's "Before you start" says how many simulations the run makes, how long the last training of this size took, the memory limit in force and what the saved sets would do, from `core.orchestrator.training_reading` and the run history; the narrowing round still shows the older budget group (`core.gui.panels.inference.base._TrainingBudgetMixin`); on the command line `build_posterior` logs its `[budget]` line on every training run | `tests/test_artifact_store.py::test_the_budget_line_prints_with_default_arguments`; `tests/test_before_you_start.py::test_the_simulations_are_counted_for_each_kind_of_observation`; `tests/test_before_you_start.py::test_the_memory_lines_say_what_is_in_force_and_what_the_last_run_measured`; `tests/test_settings_persistence.py::test_the_budget_lines_only_format_the_preview` (the narrowing round's lines) |
+| **The cost-on-screen rule** | a round, a full simulation campaign, started without its cost in view | the Training step's "Before you start" says how many simulations the run makes, how long the last training of this size took, the memory limit in force and what the saved sets would do, from `core.orchestrator.training_reading` and the run history; the narrowing round's says the simulations it makes (or the batch it continues from), how long its fit should take and the memory limit in force (`core.gui.step_facts.round_facts`); on the command line `build_posterior` logs its `[budget]` line on every training run | `tests/test_artifact_store.py::test_the_budget_line_prints_with_default_arguments`; `tests/test_before_you_start.py::test_the_simulations_are_counted_for_each_kind_of_observation`; `tests/test_before_you_start.py::test_the_memory_lines_say_what_is_in_force_and_what_the_last_run_measured`; `tests/test_before_you_start.py::test_the_rounds_simulations_line_never_claims_to_continue_a_trainings_set` and `tests/test_before_you_start.py::test_the_rounds_time_comes_from_earlier_rounds_or_says_there_is_none` (the narrowing round's lines) |
 | **The region-carries-its-basis rule:** the child reuses the parent's rotation, never recomputes it, skips directions loaded on t_scale, and names its base prior | a region drawn in one rotation and enforced in another: one such round kept 0.01 % of its parent posterior and lost the truth | `build_truncation_region` records the parent's rotation, a probe of its training bijection, the observation's digest and the parent's prior fingerprint; `build_posterior` trains in that rotation without running the Fisher and refuses a basis mismatch (`TruncationRegion.check_basis`), a rotation setting that disagrees, a resumed cache from another region or rotation (`TruncationRegion.check_checkpoint_V`) and another prior (`run_guards._assert_prior_matches_region`); `region_from_posterior` skips a direction loaded on t_scale above `truncate.t_scale_loading_max` | `tests/test_conditioning_repair.py::test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one`; `tests/test_conditioning_repair.py::test_build_truncation_region_records_the_parents_basis`; `tests/test_conditioning_repair.py::test_a_truncated_round_refuses_a_prior_other_than_the_parents`; `tests/test_conditioning_repair.py::test_a_t_scale_loaded_direction_is_excluded_from_the_region`; `tests/test_user_sbi.py::test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch`; `tests/test_user_sbi.py::test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched` |
 | **The calibrate-on-the-region rule** | a calibration drawn from the full prior, which reports a miscalibration that is not one | `orchestrator._calibration_prior`, shared by `validate_calibration` and `core.diagnostics.sbc_repeats`, restricts the rotated calibration prior to the region after checking its basis; `orchestrator._sbc_reference_sample` draws the rank test's reference from that same proposal, t_scale override included | `tests/test_user_sbi.py::test_calibration_theta_star_lies_inside_the_region_when_one_is_given`; `tests/test_diagnostics.py::test_the_calibration_draw_is_three_helpers_with_the_stratification_seam` |
 
@@ -376,15 +391,15 @@ What the window remembers, and why, is in
   files are added, and restoring a vanished entry would blank the combo. Guard: `ArtifactPicker.key`
   and `ArtifactPicker.restore_key`. Pinned by
   `tests/test_settings_persistence.py::test_missing_picker_key_restores_to_default_not_blank`.
-- **The gating table, narrowing round included.** Checks and the narrowing round gate on the prior loaded in step 2, Prior,
-  never on the drive prior ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs)
-  says why). Guard: `InferenceScreen.refresh_gates`, re-run
-  after every stage, and `TSNPEPanel.refresh_local_gates` for the narrowing round's button's observation. Pinned
-  by
+- **The gating table, narrowing round included.** Checks and the narrowing round gate on the prior
+  loaded in step 2, Prior, never on the drive prior
+  ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says why). Guard:
+  `InferenceScreen.refresh_gates`, re-run after every stage, and each page's own reading, which says
+  what its start waits for under "Before you start" (the narrowing round's observation among it).
+  Pinned by
   `tests/test_nav_and_gating.py::test_every_step_opens_and_its_state_follows_the_session` (the checks
-  become startable on the inference prior alone) and
-  `tests/test_nav_and_gating.py::test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior`; the
-  guard itself, that `refresh_gates` works out each step's gate once and says the new states once, is
+  become startable on the inference prior alone); the guard itself, that `refresh_gates` works out
+  each step's gate once and says the new states once, is
   `tests/test_step_chain.py::test_refresh_gates_says_the_new_states_once_and_the_rail_and_home_hear_them`.
 - **A new draft replaces the session; installing a configuration edits it.** Mixing them up discards
   the session's prior, posterior and observation, or the draft in the middle of a stage.
@@ -395,8 +410,9 @@ What the window remembers, and why, is in
   releases anything ([The dialogs](window.md#the-dialogs)). Pinned by
   `tests/test_nav_and_gating.py::test_apply_confirms_before_it_discards_the_session`.
 - **Pickers follow the built configuration's model.** A picker on the wrong model's folder offers
-  cells or bounds for another parameter set. Guard: `InferPanel.on_config_built` repoints the cell
-  picker, and `PriorPanel.on_draft_set` the bounds picker.
+  cells or bounds for another parameter set. Guard: `InferPanel.read_disk` repoints the cell picker
+  (and `ValidatePanel` those of the checks), and `PriorPanel.on_draft_set` the bounds picker. Pinned by
+  `tests/test_nav_and_gating.py::test_inference_pickers_repoint_from_draft_and_config`.
 - **Hand entry edits numbers, never the schema.** Parameter names and order belong to the model and
   bind by position. Guard: the grids always load from the selected file
   (`core.gui.widgets.param_grid`) and are never persisted.
@@ -421,24 +437,22 @@ What the window remembers, and why, is in
 - **A record comes into use only when its run has returned it.** A slot of the session
   (the prior, the posterior, the configuration) written before the run returns would leave a
   half-built session when the run fails, is stopped or is taken back. Guard: the one way a record
-  comes in is `InferenceScreen.take_prior` and `take_posterior`, called from a run's result, never
+  comes in is `InferenceScreen.take_prior`, `take_posterior` and `take_observation`, called from a
+  run's result, never
   from its start; `new_draft`, step 1's Apply, runs nothing and replaces the session. Pinned by
   `tests/test_applied_and_pending.py::test_a_build_that_ends_any_way_but_well_leaves_what_was_held` and
   `tests/test_applied_and_pending.py::test_a_training_that_ends_any_way_but_well_leaves_what_was_held`.
 - **A rebuilt page asks through the one shared dialog, and a test cannot stall on a box.** A rebuilt
   page asks, tells and refuses through `core.gui.widgets.ask` alone and keeps no message box of the
-  toolkit's own. The older pages, Records and Your own models still use instances of the toolkit's
+  toolkit's own. Records and Your own models still use instances of the toolkit's
   message box. Guard: the session fixture `_no_modal_dialogs` records every message box and every
   question with its words and answers each at once with no button, the safe answer, so an unexpected
   one cannot stall a run. A test reads what was asked with `tests/_dialogs.asked()`. Pinned by
   `tests/test_applied_and_pending.py::test_a_rebuilt_page_keeps_no_message_box`. A held Enter does not
   answer a question the same press opened (`tests/test_shell.py::test_a_question_keeps_its_own_enter`).
-- **The run's page is never hidden under the form.** On an older page, beside a run's page the form
-  gives up its least width, while the run's page keeps its own (326 px at the ordinary text size),
-  and the form gets its width back with the figures; on a rebuilt step the run's page takes the place
-  of the form. A page that cut the run's page off at a narrow window would hide the stop button of a
-  run that costs hours. Guard: `BasePanel._fit_the_form` for the older pages, the step page's own
-  layout for the rebuilt. Pinned by
+- **The run's page is never hidden under the form.** On a step the run's page takes the place of the
+  form. A page that cut the run's page off at a narrow window would hide the stop button of a run
+  that costs hours. Guard: the step page's own layout. Pinned by
   `tests/test_run_states.py::test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width` and
   `tests/test_run_states.py::test_nothing_of_the_run_page_is_hidden_at_150_percent_display_scaling`.
 - **Enter presses the button that shows the focus ring, and never repeats.** A held Enter that
@@ -734,11 +748,12 @@ The narrowing-round rules themselves are in the table above.
   Guard: `SimulationIdentity` carries the region (None for an amortized run), so a round has a cache
   of its own; `training_checkpoint.near_miss_siblings` ignores a cache that differs in the region
   alone. The amortized identity's digest is pinned to a fixed value, and any change to the
-  identity's fields re-keys every cache on disk. The narrowing round cannot say in advance whether a round
-  will resume, since the region is drawn when the round starts. Pinned by
+  identity's fields re-keys every cache on disk. The narrowing round's page therefore never claims
+  to continue a training's simulations: it says a round continues only its own set, when the same
+  round runs again with the same settings, since the region is drawn when the round starts. Pinned by
   `tests/test_user_sbi.py::test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched`
   and
-  `tests/test_settings_persistence.py::test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint`.
+  `tests/test_before_you_start.py::test_the_rounds_simulations_line_never_claims_to_continue_a_trainings_set`.
 - **A direction loaded on t_scale turns the restriction into a reweighting.** Training overwrites
   every row's t_scale with its batch's after the draw, which carries rows out of a box along such a
   direction, and NPE does not correct a reweighting. Guard: `truncate.region_from_posterior` skips a

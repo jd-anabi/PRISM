@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 531aae3.
+Checked against commit 0ed7262.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -92,11 +92,18 @@ and the session guards).
 - **The markers**, registered in `pytest.ini` and turned into skips by the root `conftest.py`:
   - `slow`: left out of the fast gate;
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
-    present, the gpu-marked tests run on it inside every fast gate;
+    present, the gpu-marked tests run on it inside every fast gate: four in `tests/test_gpu_paths.py`
+    (an inference on the card, a training stopped on it and resumed, and a kept training and a kept
+    narrowing round each resumed through the window's own call, all tiny), six in
+    `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`;
   - `display`: needs a real screen, and is skipped offscreen. In PowerShell,
     `$env:QT_QPA_PLATFORM = "windows"; python -m pytest -m display; Remove-Item Env:QT_QPA_PLATFORM`
     runs these on the real screen, since the root `conftest.py` only defaults the variable; they
-    create hidden native windows, and nothing shows. There are 11 at commit 531aae3. Four of them
+    create hidden native windows, and nothing shows. There are 14: two in `tests/test_look.py`, five
+    in `tests/test_pages.py` (the buttons of Training, Inference, the Narrowing round and Checks, each
+    held inside the smallest window, and every list of Model and options, Prior and Training shown
+    whole at the window's opening size, all with the screen's own metrics)
+    and seven in `tests/test_user_models.py`. Four of them
     make for real the requests a run makes of Windows, each on a window never shown, and release each:
     keeping the computer awake, the reason against ending the session, the taskbar's flash, and the
     answer to Windows' question whether the session may end.
@@ -109,9 +116,15 @@ and the session guards).
   training: `tests/test_fit_saving.py`. The rebuilt steps: `tests/test_pages.py` (the pieces every
   rebuilt page is made of: a fact and its order, the form, "In use", the foot, when a page reads and
   how it hosts a run, and the Tab walk), `tests/test_plans.py` (the plan reader, and the window's lists,
-  fills and saves of plans), `tests/test_before_you_start.py` (what each step says before it starts,
-  as values) and `tests/test_applied_and_pending.py` (what a step holds against what its page shows,
-  the load view, the kept trainings, Continue and Resume). The shared stand-ins and builders are
+  fills and saves of plans, every step's among them), `tests/test_before_you_start.py` (what each step
+  says before it starts, as values) and `tests/test_applied_and_pending.py` (what a step holds against
+  what its page shows, the load view, the kept trainings and the kept narrowing rounds, Continue and
+  Resume, and the Inference and Narrowing round steps' forms and results). Step 4 has a suite of its
+  own, `tests/test_checks.py`: what each of the twelve checks is, how a record of a deciding check is
+  read, which records count for what is in use, the headline and the summary the chain and Home read,
+  the comparison of the unusable driven recordings with the audit, then the list, a check's page and
+  the result of every check, the scratch store of the two checks that keep nothing, and what a check's
+  page never shows. The shared stand-ins and builders are
   `tests/_fixtures.py` (`build_window`, `build_part`, `build_inference`, `build_run_host`),
   `tests/_runs.py` (the stand-in run and the window's clock moved by hand), `tests/_dialogs.py` (the
   record of every question, plain Windows message, file chooser and opening),
@@ -148,9 +161,10 @@ and the session guards).
     for the whole session it is `tests/_dialogs.opener`, which keeps what would have been opened and
     opens nothing, so an "Open" button pressed in a test shows no window on the screen;
   - `_no_plans_written`: the folder of saved plans, `Resources/Plans`, holds at the end of the session
-    exactly what it held at its start, the same paths with the same bytes, and the window's own folder
-    of plans is a folder of the session's, empty, so that no test lists or writes the real one (a
-    test that writes a plan binds a folder of its own with `monkeypatch`);
+    exactly what it held at its start, the same paths with the same bytes, so that a plan saved by hand
+    while a suite runs fails it, and the window's own folder of plans is a folder of the session's,
+    empty, so that no test lists or writes the real one (a test that writes a plan binds a folder of
+    its own with `monkeypatch`);
   - `_no_sbi_logs`: `<repo>/sbi-logs` must not exist, checked at setup as well as teardown, so a
     leftover tree makes every run error before its first test.
 - **One session fixture is no guard and sets nothing**, `_long_lived_objects_set_aside`: it takes one
@@ -212,6 +226,17 @@ and the session guards).
   - `tests/test_docs.py`: every relative link in this guide and the root `README.md` resolves, every
     page opens with its commit stamp, and the command-line page names every subcommand and flag, with
     each default as its `--help` states it.
+- **The two child canaries**, each a test that runs one walk of the window alone in a process of its
+  own and requires that process to end as a test run ends:
+  `tests/test_pages.py::test_the_walk_of_the_whole_list_run_alone_ends_its_process_cleanly` and
+  `tests/test_checks.py::test_the_checks_lists_walk_run_alone_ends_its_process_cleanly`. A check's page
+  made with no parent, standing while the program's style sheet was changed and let go after its window,
+  once corrupted the process's memory as it ended (the exit code `0xC0000374`). The child sees the
+  graphics card as the run that starts it does, and the fault showed only with the card visible: with
+  the card hidden (`CUDA_VISIBLE_DEVICES=-1`) these two pass whether or not the fault is there, so they
+  watch for it only in a run with the card visible, as the recorded fast gate is. Each is a canary of
+  that crash and no more: it does not make the crash happen, and the rule that every check's page is
+  made inside the list's page is held by the test of how the pages are made.
 
 ## The card smoke gate
 
@@ -438,8 +463,8 @@ Then delete the scratch folder, as the recipe says.
 ## What a green suite does not certify
 
 - **The GPU path.** With a card present, the gpu-marked tests (`tests/test_gpu_paths.py`, and some in
-  `tests/test_user_sbi.py` and `tests/test_diagnostics.py`) run on it inside every fast gate. But they
-  resume no simulation cache and read no real bounds or cell file: a tiny test model stands in. The
+  `tests/test_user_sbi.py` and `tests/test_diagnostics.py`) run on it inside every fast gate. But
+  nothing in them is at real size, and they read no real bounds or cell file: a tiny test model stands in. The
   card smoke gate covers those.
 - **TorchScript's first runs** are not bitwise-reproducible on CUDA; warm up before any bitwise
   comparison
