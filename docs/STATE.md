@@ -1,9 +1,9 @@
 # PRISM — state
 
-**Last updated:** 2026-11-16, evening (21:13 by the clock; the weekly bar 15 %, resetting on 22 November at 04:00 UTC;
+**Last updated:** 2026-11-17, morning (09:24 by the clock; the weekly bar 15 %, resetting on 22 November at 04:00 UTC;
 extra usage switched on, nothing spent): STAGE 5'S EXIT IS DONE. Every gate of record is green on the final code
-`e9c6b5cd`; the documents after it are `b31216cb`, `159d3413`, `cdc150ef` and this file. One question of the owner's
-stands: `stage-5/exit/rulings-for-the-owner.md`'s A2 (the design's two unbuilt items).
+`e9c6b5cd`; the documents after it are `b31216cb`, `159d3413`, `cdc150ef` and this file. The owner's last question,
+`stage-5/exit/rulings-for-the-owner.md`'s A2, is answered: "Yes, as recommended" (17 November).
 
 - **The pictures** (356 at plain text, 356 at 150 %, `stage-5/pictures/exit-index.md`) found eight faults on the new
   pages; on the owner's "Yes, fix them", the cures (`ba113050` to `0ed72629`, rulings E1 to E9) and, after two readers
@@ -20,11 +20,13 @@ stands: `stage-5/exit/rulings-for-the-owner.md`'s A2 (the design's two unbuilt i
   G54 to G67 (`b31216cb`); the plan's departures 486 to 491 and its registry line, `09-checks.md:379` in the words built,
   the code audit's list (items 24 and 28 re-read, 26 and 27 new) (`159d3413`); `docs/guide/testing.md`'s times of
   record (`cdc150ef`).
-- **For the owner:** `stage-5/exit/rulings-for-the-owner.md` (A1 answered; A2 open: keep the keyboard handed to a
-  result's first next step and the three-rule table as one small task of the last stage, or drop them; the
-  recommendation keep the first, drop the second; B, 26 things told; C, every departure decided without the owner,
-  398 to 491; D, the gates). The walkthrough rows are the owner's to run on the real screen when it suits.
-- **Carried to the last stage:** a history's "Continue from batch N" or "Fit again" whose records are gone, offered by
+- **For the owner:** `stage-5/exit/rulings-for-the-owner.md` (A1 and A2 answered; B, 26 things told; C, every
+  departure decided without the owner, 398 to 491; D, the gates). A2, "Yes, as recommended": the keyboard handed to a
+  result's first next step is one small task of the last stage; the design's three-rule table in the results is
+  DROPPED (results keep showing their values as now). The walkthrough rows are the owner's to run on the real screen
+  when it suits.
+- **Carried to the last stage:** the keyboard handed to a result's first next step when a run ends (A2; the design's
+  `05-anatomy.md`, a result's page); a history's "Continue from batch N" or "Fit again" whose records are gone, offered by
   Home and refused only at the press; the ended page of a stopped training offering Resume, Keep and Discard at once (a
   question of words); Home's "Unnamed unfinished tr…g" (since stage 4).
 - **Measured:** Task 14 about 10 points of the bar (5 % to 15 %): the pictures, the cures (two builders, 0.37 M tokens
@@ -32,7 +34,7 @@ stands: `stage-5/exit/rulings-for-the-owner.md`'s A2 (the design's two unbuilt i
   drafter (0.44 M), the gates (machine time, about 3 h 40 min).
 - **Unpushed:** everything after `cdc80d2`.
 
-NEXT: the owner's answer to A2, then the code audit (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`), in a
+NEXT: the code audit (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`), in a
 new chat; then the retrain from the window, started by the owner; then one last stage.
 
 What follows is the head as the evening of 15 November left it:
