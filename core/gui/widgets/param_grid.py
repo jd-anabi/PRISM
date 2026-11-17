@@ -65,7 +65,7 @@ class _PassThroughScrollArea(QScrollArea):
     """A scroll area that hands the wheel back to its parent once it cannot scroll any further.
 
     This is the ONLY nested scroll area in the app -- a bounds grid sits inside a SourceToggle inside
-    BasePanel's controls scroll area. Qt's default is for the inner area to swallow every wheel event
+    the Prior step's scrolling body. Qt's default is for the inner area to swallow every wheel event
     it receives, so scrolling over the grid moved the grid and then simply stopped: you could not
     reach the "Build / Load prior" button below it by scrolling from there, which reads as the page
     being stuck.

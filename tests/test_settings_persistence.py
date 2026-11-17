@@ -27,7 +27,7 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
-from tests._fixtures import (build_inference, build_part, build_run_host, code_only, pump, qt_app,  # noqa: E402
+from tests._fixtures import (build_inference, build_part, build_run_host, code_only, qt_app,  # noqa: E402
                              write_simulation_set)
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
@@ -44,49 +44,6 @@ def test_missing_picker_key_restores_to_default_not_blank():
     assert picker.combo.currentIndex() >= 0, "a stale key blanked the combo"
     picker.deleteLater()
 
-def test_panel_splitter_is_sized_and_not_collapsible():
-    """Every panel opens with a usable controls column that cannot be dragged to nothing.
-
-    BasePanel builds the app's only QSplitter and there are nine live instances. It used to be a
-    LOCAL with no setSizes and no setChildrenCollapsible, so every launch started at the minimum and
-    one slip past the left edge collapsed the controls to zero width, recoverable only by finding a
-    5px handle at x=0.
-    """
-    app = qt_app()
-
-    panel = build_run_host()
-    panel.resize(1300, 820)
-    pump(app, 0.15)
-    assert not panel.splitter.childrenCollapsible(), \
-        "the controls column can still be collapsed to zero width"
-    assert all(s > 0 for s in panel.splitter.sizes()), \
-        f"splitter opened with a zero-width pane: {panel.splitter.sizes()}"
-    # The old hard 460px cap could not be escaped by widening the window, so any wider form got a
-    # permanent horizontal scrollbar in the left column.
-    assert panel.controls_scroll.maximumWidth() > 1000, \
-        f"controls column is still hard-capped at {panel.controls_scroll.maximumWidth()}px"
-
-def test_panel_layout_round_trips_through_settings():
-    """The splitter position must survive a restart -- 'I have to re-drag it every launch' is the
-    complaint. Uses saveState/restoreState, which work before the widget is shown or polished."""
-    app = qt_app()
-    from core.gui import settings as st
-
-    a = build_run_host()
-    a.resize(1300, 820)
-    pump(app, 0.15)
-    a.splitter.setSizes([500, 700])
-    pump(app, 0.05)
-    want = a.splitter.sizes()
-    qs = st.settings()
-    a.save_layout(qs)
-    qs.sync()
-
-    b = build_run_host()                      # restore_layout runs in __init__
-    b.resize(1300, 820)
-    pump(app, 0.15)
-    assert b.splitter.sizes() == want, \
-        f"layout did not round-trip: saved {want}, restored {b.splitter.sizes()}"
 
 def test_forms_grow_their_fields_and_numeric_boxes_have_a_floor():
     """Pins both halves of the 'input boxes are cut off' fix, across every form in every panel.
@@ -708,14 +665,14 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     inference builder does what it is handed and no more -- it assigns the session, installs the
     configuration, and refreshes no gate."""
     from core.gui.main_window import MainWindow
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference.config_tab import ConfigPanel
     from core.gui.panels.inference.step_page import StepPage
     from core.gui.panels.inference_tabs import InferPanel
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
     from tests import _fixtures
-    from tests._fixtures import build_inference, build_part, build_run_host, build_step_page, build_window
+    from tests._fixtures import (build_inference, build_part, build_run_host, build_step_page, build_window,
+                                 run_host_class)
 
     def kept(widget):
         held = []
@@ -764,10 +721,10 @@ def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypa
     assert isinstance(page, StepPage) and type(page).__name__ == "_Page" and page is not another
     assert page._screen is not another._screen and page._screen.panels()[2] is page
     assert type(build_step_page(type(page))) is type(page)
-    host, other = build_run_host(), build_run_host()
-    assert isinstance(host, BasePanel) and type(host) is not BasePanel and host is not other
-    assert host.layout_key() == other.layout_key() == "P", "two hosts must share one layout name"
-    assert type(build_run_host(BasePanel)) is BasePanel
+    host, other, bare = build_run_host(), build_run_host(), run_host_class()
+    assert isinstance(host, bare) and type(host) is not bare and host is not other
+    assert type(host).__name__ == type(other).__name__ == "P", "a bare run host is not known by its name"
+    assert type(build_run_host(bare)) is bare
 
     window, again = build_window(), build_window()
     assert type(window) is MainWindow and type(again) is MainWindow and window is not again
@@ -810,9 +767,9 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     from PySide6.QtWidgets import QWidget
     from core.gui import design, reported
     from core.gui import settings as st
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference_tabs import InferPanel
-    from tests._fixtures import build_step_page, build_window
+    from core.gui.panels.run_host import RunHost
+    from tests._fixtures import build_step_page, build_window, run_host_class
 
     module_panel = _panel_built_at_module_scope[0]
     if turn == "builds":
@@ -830,8 +787,8 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
         watched.destroyed.connect(lambda *_: _SEEN_AS_IT_WENT.extend(
             [st._override_path, "unread" in reported.COUNTS, design._room]))
         _MADE_IN_THE_FIRST_TURN[:] = [build_window(), build_part(InferPanel, screen=None), build_inference(),
-                                      build_run_host(), build_run_host(BasePanel), build_step_page(), watched, gone,
-                                      st._override_path]
+                                      build_run_host(), build_run_host(run_host_class()), build_step_page(), watched,
+                                      gone, st._override_path]
         assert [shiboken6.isValid(widget) for widget in _MADE_IN_THE_FIRST_TURN[:8]] == [True] * 7 + [False]
         design.set_room((1366, 728))         # the room this turn leaves in force, as a window it built would
         return
@@ -846,14 +803,14 @@ def test_a_window_a_builder_made_is_gone_after_its_test(turn, _panel_built_at_mo
     _SEEN_AS_IT_WENT.clear()
     assert [shiboken6.isValid(widget) for widget in made] == [False] * 7, (
         "a widget a builder made outlived the test that built it")
-    assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
+    assert [panel for panel in RunHost._instances if not shiboken6.isValid(panel)] == [], (
         "a deleted panel is still among the panels a run locks")
     assert seen == [written, True, (1366, 728)], (
         "what the builders made went after the test's own settings file or room was put back, or after its "
         "drawing record was read")
     assert not Path(written).exists(), "a window was closed, or a widget's deletion wrote settings, when its test ended"
     assert shiboken6.isValid(module_panel), "the end of a test deleted what a fixture of wider scope built"
-    assert module_panel in BasePanel._instances, "the end of a test took a living panel out of the set a run locks"
+    assert module_panel in RunHost._instances, "the end of a test took a living panel out of the set a run locks"
 
 
 def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
@@ -861,12 +818,12 @@ def test_no_suite_builds_a_window_a_part_or_a_step_by_hand():
     tests/_fixtures.py. Parsed, not searched: a class named in prose, or handed to a builder, is not
     a construction. Refused in every file of this folder but that one: a call of a window class
     (also through an expression that names one, as a lookup in a dict of classes), a local subclass
-    of a window class, BasePanel among them, and a call of build_app, which whole_program alone
+    of a window class, and a call of build_app, which whole_program alone
     makes. A class called through a variable is not seen here; the builders take the class as an
     argument, so no suite has a reason to hold one and call it."""
     import ast
     built = {"MainWindow", "InferenceScreen", "ModelBuilderScreen", "ArtifactScreen", "ConfigPanel", "PriorPanel",
-             "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel", "BasePanel",
+             "PosteriorPanel", "ValidatePanel", "InferPanel", "TSNPEPanel",
              "HomeScreen", "SettingsScreen", "Shell", "HelpScreen",
              "ModelsScreen", "PartError", "RunView", "StepPage", "CheckPage"}
     # The list is kept closed over the program. Every class with a base that a file of the window's own

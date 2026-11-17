@@ -8,7 +8,7 @@ for a model eligible for inference (no forcing, at least one parameter) both are
 twice the values given. Variable 1 is the observable, the one a recording measures.
 
 Everything here is light (sympy parse + a 100-step batch-1 smoke integration, milliseconds), so it all
-runs on the GUI thread -- no BasePanel/dispatch. Saving is refused while a task runs anywhere in the
+runs on the GUI thread -- no run host, no dispatch. Saving is refused while a task runs anywhere in the
 app (refreshing the model combos mid-run would fight the app-wide control lock), and persistence goes
 through core/Helpers/model_store.py (the JSON + the Bounds/Cells/Units triple).
 """
@@ -573,8 +573,8 @@ class ModelBuilderScreen(QWidget):
         """Show a refusal the way every other surface does: the yellow "Check your inputs" box with
         the core's neutral sentence and this front end's "where to fix it" under it.
 
-        Through ``refusal_box.show_refusal`` rather than ``BasePanel._refusal`` because this screen
-        is a plain QWidget: a BasePanel enrols in ``BasePanel._instances``, and a run in any panel
+        Through ``refusal_box.show_refusal`` rather than ``RunHost._refusal`` because this screen
+        is a plain QWidget: a run host enrols in ``RunHost._instances``, and a run in any panel
         would then grey out the builder's own controls. It has no log pane either, so the status
         line is this screen's record of the sentence -- the same role the pane plays for a panel and
         the status line plays for the Artifacts screen.

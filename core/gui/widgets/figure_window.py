@@ -18,7 +18,7 @@ Two window types, one per figure source (see FigureStack):
 Both are parentless top-level windows, each with its own place on the task bar, over the main window or under
 it as a person puts it. FigureStack holds the ONLY reference (a set) and drops it in each window's
 closeEvent -- without that pin, Python/Qt would GC the window the moment show() returns (the same lifetime trap
-BasePanel.dispatch handles for its workers). The main window's accepted close closes every one of them.
+RunHost.dispatch handles for its workers). The main window's accepted close closes every one of them.
 
 While a run is live the window's thread lays out no figure: the figure library keeps one parser of math-style text
 for the whole process, with no lock, and the run builds its own figures on its own thread. So an interactive window

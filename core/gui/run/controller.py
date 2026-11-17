@@ -374,7 +374,7 @@ class RunController(QObject):
             waiting = self._status if self._status.unacknowledged_end and self._status.run is not None else None
         from core.artifacts import default_store
         from core.progress import SOLVER
-        from ..panels.base_panel import BasePanel
+        from ..panels.run_host import RunHost
         from ..plot_watcher import NewPngWatcher
         clock = self._clock or _local_now
         force = memory_limit.memory_limit_in_force()
@@ -421,7 +421,7 @@ class RunController(QObject):
                 self.lines.emit(said)
                 # After the head, so that a history that cannot be written from the first moment is said in the file.
                 self._write(run)
-            for panel in list(BasePanel._instances):
+            for panel in list(RunHost._instances):
                 panel.set_controls_enabled(False)
             if host is not None and hasattr(host, "_run_began"):
                 host._run_began(spec)
@@ -505,7 +505,7 @@ class RunController(QObject):
         (once there is one), the run's two files removed, every panel free, the host's results given back (a load
         never took them), and the status published idle again, or, when an end waited to be seen as it started, that
         end's again: a start taken back sets nothing aside."""
-        from ..panels.base_panel import BasePanel
+        from ..panels.run_host import RunHost
         for watcher in run.watchers:
             watcher.deleteLater()
         run.watchers = []
@@ -513,7 +513,7 @@ class RunController(QObject):
             self._timer.stop()
         if run.text is not None:
             self._remove_files(run)
-        for panel in list(BasePanel._instances):
+        for panel in list(RunHost._instances):
             panel.set_controls_enabled(True)
         self._stay_awake(False)
         if not run.spec.loads_only and _alive(run.host) and hasattr(run.host, "_run_over"):
@@ -1197,7 +1197,7 @@ class RunController(QObject):
         drawn holds up nothing of the run's own end; then the page's own word on a refusal made before anything was
         spent (on the run's page when the run repeats an offer of it), or on the failure of a run that only loads a
         record, which has no page of its own."""
-        from ..panels.base_panel import BasePanel
+        from ..panels.run_host import RunHost
         model = self._model
         for watcher in run.watchers:
             watcher.stop()                       # one last look: the last figure often lands right at the end
@@ -1246,7 +1246,7 @@ class RunController(QObject):
             else:
                 self._write(run)
                 run.text.close()
-        for panel in list(BasePanel._instances):
+        for panel in list(RunHost._instances):
             panel.set_controls_enabled(True)
         self._stay_awake(False)
         self._withdraw_reason()

@@ -626,7 +626,7 @@ def test_a_log_box_under_automatic_bounds_is_refused_with_a_fix_that_can_be_done
 
 def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     """The model builder shows a field refusal in the same yellow box as the panels, but it is a plain
-    QWidget rather than a BasePanel -- it has no ``_refusal`` and no log pane -- so its refusals go
+    QWidget rather than a run host -- it has no ``_refusal`` and no log pane -- so its refusals go
     through the shared ``refusal_box.show_refusal`` and are recorded on its own status line instead. Before this, every one of its input problems was a status-line
     sentence only: a form a full screen tall could refuse to save with a message at the bottom of it,
     and the wording was this screen's alone, so the same mistake read differently here and everywhere

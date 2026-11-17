@@ -29,7 +29,7 @@ import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from core.artifacts.store import KIND_DIRS, Summary                # noqa: E402
-from core.gui.panels.base_panel import BasePanel                  # noqa: E402
+from core.gui.panels.run_host import RunHost                      # noqa: E402
 from core.gui.run.controller import controller                    # noqa: E402
 from core.gui.streams import redirect_streams                     # noqa: E402
 from core.gui.widgets import artifact_table as at                 # noqa: E402
@@ -350,11 +350,11 @@ def test_a_deleted_panel_leaves_the_set_a_run_locks_and_a_later_run_starts():
         return got
 
     first = build_run_host()
-    assert run(first) == ["done"] and first in BasePanel._instances
+    assert run(first) == ["done"] and first in RunHost._instances
     first.deleteLater()
     QCoreApplication.sendPostedEvents(first, QEvent.DeferredDelete)
     assert not shiboken6.isValid(first), "the host was not deleted"
-    assert [panel for panel in BasePanel._instances if not shiboken6.isValid(panel)] == [], (
+    assert [panel for panel in RunHost._instances if not shiboken6.isValid(panel)] == [], (
         "a deleted panel is still among the panels a run locks")
     second = build_run_host()
     assert run(second) == ["done"] and not controller().is_live(), "a run after a deleted panel did not complete"
@@ -1336,9 +1336,9 @@ def test_list_dir_returns_and_the_picker_no_longer_swaps_stdout(tmp_path, capsys
 
 
 def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
-    """One yellow box, two callers. BasePanel._refusal keeps its signature and its log-pane line, but
+    """One yellow box, two callers. RunHost._refusal keeps its signature and its log-pane line, but
     the box itself is core/gui/widgets/refusal_box.show_refusal(parent, exc) -- so the Artifacts
-    screen, which is a plain QWidget and NOT a BasePanel on purpose (a BasePanel enrols in
+    screen, which is a plain QWidget and NOT a run host on purpose (a run host enrols in
     _instances, and a run in any panel would then grey out the browser while you were reading a
     log), shows the same title, icon, text, fix sentence and single OK button instead of a lookalike
     that drifts from this one.
@@ -1390,7 +1390,7 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     monkeypatch.setattr(bp, "show_refusal", lambda parent, e: calls.append((parent, e)))
     forget_asked()
     panel._refusal(exc)
-    assert calls == [(panel, exc)], "BasePanel._refusal no longer routes through refusal_box"
+    assert calls == [(panel, exc)], "RunHost._refusal no longer routes through refusal_box"
     assert all_asked() == [], "the panel built a box of its own instead of delegating"
     assert pane.lines[-1] == ("warning", f"{exc.message} {fix}"), \
         "the log-pane line is the panel's own (a plain QWidget has no pane) and must stay"

@@ -15,7 +15,7 @@ the steps as pages, none disabled; every step reads and writes the session throu
 # and the test suites reach _nvidia_smi_free_gib through it. Each step dispatches an orchestrator
 # composition directly. The pages live in the inference/ package, one module per step plus the shared matter.
 from .inference.help_text import HELP  # noqa: F401
-from .inference.base import _hw_batch, _nvidia_smi_free_gib  # noqa: F401
+from .inference.base import _nvidia_smi_free_gib  # noqa: F401
 from .inference.config_tab import ConfigPanel  # noqa: F401
 from .inference.prior_tab import PriorPanel  # noqa: F401
 from .inference.posterior_tab import PosteriorPanel  # noqa: F401

@@ -105,13 +105,13 @@ def test_plot_watcher_only_reports_pngs_written_after_start():
 
 def test_no_module_of_the_window_reaches_for_the_old_box_that_named_no_cause():
     """``_config_error`` -- the box that read "The configuration could not be built." over whatever it had caught,
-    a blank number and a bug in the parser alike -- is gone from the old frame, and no module under core/gui names
+    a blank number and a bug in the parser alike -- is gone from the run host, and no module under core/gui names
     it, so no page can quietly route a failure back into a box that says nothing about what was wrong."""
     import ast
     from pathlib import Path
     import core.gui
-    from core.gui.panels.base_panel import BasePanel
-    assert not hasattr(BasePanel, "_config_error")
+    from core.gui.panels.run_host import RunHost
+    assert not hasattr(RunHost, "_config_error")
     for path in sorted(Path(core.gui.__file__).parent.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         named = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "_config_error"]
@@ -3284,8 +3284,8 @@ def test_the_run_status_is_published_last_after_every_lock_is_final():
     start after every panel's controls are locked, at the end after every one is free again, so a
     listener -- here a method of an object the window holds -- never sees a half-locked window."""
     from PySide6.QtCore import QObject
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference_tabs import InferPanel
+    from core.gui.panels.run_host import RunHost
     from core.gui.run.controller import controller
     from tests._fixtures import qt_app
     from tests._runs import StandIn, start_run, turn_until
@@ -3298,7 +3298,7 @@ def test_the_run_status_is_published_last_after_every_lock_is_final():
     class Reader(QObject):
         def read(self, status):
             seen.append((status.state, status.place, controller().is_live(),
-                         sorted({panel.controls.isEnabled() for panel in BasePanel._instances})))
+                         sorted({panel.controls.isEnabled() for panel in RunHost._instances})))
 
     reader = Reader(window)
     controller().status_changed.connect(reader.read)
@@ -3568,7 +3568,7 @@ def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
     count of them stands in that file at all, of nine or of ten. inference/base.py names no tab: the six
     steps are pages of the look, and the frame those words were written for has no page left.
 
-    Phrases, not a subclass count: the suites own throwaway BasePanel subclasses persist for the life
+    Phrases, not a subclass count: the suites own throwaway run host subclasses persist for the life
     of the process, so counting __subclasses__() would assert on test order.
 
     The source is whitespace-NORMALISED before every check. Two of these phrases are wrapped across a

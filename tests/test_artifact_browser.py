@@ -143,7 +143,7 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     """The screen's registration points, in one real window.
 
     Home's table of the parts opens it from its row "Records", with one click; the window holds it as
-    its part Records; and _save_state calls the screen's save_settings BY NAME. It is NOT a BasePanel and NOT in
+    its part Records; and _save_state calls the screen's save_settings BY NAME. It is NOT a run host and NOT in
     _all_panels(), which is what keeps it out of both the app-wide control lock and
     _refresh_model_combos. The three rebuilt steps of Parameter inference, built too, write nothing as the window
     closes: what they remember is written as it comes into use.
@@ -151,7 +151,7 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from core.gui import settings as st
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.run_host import RunHost
     from core.gui.screens.artifact_screen import ArtifactScreen
 
     qt_app()
@@ -167,8 +167,8 @@ def test_homes_records_row_opens_the_browser_and_the_window_saves_its_state():
     assert w.current_place() == ("records", None) and w.shell.stack.currentWidget() is screen
     assert isinstance(screen, ArtifactScreen)
 
-    assert not isinstance(screen, BasePanel), \
-        "a BasePanel enrols in _instances, so every run anywhere would grey the browser out"
+    assert not isinstance(screen, RunHost), \
+        "a run host enrols in _instances, so every run anywhere would grey the browser out"
     assert screen not in w._all_panels()
 
     screen.kind_combo.setCurrentIndex(KINDS.index("posterior"))
@@ -925,7 +925,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
     """The live-run refusal, in the window's own wording -- the model builder's "A task is running --
     wait for it to finish before validating." and "... before saving." (quoted, not cited by line
     number, which moved). Every WRITE is refused while a run is live; READING never is -- which is the
-    whole reason the browser is a plain screen and not a BasePanel, so nothing here is greyed out
+    whole reason the browser is a plain screen and not a run host, so nothing here is greyed out
     either."""
     from tests._fixtures import all_asked, artifact_screen, qt_app
     from tests._runs import running
@@ -950,7 +950,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
         assert scr.table.topLevelItemCount() >= 1
         _select_ref(scr.table, p.id)
         assert scr.note_edit.isEnabled() and scr.btn_delete.isEnabled(), \
-            "the browser is not a BasePanel: a live run greys nothing here"
+            "the browser is not a run host: a live run greys nothing here"
     # _select above re-read the row's (empty) note into the box, as a selection change must; type it
     # again and the same click works now that nothing is running.
     scr.note_edit.setText("written after the train")

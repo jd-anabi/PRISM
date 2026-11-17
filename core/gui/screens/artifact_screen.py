@@ -1,7 +1,7 @@
 """The Artifacts screen: read the artifact store from inside the app.
 
-The window's part Records, and a PLAIN QWidget -- deliberately NOT a BasePanel. A BasePanel enrols itself in
-``BasePanel._instances``, and the run's controller disables every instance's controls column while ANY run
+The window's part Records, and a PLAIN QWidget -- deliberately NOT a run host. A run host enrols itself in
+``RunHost._instances``, and the run's controller disables every instance's controls column while ANY run
 is live, so a browser built on one would grey out the moment a training started and you could not read
 the log of the thing you were waiting for. Reading is never blocked here; the actions that CHANGE the
 store ask the run's controller for themselves whether a run is live.

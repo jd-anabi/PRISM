@@ -1,5 +1,5 @@
 """A tabbed container of figure images. Figures are rendered to PNG on the worker thread (see
-BasePanel's fig_sink) and shown here as QPixmaps -- deliberately NOT live FigureCanvasQTAgg widgets:
+base_panel._png_fig_sink) and shown here as QPixmaps -- deliberately NOT live FigureCanvasQTAgg widgets:
 painting a matplotlib figure that was created on a worker thread deadlocks on matplotlib's global
 lock. Static PNGs sidestep that entirely and unify with a runner that saves its PNGs to disk
 itself.
@@ -73,7 +73,7 @@ class FigureStack(QTabWidget):
         self.setMovable(True)
         self.tabCloseRequested.connect(self._close_tab)
         # Pop-out windows are parentless top-levels; hold them or Python/Qt GCs them the instant show()
-        # returns (the lifetime trap BasePanel.dispatch handles for its workers), and so that each is reached while
+        # returns (the lifetime trap RunHost.dispatch handles for its workers), and so that each is reached while
         # it is open (``hold``). Dropped on close.
         self._windows = set()
         self._added = 0                      # the tabs added so far: each carries its number, in the order it came

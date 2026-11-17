@@ -11,7 +11,7 @@ module (which pytest would then also collect a second time under a different nam
 
 It also holds what the GUI suites used to copy per file -- ``qt_app``, ``pump``, ``code_only``,
 ``PaneCapture``, ``page_lines``, ``card_and_programs``, ``readings_of_a_run``, the stubs
-``budget_cfg``, ``prior_stub``, ``forced_cfg`` and ``spont_cfg`` and the record writers
+``prior_stub``, ``forced_cfg`` and ``spont_cfg`` and the record writers
 ``write_simulation_set`` and ``write_history`` -- and re-exports the two records
 tests/conftest.py's session guards append to, the
 dialogs in ``SHOWN`` and the file choosers in ``CHOOSER_CALLS``, with their helpers: they live in
@@ -194,30 +194,6 @@ def _nad_cfg(**over):
                               str(BOUNDS_PATH / "nadrowski" / "master.txt"), **over)
     cfg.hw = config.cpu_device()
     return cfg
-
-
-def budget_cfg():
-    """Stub SimConfig carrying exactly the fields the budget lines read.
-
-    A stub, not a real build: the arithmetic under test is geometry -> elements -> GiB, and a real
-    make_sim_config drags in bounds files and a 300k-point time grid for nothing.
-    """
-    from core import config
-
-    class Cfg:
-        hw = config.detect_device()
-        t = type("T", (), {"shape": (250_000,)})()
-        inits_dict = {"x": 0.0, "xa": 0.0, "f": 0.0}
-        # training_preview reads n_vars as orchestrator._observation_inits(cfg).shape[-1], and with
-        # inits_dict set that function returns this tensor.
-        inits_tensor = torch.zeros(1, 3)
-        steady_idx = 500
-        forcing_idx = {}
-        model = "NADROWSKI"
-        chi_mode = False
-        chi_k_pad = 12
-        observation_mode = "spontaneous"
-    return Cfg()
 
 
 def prior_stub(id_="p1", name="retrain_prior"):
@@ -1444,21 +1420,84 @@ def build_inference(*, session=None, cfg=None, plans=None):
     return screen
 
 
+# The class of a bare run host, made the first time one is asked for (``run_host_class``).
+_RUN_HOST: list = []
+
+
+def run_host_class():
+    """The class of a bare run host: the suites' own page that hosts runs, with the shared run machinery
+    (``RunHost`` first among its bases, as on every page of the window) and nothing of a step. Its form is
+    ``controls``, a column that a run locks, laid out by ``controls_layout``; beside it ``results``, the stack of
+    its ``figures`` and its run's page, ``run_view``. ``figures`` holds "How the run went", the ``figure_stack``
+    and, under it, the page's own lines (``log_pane``), laid out by ``figures_layout``; the run's page takes the
+    figure stack while it shows and gives it back there. It keeps no selection. Made once, and named nowhere in
+    the window."""
+    if not _RUN_HOST:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
+        from core.gui.panels.run_host import RunHost
+        from core.gui.widgets.figure_stack import FigureStack
+        from core.gui.widgets.log_pane import LogPane
+
+        class BareRunHost(RunHost, QWidget):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self._enrol()
+                self.controls = QWidget()
+                self.controls_layout = QVBoxLayout(self.controls)
+                self.controls_layout.setAlignment(Qt.AlignTop)
+                self.figure_stack, self.log_pane = FigureStack(), LogPane()
+                self.run_view = self._new_run_page()
+                self.run_view.setObjectName("run")
+                self.run_view.back.connect(self._back_to_the_form)
+                self.run_view.how_link.clicked.connect(self.show_run)
+                self.figures = QWidget()
+                self.figures.setObjectName("figures")
+                self.figures_layout = QVBoxLayout(self.figures)
+                self.figures_layout.setContentsMargins(0, 0, 0, 0)
+                self.figures_layout.addWidget(self.run_view.how_link, 0, Qt.AlignLeft)
+                self.figures_layout.addWidget(self.figure_stack, 1)
+                self.figures_layout.addWidget(self.log_pane)
+                self.results = QStackedWidget()
+                self.results.addWidget(self.figures)
+                self.results.addWidget(self.run_view)
+                row = QHBoxLayout(self)
+                row.addWidget(self.controls)
+                row.addWidget(self.results, 1)
+
+            def own_line(self, text, level="info"):
+                self.log_pane.append_line(text, level)
+
+            def _figures_leaving(self):
+                """Nothing is kept: the figures go back where they stood."""
+
+            def _figures_back(self, stack):
+                self.figures_layout.insertWidget(self.figures_layout.indexOf(self.log_pane), stack, 1)
+
+            def refresh_local_gates(self):
+                """No control of its own is greyed."""
+
+            def save_settings(self, qs):
+                """Nothing is remembered."""
+
+            def restore_settings(self, qs):
+                """Nothing is read back."""
+
+        _RUN_HOST.append(BareRunHost)
+    return _RUN_HOST[0]
+
+
 def build_run_host(cls=None):
-    """A bare run host: a panel with the shared run machinery and no controls of its own. With no
-    argument it is an instance of a new subclass of ``BasePanel`` made at this call, whose runs are any
-    call it is handed, described alike: a run with no place in the window, which keeps no file and
-    leaves nothing to acknowledge; with a class, an instance of that class. The made class is always
-    named ``P``: a panel stores its layout under its class's name, and one test saves the layout with
-    one host and restores it with a second, so two hosts must share that name. It is let go when the
-    test that built it ends."""
+    """A bare run host (``run_host_class``). With no argument it is an instance of a new subclass of that class made at
+    this call, named ``P`` (the name tests/_runs.py knows a bare run host by), whose runs are any call it is handed,
+    described alike: a run with no place in the window, which keeps no file and leaves nothing to acknowledge; with a
+    class, an instance of that class. It is let go when the test that built it ends."""
     qt_app()
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.run.model import RunSpec
     if cls is not None:
         return _built.keep(cls())
 
-    class P(BasePanel):
+    class P(run_host_class()):
         def run_spec(self, fn, *args, **kwargs):
             return RunSpec("Run", None, keeps_files=False)
 

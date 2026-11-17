@@ -549,16 +549,16 @@ def _no_panel_outlives_its_module():
     import gc
     import sys
     import weakref
-    base = sys.modules.get("core.gui.panels.base_panel")
-    held = weakref.WeakSet() if base is None else weakref.WeakSet(base.BasePanel._instances)
+    base = sys.modules.get("core.gui.panels.run_host")
+    held = weakref.WeakSet() if base is None else weakref.WeakSet(base.RunHost._instances)
     yield
-    base = sys.modules.get("core.gui.panels.base_panel")
+    base = sys.modules.get("core.gui.panels.run_host")
     if base is None:
         return
     from PySide6.QtCore import QCoreApplication, QEvent
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     gc.collect()
-    left = sorted(type(panel).__name__ for panel in list(base.BasePanel._instances) if panel not in held)
+    left = sorted(type(panel).__name__ for panel in list(base.RunHost._instances) if panel not in held)
     assert not left, f"panels built in this module outlived it, still among the panels every run locks: {left}"
 
 

@@ -1954,12 +1954,11 @@ def test_the_stand_in_refuses_a_page_whose_place_it_does_not_know():
     table does not hold would be told no place at all, and every test that leaned on the default would stay green
     with none: it is refused, naming the class, before anything starts. A spec handed in is the test's own, and
     starts on any page."""
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.run.controller import controller
     from tests import _runs
-    from tests._fixtures import build_run_host, qt_app
+    from tests._fixtures import build_run_host, qt_app, run_host_class
     qt_app()
-    unknown = build_run_host(type("Unknown", (BasePanel,), {}))
+    unknown = build_run_host(type("Unknown", (run_host_class(),), {}))
     with pytest.raises(KeyError, match="Unknown"):
         _runs.start_run(unknown, _runs.StandIn())
     assert not controller().is_live(), "a refused start left a run live"
@@ -3088,7 +3087,7 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
     live, the status is published idle again, every panel is free, the page's results are given back from the
     run's page, the run's two files are removed, and a folder it had begun to watch is watched no more. A load
     taken back so, which never took the column, leaves a stopped run's page where it was."""
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.run_host import RunHost
     from core.gui.run.model import IDLE
     from tests._fixtures import build_run_host, choose, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
@@ -3099,7 +3098,7 @@ def test_a_start_that_fails_before_its_worker_is_queued_leaves_nothing_locked_an
         start_run(host, StandIn(), spec=_training(), watch_dir=5)
     assert (held.is_live(), held.status) == (False, IDLE), held.status
     assert [status.state for status in text.statuses] == ["starting", "idle"], text.statuses
-    assert all(panel.controls.isEnabled() for panel in BasePanel._instances) and other.controls.isEnabled()
+    assert all(panel.controls.isEnabled() for panel in RunHost._instances) and other.controls.isEnabled()
     assert (host.results.currentWidget() is host.figures, host.run_view.isAncestorOf(host.figure_stack)) == (
         True, False), "the run's page kept the page's results for a run that never started"
     assert list((tmp_path / "runs").iterdir()) == [], "a start taken back left a file"
@@ -3143,7 +3142,7 @@ def test_a_run_page_that_cannot_be_drawn_holds_up_neither_the_runs_start_nor_its
     payload let go -- and the failure goes to the program's last-resort error. One that cannot be drawn as its run
     starts, as it is handed the run or at its first drawing, fails the start, which is taken back like any other:
     no run live, the status published idle, every panel free, the page's results given back, no file kept."""
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.run_host import RunHost
     from core.gui.run.model import IDLE
     from tests._fixtures import build_run_host, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
@@ -3178,7 +3177,7 @@ def test_a_run_page_that_cannot_be_drawn_holds_up_neither_the_runs_start_nor_its
         assert [status.state for status in text.statuses][-1:] == ["idle"], text.statuses
         assert host.results.currentWidget() is host.figures, "the run's page kept the page's results"
         assert list((tmp_path / "runs").glob("*")) == [], "a start taken back left a file"
-    assert all(panel.controls.isEnabled() for panel in BasePanel._instances) and other.controls.isEnabled()
+    assert all(panel.controls.isEnabled() for panel in RunHost._instances) and other.controls.isEnabled()
 
 
 # ── this computer: kept awake while a run is live, and the reason Windows is given not to end the session ──
@@ -4173,16 +4172,14 @@ def _model_says(model, now, right) -> dict:
 def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, monkeypatch):
     """While a page's run shows, the run's page stands in the right-hand column in the place of the page's
     figures, which it holds under its messages; the form stays at the left, in sight and locked. A run
-    that finishes gives the column back, the figures in their place at the heights they had and "How the run went"
-    above them, which opens the run's page again, ended. A run that is stopped or fails keeps its page, ended, until
-    "Back to the form", and the layout saved meanwhile keeps the heights the figures had in their place; a failure
-    is said on that page, never in a box. A run that only loads a record never takes the column nor the page that
+    that finishes gives the column back, the figures in their place and "How the run went" above them, which opens
+    the run's page again, ended. A run that is stopped or fails keeps its page, ended, until "Back to the form", which
+    puts the figures back in their place; a failure is said on that page, never in a box. A run that only loads a record never takes the column nor the page that
     shows there: after a finish "How the run went" stays above the figures and opens the finished run's page, and a
     stopped run's page stays, its sentence and its full text with it, while a load runs and after. A refusal made
     before anything was spent gives the column back with no link. A run that is over is drawn again from its two
     files alone, past."""
     from core.refusals import Refusal
-    from core.gui import settings
     from core.gui.run import history
     from tests._fixtures import all_asked, build_run_host, choose, qt_app
     from tests._runs import Clock, RunText, StandIn, start_run, turn_until
@@ -4190,16 +4187,19 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
     host = build_run_host()
-    view, text, split = host.run_view, RunText(held), host.results_split
+    view, text = host.run_view, RunText(held)
     host.figure_stack.add_figure("a figure", b"")
     shown_off_screen(host, 1000, 800)
-    store, key = settings.settings(), f"layout/{host.layout_key()}/results"
+
+    def in_their_place():
+        """Whether the figures stand in their place on the page, under "How the run went"."""
+        return host.figures_layout.indexOf(host.figure_stack) == 1
 
     def column():
         """Which page the column shows, whether the run's page holds the figures under its messages (in sight, the
         figures its run made alone), the link above the figures, and the form's state: in sight, and free."""
         return (host.results.currentWidget().objectName(), view.isAncestorOf(host.figure_stack),
-                view.how_link.isVisibleTo(host), host.controls_scroll.isVisibleTo(host), host.controls.isEnabled())
+                view.how_link.isVisibleTo(host), host.controls.isVisibleTo(host), host.controls.isEnabled())
 
     def page():
         return (view.mode, view.stop_button.isVisibleTo(view), view.back_button.isVisibleTo(view), view.sentence.text())
@@ -4213,10 +4213,10 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     start_run(host, finished, spec=_training(stop_button="Stop training…"))
     assert column() == ("run", True, False, True, False), "the run's page did not take the column at the start"
     assert page() == ("live", True, False, "Training retrain_3 is starting.")
-    assert view.stop_button.text() == "Stop training…" and host.results_split.indexOf(host.figure_stack) == -1
+    assert view.stop_button.text() == "Stop training…" and not host.figures.isAncestorOf(host.figure_stack)
     ended(finished, StandIn.release)
     assert column() == ("figures", False, True, True, True), "a finished run kept the column"
-    assert split.indexOf(host.figure_stack) == 0, "the figures did not go back to their place"
+    assert in_their_place(), "the figures did not go back to their place"
     loads = StandIn(word="Prior load")
     start_run(host, loads, spec=_load())
     assert column() == ("figures", False, True, True, False), "a load took the column, or hid 'How the run went'"
@@ -4228,10 +4228,6 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
     view.back_button.click()
     assert column() == ("figures", False, True, True, True)
 
-    split.setSizes([sum(split.sizes()) - 150, 150])         # the figures and the page's own lines, as a person set them
-    heights = split.sizes()
-    host.save_layout(store)
-    saved = store.value(key)
     choose(monkeypatch, words="Stop training")                # the stop's question, answered
     for how, said, load in ((lambda stand_in: view.stop_button.click(),
                              "Training was stopped on Thu 8 Oct, 19:02, as it started. Nothing was simulated.", True),
@@ -4244,8 +4240,6 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
         ended(stand_in, how)
         assert column() == ("run", True, False, True, True), f"the page went before 'Back to the form': {said}"
         assert page() == ("ended", False, True, said)
-        host.save_layout(store)
-        assert store.value(key) == saved, f"the layout saved while the run's page held the figures lost them: {said}"
         if load:                                        # a load started from the same page, the run's page in sight
             kept, loads = view.full_text.lines(), StandIn(word="Prior load")
             start_run(host, loads, spec=_load())
@@ -4256,11 +4250,10 @@ def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, 
             assert (column(), page(), view.full_text.lines() == kept) == (
                 ("run", True, False, True, True), ("ended", False, True, said), True), (
                 "a load's end lost the stopped run's page")
-        host.show_run()                                 # as the foot opens it again: the heights kept stand
+        host.show_run()                                 # as the foot opens it again
         view.back_button.click()
         assert column() == ("figures", False, True, True, True), said
-        assert (split.indexOf(host.figure_stack), split.sizes()) == (0, heights), (
-            f"the figures did not go back to their place at the heights they had: {said}")
+        assert in_their_place(), f"the figures did not go back to their place: {said}"
     assert [box.title for box in all_asked()] == ["Stop training?"], "the failure was told in a box"
     assert (view.failure.isVisibleTo(view), view.failure_message.text()) == (True, "the run broke"), (
         "the failure is not said on its page")
@@ -4508,32 +4501,6 @@ def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_
                      stack.tabText(stack.currentIndex()), host.results.currentWidget() is host.figures))
     assert seen == [("the third", ["the first", "the second", "the third"], "the second", True)] * 2, (
         "the way back from a run that made no figure did not put the figure in front before it in front again", seen)
-
-
-def test_how_the_run_went_stands_above_the_figures_at_the_looks_gap(tmp_path):
-    """"How the run went" stands above the figures it opens the run's page from at the gap the look sets between a
-    heading and the block under it, at the ordinary text size and at a larger one."""
-    from core.gui import design
-    from tests._fixtures import build_run_host, qt_app
-    from tests._look_helpers import text_size
-    from tests._runs import Clock, StandIn, start_run, turn_until
-    from tests._window_helpers import shown_off_screen
-    app = qt_app()
-    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
-    gaps = []
-    for factor in (1.0, 1.5):
-        with text_size(factor):
-            host, stand_in = build_run_host(), StandIn()
-            shown_off_screen(host, 1000, 800)
-            start_run(host, stand_in, spec=_training())
-            stand_in.release()
-            turn_until(app, lambda: not held.is_live())
-            app.processEvents()
-            link, split = host.run_view.how_link, host.results_split
-            assert link.isVisibleTo(host), "a finished run left no 'How the run went'"
-            gaps.append((split.geometry().top() - link.geometry().bottom() - 1,
-                         design.scaled(design.GAP["head_table"])))
-    assert gaps == [(6, 6), (9, 9)], gaps
 
 
 def test_the_run_page_shows_what_the_model_says(tmp_path, monkeypatch):
@@ -4896,7 +4863,7 @@ def test_the_run_page_draws_with_the_looks_devices_at_every_scaling(tmp_path):
     with _the_look(False):
         _settle()
         assert places() == [(0, 0), (0, 1), (0, 2), (0, 3)], places()
-        host.resize(700, 1000)                          # too narrow for the four stages on one line
+        host.resize(480, 1000)                          # too narrow for the four stages on one line
         _settle()
         assert places() == [(0, 0), (0, 1), (1, 0), (1, 1)], places()
         host.resize(1300, 1000)
@@ -5967,25 +5934,23 @@ def test_a_page_of_the_look_hosts_a_run_through_the_same_mixin(tmp_path):
     """What hosts a run is a mixin that stands first in a page's bases, declares no signal and has no constructor, so a
     page that is no panel takes it as a panel does: a page of the look, its column a stack it hands the page, joins the
     set of pages every run locks, is locked and given back by a real run with the figures going and coming through its
-    own two seams, says its own lines, and leaves the set as it goes. The set is one, read through either class."""
+    own two seams, says its own lines, and leaves the set as it goes."""
     import shiboken6
     from PySide6.QtCore import QCoreApplication, QEvent, Signal
     from PySide6.QtWidgets import QWidget
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference.step_page import StepPage
     from core.gui.panels.run_host import RunHost
     from core.gui.run.controller import LIVE_TEXT
     from core.gui.widgets.page import Page
     from tests._fixtures import build_step_page, page_lines, qt_app
     from tests._runs import Clock, StandIn, start_run, turn_until
-    assert BasePanel.__mro__[:2] == (BasePanel, RunHost) and BasePanel._instances is RunHost._instances
     assert StepPage.__mro__[:2] == (StepPage, RunHost)
     assert "__init__" not in vars(RunHost) and RunHost.__bases__ == (object,)
     assert not any(isinstance(value, Signal) for value in vars(RunHost).values())
     app = qt_app()
     held = _controller_on(tmp_path, Clock(_at(9, 18, 0)))
     host = build_step_page()
-    assert host in BasePanel._instances
+    assert host in RunHost._instances
     told = []
     host.results.set_small = told.append
     host.set_small(True)
@@ -6017,7 +5982,7 @@ def test_a_page_of_the_look_hosts_a_run_through_the_same_mixin(tmp_path):
             asked()
     host.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    assert not shiboken6.isValid(host) and all(shiboken6.isValid(panel) for panel in BasePanel._instances)
+    assert not shiboken6.isValid(host) and all(shiboken6.isValid(panel) for panel in RunHost._instances)
 
 
 # The child of the test below: a fresh interpreter, for the scaling must be in force before the application exists. It
@@ -6294,7 +6259,7 @@ def test_a_chain_ends_at_a_refusal_a_failure_or_a_stop_and_keeps_what_it_loaded(
     says why, the third link never runs, what the first returned stays where its page put it, and no panel is left
     locked."""
     from core.gui.load_chain import LoadChain
-    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.run_host import RunHost
     from core.refusals import Refusal
     from tests._dialogs import forget_asked
     from tests._fixtures import build_run_host, qt_app
@@ -6325,7 +6290,7 @@ def test_a_chain_ends_at_a_refusal_a_failure_or_a_stop_and_keeps_what_it_loaded(
     _turns(app)
     assert heard == [ending], heard
     assert [entry[1] for entry in said] == [0, 1] and third.calls == [] and loaded == ["record 0"], said
-    assert all(panel.controls.isEnabled() for panel in BasePanel._instances if hasattr(panel, "controls")), (
+    assert all(panel.controls.isEnabled() for panel in RunHost._instances if hasattr(panel, "controls")), (
         "a panel was left locked")
 
 

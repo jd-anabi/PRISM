@@ -40,9 +40,3 @@ def training_spec(word: str, place: tuple, stop_button: str, cfg, kwargs: dict, 
                           "cadence": given("checkpoint_every", orchestrator.TRAINING_CHECKPOINT_EVERY),
                           "prior": prior, "audit": None if audit is None else dict(audit),
                           "prior_words": prior_words})
-
-
-def _hw_batch(cfg) -> int:
-    """The rows-per-batch the run will actually use when the cap field is 0 (= auto)."""
-    return (getattr(getattr(cfg, "hw", None), "batch_size", None)
-            or config.detect_device().batch_size)

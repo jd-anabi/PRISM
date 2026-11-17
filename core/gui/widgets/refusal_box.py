@@ -1,9 +1,9 @@
 """The one yellow "Check your inputs" box, shared by every surface that shows a refusal.
 
-Three callers, and the last two are why this is not a method. ``BasePanel._refusal`` shows it for
-every run-a-thing panel; Records shows it for a refused note, a refused delete and a refused lineage
+Three callers, and the last two are why this is not a method. ``RunHost._refusal`` shows it for
+every page that hosts a run; Records shows it for a refused note, a refused delete and a refused lineage
 report, and the model builder in Your own models for a refused numeric field. Those two are plain
-``QWidget``s on purpose -- a ``BasePanel`` enrols in ``BasePanel._instances``, so a run in any panel
+``QWidget``s on purpose -- a run host enrols in ``RunHost._instances``, so a run in any panel
 would grey out their controls, and you could not read a log in Records while training. So the helper
 takes a PARENT WIDGET and assumes nothing about it.
 
@@ -12,7 +12,7 @@ names the setting, the rule, what was given and the default, never a box, tab or
 informative line is this front end's "where to fix it", looked up by the refusal's field key in
 core/gui/fields.py -- the one place a control is named, so a renamed control is renamed once. No
 Details: nothing here is a crash, and a traceback would only say so louder. A bug keeps the red box
-(``BasePanel._on_error``).
+(``RunHost._on_error``).
 
 It does NOT record the sentence anywhere. A panel has a log pane, and Records and the model builder
 have a status line, so each caller keeps its own record; this helper only ever shows the box.

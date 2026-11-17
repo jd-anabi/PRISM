@@ -4047,10 +4047,10 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
     again that nothing is running, and no panel is left greyed. "Try again" builds the part whole."""
     from PySide6.QtCore import QEvent
     from core.gui import main_window
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.inference import tsnpe_tab
     from core.gui.panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel,
                                                 ValidatePanel)
+    from core.gui.panels.run_host import RunHost
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.screens.shell import PartError
     app = qt_app()
@@ -4068,7 +4068,7 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
         widgets with no parent alive."""
         QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         made = [[thing for thing in found if thing not in before]
-                for found in (BasePanel._instances, window._places, QApplication.allWidgets())]
+                for found in (RunHost._instances, window._places, QApplication.allWidgets())]
         return tuple(sorted(type(thing).__name__ for thing in found if isinstance(thing, kinds)) for found in made) + (
             sorted(type(alone).__name__ for alone in QApplication.topLevelWidgets() if alone not in before),)
 
@@ -4079,7 +4079,7 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
             ("inference", InferenceScreen, steps, ConfigPanel, "set_controls_enabled", raising, True)):
         window = build_window()
         runner, foot, raised = build_run_host(), window.shell.rail.foot, []
-        before = set(BasePanel._instances) | set(QApplication.allWidgets())
+        before = set(RunHost._instances) | set(QApplication.allWidgets())
         stand_in = StandIn()
         if during_a_run:
             start_run(runner, stand_in)
@@ -4100,7 +4100,7 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
                     raised.append(repr(error))
         page = window.part(name)
         assert isinstance(page, PartError) and window.shell.stack.currentWidget() is page, attribute
-        greyed = sorted(type(panel).__name__ for panel in BasePanel._instances if not panel.controls.isEnabled())
+        greyed = sorted(type(panel).__name__ for panel in RunHost._instances if not panel.controls.isEnabled())
         assert (raised, foot.accessibleName().startswith("Training finished"), greyed) == ([], True, []), (
             "a run's end did not go through", attribute, raised)
         assert held(window, kinds, before) == ([], [], [], []), (
@@ -4108,7 +4108,7 @@ def test_a_part_that_fails_to_build_leaves_no_panel_for_a_run_to_lock_and_the_ne
         _button(page, "Try again").click()
         built = window.part(name)
         assert isinstance(built, cls) and len(built.panels()) == len(kinds), attribute
-        assert set(built.panels()) <= set(BasePanel._instances), attribute
+        assert set(built.panels()) <= set(RunHost._instances), attribute
 
 
 def test_a_part_that_fails_to_build_while_a_run_is_live_leaves_the_runs_log_to_the_run(monkeypatch, capsys):
@@ -6870,11 +6870,10 @@ def test_a_page_asks_the_window_to_go_somewhere_through_the_screen():
     assert window.current_place() == ("help", None)
 
 
-def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_page_of_the_look(monkeypatch):
-    """The place's margin stands on each old panel, which so stands where it stood, and not on the part: a page of the
-    look brings its own margin, and takes none here, at either text size, though it hosts a run as a panel does."""
+def test_the_margin_of_parameter_inference_stands_on_no_page_of_the_look(monkeypatch):
+    """The place's margin stands neither on the part nor on a page of the look: a page of the look brings its own
+    margin, and takes none here, at either text size, though it hosts a run."""
     from PySide6.QtCore import QMargins
-    from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.inference_screen import InferenceScreen
     from tests._look_helpers import text_size
     qt_app()
@@ -6886,11 +6885,8 @@ def test_the_margin_of_parameter_inference_stands_on_each_old_panel_and_on_no_pa
                 patched.setattr(InferenceScreen, "panels", lambda screen, page=step: [page, *today(screen)])
                 window = build_window()
                 inference = window.part("inference")
-            margin = design.scaled(12) - 6
             assert inference.contentsMargins() == QMargins(0, 0, 0, 0), "the part keeps a margin of its own"
             assert step.contentsMargins() == QMargins(0, 0, 0, 0), "a page of the look was given the margin"
-            assert all(panel.contentsMargins() == QMargins(margin, margin, margin, margin)
-                       for panel in today(inference) if isinstance(panel, BasePanel)), "an old panel lost its margin"
             assert inference.config_panel.contentsMargins() == QMargins(0, 0, 0, 0), "the first step took the margin"
 
 

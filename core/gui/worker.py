@@ -10,7 +10,7 @@ from .run.ends import TOO_LATE_TEXT
 from .streams import WorkerCancelled, redirect_streams
 
 # Said, at warning, when a run RETURNS with the cancel token requested but never fired. The
-# counterpart of ``base_panel.CANCEL_NOTED_TEXT``, which the failure path carries: there the run
+# counterpart of ``run_host.CANCEL_NOTED_TEXT``, which the failure path carries: there the run
 # crashed, here it finished. The words are the run's end's own, which its page says after its sentence:
 # one sentence, kept in one place.
 CANCEL_TOO_LATE_TEXT = TOO_LATE_TEXT

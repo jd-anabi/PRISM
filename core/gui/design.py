@@ -315,15 +315,9 @@ def _registry_text_scale():
 SPACE = (4, 8, 12, 16, 20, 24)
 
 # ── Layout sizing ─────────────────────────────────────────────────────────────────────────────────
-# The controls column had a hard 460px MAXIMUM, which no amount of window-widening could escape, so
-# any form wider than that got a permanent horizontal scrollbar. The cap is gone; these set the floor
-# and the starting split instead, and the user's own drag is remembered from there.
-CONTROLS_MIN_W = 360      # narrower than this and the two-field composite rows stop being readable
-DEFAULT_SPLIT = (420, 880)  # initial (controls, results) split; overridden by the saved layout
-FIELD_MIN_W = 96          # a numeric field must show ~8 characters; "0.033333" used to scroll inside
+FIELD_MIN_W = 96         # a numeric field must show ~8 characters; "0.033333" used to scroll inside
                           # a 3-6 character box and could not be read back without clicking into it
 PATH_FIELD_MIN_W = 220    # path fields hold absolute paths, so they need materially more
-DEFAULT_RESULTS_SPLIT = (520, 200)  # initial (figures, log) split in the results column
 HELP_VIEWER_MIN_H = 260   # Help's text: tall enough to be usable, it scrolls itself
 LABEL_MAX_W = 190         # ceiling on a form's label column: one long option name (e.g. "F0 (ND
                           # forcing amplitude)") used to narrow every field in the same form

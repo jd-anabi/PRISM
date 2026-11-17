@@ -1,7 +1,7 @@
 """The window's half of the refusal-naming rule: which control answers each refusal field.
 
 A ``Refusal`` names the setting at fault by a key from ``core.refusals.FIELDS`` and never a box,
-tab, button or flag. ``BasePanel._refusal`` puts ``fix_sentence(exc.field)`` under the message in
+tab, button or flag. ``RunHost._refusal`` puts ``fix_sentence(exc.field)`` under the message in
 the yellow "Check your inputs" box, and the inference tabs build their static rows from
 ``label(key)`` -- ``add_help_row(form, label("t_obs"), ...)`` -- so a control is named in ONE place
 and a renamed one cannot leave a stale sentence behind. ``add_help_row`` and a form's row apply

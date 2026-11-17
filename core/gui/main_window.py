@@ -18,7 +18,7 @@ from core.artifacts import KIND_DIRS, StoreError, default_store
 from core.config import VALID_MODELS
 
 from . import chain, continuing, design, keys, one_instance, record_words, remembered, settings, style, this_computer
-from .panels.base_panel import BasePanel
+from .panels.run_host import RunHost
 from .panels.inference_tabs import ConfigPanel, InferPanel, PosteriorPanel, PriorPanel, TSNPEPanel, ValidatePanel
 from .reported import reported
 from .run import ends, history, questions
@@ -102,14 +102,15 @@ _PAGES = {"inference": tuple(place.key for place in keys.STEPS), "models": MODEL
 _PANEL_PARTS = {ConfigPanel: "inference", PriorPanel: "inference", PosteriorPanel: "inference",
                 ValidatePanel: "inference", InferPanel: "inference", TSNPEPanel: "inference"}
 
-# Every place but Home and Settings stands the same distance in from the rail, from the window's right edge, from
-# its top and from its bottom, to its first frame or its first line: this many pixels at the ordinary text size,
-# scaled with it. Home and Settings keep the look's own page margin, and so does a part's error page.
+# Every place but Home, Settings and Parameter inference stands the same distance in from the rail, from the window's
+# right edge, from its top and from its bottom, to its first frame or its first line: this many pixels at the
+# ordinary text size, scaled with it. Home and Settings keep the look's own page margin, and so do the steps of
+# Parameter inference, each a page of the look, and a part's error page.
 _PLACE_MARGIN = 12
-# how far in a part's own first frame or first line stands already, at every text size: a panel's frame 6, the
-# toolkit's own margin round a layout that sets none 9, a frame at the part's very edge 0. The window gives each
-# part the rest of the place's margin.
-_OWN_INSET = {"inference": 6, "records": 9, "models": 0, "help": 9}
+# how far in a part's own first frame or first line stands already, at every text size: the toolkit's own margin
+# round a layout that sets none 9, a frame at the part's very edge 0. The window gives each part the rest of the
+# place's margin.
+_OWN_INSET = {"records": 9, "models": 0, "help": 9}
 
 
 def _is_a_button(widget: QWidget) -> bool:
@@ -216,9 +217,9 @@ class MainWindow(QMainWindow):
     and the page in sight after every move. Owns the QSettings write that runs at quit (``_save_state``, reached
     from closeEvent): the selections of the panels of the parts built in this launch, and the Artifacts screen's
     own when it was built (called by name, because _all_panels() is panel-typed and that screen is not); a part
-    never opened writes nothing and keeps what it remembered. Three other write sites exist on purpose: a panel's
-    splitter position is written 1.5 s after it was last dragged (see base_panel.py), appearance settings are written
-    eagerly, as they are applied immediately, and a setting of this computer goes through ``remembered`` as it is changed.
+    never opened writes nothing and keeps what it remembered. Two other write sites exist on purpose: appearance
+    settings are written eagerly, as they are applied immediately, and a setting of this computer goes through
+    ``remembered`` as it is changed.
     """
     place_changed = Signal(str, object)
 
@@ -383,7 +384,7 @@ class MainWindow(QMainWindow):
         if name == "inference":
             return InferenceScreen()
         if name == "records":
-            # A plain QWidget, not a BasePanel -- a run anywhere must not grey out the log you are reading.
+            # A plain QWidget, not a run host -- a run anywhere must not grey out the log you are reading.
             return ArtifactScreen()
         if name == "models":
             return ModelsScreen(self._on_user_models_changed)
@@ -401,15 +402,15 @@ class MainWindow(QMainWindow):
         cursor while the part is built."""
         QApplication.setOverrideCursor(Qt.WaitCursor)
         # What stands before the build: any other panel, or widget with no parent, is the build's own.
-        enrolled, parentless = set(BasePanel._instances), set(QApplication.topLevelWidgets())
+        enrolled, parentless = set(RunHost._instances), set(QApplication.topLevelWidgets())
         try:
             widget = self._make(name)
             self._wire(name, widget)
         except Exception as error:               # noqa: BLE001 -- one part that cannot be built stops no other
             # Nothing the failed build made is kept: no run locks a panel of it and no place names one, and every
             # widget it made with no parent goes, with all it holds (its panels, a half-built part's top widget).
-            for panel in set(BasePanel._instances) - enrolled:
-                BasePanel._instances.discard(panel)
+            for panel in set(RunHost._instances) - enrolled:
+                RunHost._instances.discard(panel)
                 self._places.pop(panel, None)
             for made in set(QApplication.topLevelWidgets()) - parentless:
                 made.deleteLater()
@@ -435,11 +436,7 @@ class MainWindow(QMainWindow):
         its panels lives, and, while a run is live, its panels locked as those of the parts built already are."""
         if name in _OWN_INSET:                                   # the place's margin, less what it stands in
             margin = design.scaled(_PLACE_MARGIN) - _OWN_INSET[name]
-            # On Parameter inference the margin stands on each old panel and not on the part: a page of the look brings
-            # its own, and would stand that much further in from the rail than Home does.
-            for holder in ([panel for panel in widget.panels() if isinstance(panel, BasePanel)]
-                           if name == "inference" else [widget]):
-                holder.setContentsMargins(margin, margin, margin, margin)
+            widget.setContentsMargins(margin, margin, margin, margin)
         if name == "home":
             widget.pressed.connect(self._home_pressed)
             widget.navigate.connect(self.go_to)
@@ -1159,7 +1156,7 @@ class MainWindow(QMainWindow):
         qs.setValue("window/geometry", self.saveGeometry())
         for panel in self._all_panels():
             panel.save_settings(qs)
-        # BY NAME: the browser is a QWidget, not a BasePanel, so it is not in _all_panels() and
+        # BY NAME: the browser is a QWidget, not a run host, so it is not in _all_panels() and
         # gets no sweep for free -- which is also what keeps it out of _refresh_model_combos.
         records = self._built.get("records")
         if records is not None:
