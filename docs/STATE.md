@@ -1,5 +1,42 @@
 # PRISM — state
 
+**Last updated:** 2026-11-16, evening (21:13 by the clock; the weekly bar 15 %, resetting on 22 November at 04:00 UTC;
+extra usage switched on, nothing spent): STAGE 5'S EXIT IS DONE. Every gate of record is green on the final code
+`e9c6b5cd`; the documents after it are `b31216cb`, `159d3413`, `cdc150ef` and this file. One question of the owner's
+stands: `stage-5/exit/rulings-for-the-owner.md`'s A2 (the design's two unbuilt items).
+
+- **The pictures** (356 at plain text, 356 at 150 %, `stage-5/pictures/exit-index.md`) found eight faults on the new
+  pages; on the owner's "Yes, fix them", the cures (`ba113050` to `0ed72629`, rulings E1 to E9) and, after two readers
+  (1 Important, 8 Minor), one fix round (`46457659` to `22e6a9b0`, rulings X1 to X7; its re-read 1 Minor, carried to the
+  audit's list). Departures 486 to 491. Every change under `core/gui/` or `tests/`; the engine closed.
+- **The owner's yes to the six `CLAUDE.md` and `README.md` edits**, "Yes, all six": `d847df3d`, on their exact words
+  (`stage-5/exit/claude-md-edits-checked.md`). **The guide's pages** for Checks, Inference and the round: `e9c6b5cd`
+  (eight pages, stamped `0ed7262`).
+- **The gates of record on `e9c6b5cd`** (the gate table below): the fence; the quiet fast gate 4182 passed, 14 skipped,
+  3 deselected, 59 min 5 s; the slow set 3 passed, 59 min 24 s; the card gate, the diagnostic card and one card test
+  through the Checks page's own call, all green; the real-screen run 14 passed; 4199 collected; `Artifacts/` 428
+  entries, unchanged; `PRISM.ini` unchanged.
+- **After the gates, documents only:** the walkthrough rows G8, G13, G14, G26, G28 to G30, G49's second half, G52 and
+  G54 to G67 (`b31216cb`); the plan's departures 486 to 491 and its registry line, `09-checks.md:379` in the words built,
+  the code audit's list (items 24 and 28 re-read, 26 and 27 new) (`159d3413`); `docs/guide/testing.md`'s times of
+  record (`cdc150ef`).
+- **For the owner:** `stage-5/exit/rulings-for-the-owner.md` (A1 answered; A2 open: keep the keyboard handed to a
+  result's first next step and the three-rule table as one small task of the last stage, or drop them; the
+  recommendation keep the first, drop the second; B, 26 things told; C, every departure decided without the owner,
+  398 to 491; D, the gates). The walkthrough rows are the owner's to run on the real screen when it suits.
+- **Carried to the last stage:** a history's "Continue from batch N" or "Fit again" whose records are gone, offered by
+  Home and refused only at the press; the ended page of a stopped training offering Resume, Keep and Discard at once (a
+  question of words); Home's "Unnamed unfinished tr…g" (since stage 4).
+- **Measured:** Task 14 about 10 points of the bar (5 % to 15 %): the pictures, the cures (two builders, 0.37 M tokens
+  the second), their readers (0.16 M and the Opus seat), the fix round (0.38 M), its re-read (0.13 M), the guide's
+  drafter (0.44 M), the gates (machine time, about 3 h 40 min).
+- **Unpushed:** everything after `cdc80d2`.
+
+NEXT: the owner's answer to A2, then the code audit (`docs/superpowers/notes/2026-10-29-the-code-audits-list.md`), in a
+new chat; then the retrain from the window, started by the owner; then one last stage.
+
+What follows is the head as the evening of 15 November left it:
+
 **Last updated:** 2026-11-15, evening (19:27 by the clock; the weekly bar 5 %, resetting on 22 November at 04:00 UTC;
 extra usage switched on, nothing spent): STAGE 5'S LAST REVIEW AND ITS ONE FIX WAVE ARE COMPLETE, head `6530e3d`. Task
 14, the exit, is next; its first question to the owner (the order) is put.
@@ -3883,6 +3920,7 @@ Piece 3
 | **`pytest --collect-only -q` after stage 3** | 2026-10-29 at `e17f1ec`: **2024 collected**; `-m "not slow"` 2019/2024 (5 deselected); the carried-over list's check `all rows 950; twice []; missing 0: []; gone 41`. |
 | **pictures, stage 3** (not a gate) | Three rounds, each in three sets (plain, 150 % text, 150 % scaling), light and dark, on hidden windows with the real settings folder and `Artifacts/` unchanged: 28 October at `5573d6f` (266 pictures a set; the owner's fifteen answers); 29 October at `7f560af` (320; two of task A's cures found not to hold); 29 October at `e17f1ec` (324; both cures hold, no fault). |
 | **slow set after the owner's cut** (stage 5, Task 5b; not the stage's gate of record), `pytest -m slow -q --durations=5` | 2026-11-12, 13:28 to 14:17, at `f2214da`, alone: **3 passed**, 3720 deselected, **49 min 12 s**: `test_chi_mode_full_sbi_pipeline` 1811 s (1528 at `e17f1ec`), `test_smoke_runs_every_stage_on_the_tier1_box` 1120 s (1142), the probes' twin-cell check 7 s. The two tests of the effective temperature left with it. The fast gate there, beside no agent for most of its run but not certified quiet: 3708 passed, 12 skipped, 3 deselected, 34 min 35 s (3723 collected); the real-screen run 12 passed. |
+| **the gates of record, stage 5's exit** (Task 14), on the final code `e9c6b5cd`, alone | 2026-11-16. The fence: the 17 training-code digests equal Task 0's, stage 4's exit's and the cut's (`stage-5/gates/digests-at-exit.json`), `refusals.FIELDS` 98, the engine unchanged since `f2214da`. **The quiet fast gate**, `pytest -m "not slow" -q --durations=15`, 18:28 to 19:27: **4182 passed, 14 skipped, 3 deselected, 59 min 5 s** (the stage's 610 more window tests; the slowest no slower). **The slow set**, 19:27 to 20:27: **3 passed, 59 min 24 s** (the chi pipeline 1944 s, the tier-1 `smoke` 1592 s, the twin-cell check 10 s). **The card gate** (the five command lines and run 5's drill, `docs/guide/testing.md`'s block), 20:27 to 20:53: every criterion held, run 1 141 / 142 / 24 / 58 s, run 3 142 / 43 / 13 / 23 s, run 4 141 / 233 / 32 / 68 s, the masked probes 230 and 227 of 704, run 2 10 s, run 2b exit 1 in 7 s, the drill exit 9 after pass 3 in 446 s, the resume exit 0 in 14 s (`resumed_fit: true`, `fit_processes: 2`); **the diagnostic card**, eight commands, each exit 0 and one record, 7 min; **one card test through the Checks page's own call** (`check_scratch.card_check` with the form's usual values), 21:01 to 21:07, its four stages on the card (144 / 142 / 24 / 20 s), the unusable share 32.7 %. **The real-screen run** 14 passed. **The collection** 4199; the carried-over list 1525 rows, 15 born, every gone row marked. `Artifacts/` 428 entries, the listing identical before and after; `PRISM.ini` unchanged. Logs in `stage-5/gates/` (`*-s5exit-e9c6b5c.log`) and the card's in the scratch folder `s5/card/logs-exit-e9c6b5c/`. |
 
 **The GPU gate, as command lines.** This is the recipe of record as `docs/guide/testing.md` ("The card smoke
 gate") carries it, copied verbatim; since 12 November `CLAUDE.md` points there instead of holding a third copy. Keep the
