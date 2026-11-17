@@ -70,14 +70,16 @@ rules:
 - `tests/conftest.py` turns training checkpointing OFF for the session
   (`_checkpointing_off_unless_asked`, which rebinds `orchestrator.TRAINING_CHECKPOINT_EVERY`); it
   is the only session-wide KNOB default the suites install, and a test that wants a simulation
-  cache passes `checkpoint_every` explicitly. Two of the other guards bite from outside a test: the
+  cache passes `checkpoint_every` explicitly. Three of the other guards bite from outside a test: the
   real settings folder must hold at teardown exactly what it held, so a PRISM opened while a suite
-  runs fails the run with its `PRISM.lock`; and `<repo>/sbi-logs` must not exist, checked at setup
-  too, so a leftover tree makes every pytest run error before the first test.
+  runs fails the run with its `PRISM.lock`; `Resources/Plans` must hold the same files with the same
+  bytes, so a plan saved by hand while a suite runs fails it; and `<repo>/sbi-logs` must not exist,
+  checked at setup too, so a leftover tree makes every pytest run error before the first test.
 - A green suite does not certify the GPU path. The gpu-marked tests do run on the card inside every
-  fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run, six in
-  `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`), but they are not a substitute: no
-  checkpoint resume, no real bounds or cell files. After touching code that moves tensors, run the
+  fast gate when CUDA is present (four in `tests/test_gpu_paths.py`: an inference, and a training, a
+  kept training and a kept round resumed, each tiny; six in `tests/test_user_sbi.py` and one in
+  `tests/test_diagnostics.py`), but they are not a substitute: nothing at real size, no real bounds or
+  cell files. After touching code that moves tensors, run the
   card smoke gate — five command lines, then run 5's resume drill (`tests/_fit_drill.py`, which ends
   a training like a power cut right after a chosen pass is saved), from the repo root — and check
   `$LASTEXITCODE` after each one; after a change under `core/diagnostics` that moves tensors, also
@@ -111,11 +113,13 @@ rules:
   `tests/test_source_hygiene.py` enforces it; a legitimate new token shaped like a label (a paper's
   section, a new feature id) gets an allowlist entry there in the commit that introduces it. The
   working record may cite code and each other; no test or code reads it.
-- The inference tabs remember SELECTIONS — the pickers, the mode, and the boxes that describe the
-  recording (the three observation lengths, the physical drive amplitude `Drive F₀ (N)`, the
-  recording paths) — plus the training budget. Every science knob opens at `config.py` on every
+- The inference steps remember SELECTIONS — the model and the kind of observation, the bounds file, the
+  pickers of saved records, the cell file (kept with its model), the mode, the recording paths and the
+  driven recordings' files and frequencies — plus the training budget and the narrowing round's. The
+  recording length and the physical drive amplitude (`Drive amplitude`, in N) are not remembered: they
+  open blank at every launch. Every science knob opens at `config.py` on every
   launch (the chi probe count, slots and lock-in ceiling, the sweep, network, rotation and
-  calibration knobs, the HPD level and the direction count), the Config tab's non-dimensional χ
+  calibration knobs, the HPD level and the direction count), the "Model and options" step's non-dimensional χ
   drive amplitude and band are read-only displays of it, and a consent is never persisted — it is
   answered by the session that runs. A stale key an older build left in `PRISM.ini` is ignored, not
   restored. The plan picker is the one picker that is not remembered: it opens on "No plan" at every
@@ -141,11 +145,12 @@ rules:
   and `Accept(truncated, other_observation)` are the only escape hatches (each use is recorded
   downstream). No code outside `core/config.py` builds a literal `Resources/` or `Artifacts/` path
   (a test pins it).
-- A run plan fills the forms of steps 1 to 3 only when a press asks it to: the picker's "Fill the forms
-  from this plan", Home's "Continue with these" when a plan was in use last time, or "Continue from batch
-  N", which fills the settings the run was started with and leaves the name and the note blank; a plan is
-  never applied at launch, the picker opens on "No plan", and only the name of the plan last used with
-  each model, and when, is remembered, for the picker's hint.
+- A run plan fills the forms of every step, 1 to 6, only when a press asks it to: the picker's "Fill
+  the forms from this plan", Home's "Continue with these" when a plan was in use last time, or
+  "Continue from batch N" and "Fit again on the saved simulations", which fill the settings the run was
+  started with, only in the forms that run reads (the model's, the prior's and its own step's), and leave
+  the name and the note blank; a plan is never applied at launch, the picker opens on "No plan", and
+  only the name of the plan last used with each model, and when, is remembered, for the picker's hint.
 - The narrowing-round safety rules (where each is enforced and the test that pins it) and the traps
   that still bite are in `docs/guide/rules-and-traps.md`; the reasoning behind the science settings
   is in `docs/guide/science.md`. The handoff they were written from is archived (see `docs/STATE.md`).
@@ -178,9 +183,10 @@ rules:
     the same `--bounds`, `--prior`, `--chi` and `--device` it was trained with (the window offers
     Resume on the run's page of a training that stopped or failed in its fit, until PRISM is closed,
     and after a reopening on the Training step's list of kept trainings and on Home; a kept narrowing
-    round after a reopening is still resumed from the command line, until the round's page is
-    rebuilt), only while its settings, its network's shape, the code that builds or trains the
-    network, the libraries and its simulation set are what it was trained with: an edit inside that
+    round after a reopening on the Narrowing round step's list of kept rounds and on its run's past
+    view, Home's "Open Narrowing round" leading to that list), only while its settings, its network's
+    shape, the code that builds or trains the network, the libraries and its simulation set are what it
+    was trained with: an edit inside that
     code (`fit_state.FIT_CODE`), even a comment, makes every training kept before it unresumable, so
     finish a kept training you want before such an edit. A resume reads the simulation set back
     first (about four minutes at full size).
