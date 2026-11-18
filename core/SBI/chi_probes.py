@@ -92,15 +92,16 @@ def _subset_probe_rows(block: torch.Tensor, mask: torch.Tensor, k_pad: int, gene
 
 
 def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_spont_dim: torch.Tensor,
-                t_fine: torch.Tensor, inits: torch.Tensor, rescale_idx: dict,
-                n_segs: int, steady_idx: int, subsample, N_points: int, dt_exp: float,
-                multipliers: torch.Tensor, f0_nd: float, state_dep_drift: bool = False,
+                t_fine: torch.Tensor = None, inits: torch.Tensor = None, rescale_idx: dict = None,
+                n_segs: int = None, steady_idx: int = None, subsample=None, N_points: int = None,
+                dt_exp: float = None, multipliers: torch.Tensor = None, f0_nd: float = None,
+                state_dep_drift: bool = False,
                 fixed_dict: dict = None,
                 absolute_freqs: bool = False, resolution_filter: bool = True,
                 duration_frac=None, max_cycles: float | None = None,
                 adapt_placement: bool = False, bounds: tuple | None = None,
                 dtype: torch.dtype = torch.float32,
-                device: torch.device = torch.device('cpu')) -> tuple:
+                device: torch.device = torch.device('cpu'), *, clock=None) -> tuple:
     """
     K single-tone forced runs -> the RAW probe measurements
     ``(chi (B,K) complex, u (B,K), logcyc (B,K), valid (B,K) bool)``. Generalizes the single-frequency
@@ -152,12 +153,28 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
                             never adapted -- moving a probe there would answer a different experiment
                             than the one that was run. Ignored when ``absolute_freqs`` is set.
     :param bounds: the chi band, for ``adapt_placement``; None reads ``config.CHI_FREQ_BOUNDS``.
+    :param clock: the record clock (``core.SBI.clock.FrameClock``) every probe is simulated on. It carries
+                  the grid, the segments, the transient, the stride, the frame count and the frame
+                  interval, so ``t_fine``, ``n_segs``, ``steady_idx``, ``subsample``, ``N_points`` and
+                  ``dt_exp`` are not passed with it; each probe's drive is a cosine at its top at the first
+                  kept frame, where the lock-in's reference starts. Without a clock those six describe the
+                  grid as before.
     :return: (chi (B,K) complex, u (B,K), logcyc (B,K), valid (B,K) bool). Use
              :func:`gen_chi_block` for the padded conditioning block.
     """
     _forcing.require_simulator_index(rescale_idx)
     max_cycles = config.CHI_MAX_CYCLES if max_cycles is None else float(max_cycles)
     B = params_nd.shape[0]
+    drive_times = None
+    if clock is not None:
+        handed = {k: v for k, v in (("t_fine", t_fine), ("n_segs", n_segs), ("steady_idx", steady_idx),
+                                    ("subsample", subsample), ("N_points", N_points), ("dt_exp", dt_exp))
+                  if v is not None}
+        if handed:
+            raise ValueError(f"gen_chi_raw takes its geometry from its clock; it was also handed {sorted(handed)}")
+        t_fine, n_segs, steady_idx = clock.grid(dtype, device), clock.n_segments, clock.n_transient
+        subsample, N_points, dt_exp = clock.stride, clock.n_points, clock.dt_exp
+        drive_times = clock.drive_times(dtype, device)                 # (n_fine,) or (B, n_fine)
     f_peak = chi.peak_freq(x_spont_dim, dt_exp)                         # (B,) cell freq units
     x_scale = rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
     x_offset = rescale[:, rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in rescale_idx else 0.0
@@ -260,7 +277,8 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
         forcing_params[:, 0] = amp_dim
         forcing_params[:, 1] = freq_k
         forcing_params[:, 2] = math.pi / 2.0                           # phase -> cos drive
-        force = _pipeline.build_nondim_sin_force_tensor(forcing_params, t_fine, rescale, fidx, rescale_idx)
+        force = _pipeline.build_nondim_sin_force_tensor(
+            forcing_params, t_fine if drive_times is None else None, rescale, fidx, rescale_idx, t_dim=drive_times)
         if force.shape[1] < n_force_ch:
             # The sin builder emits ONE channel (fidx above declares no "amp_y"), but the model's
             # drift may index more: HopfModel reads force_step[:, 1] unconditionally, and a user
@@ -273,7 +291,7 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
         x_nd = _pipeline.gen_obs(model=model, params=params_nd, t=t_fine, inits=inits, force=force,
                        n_segs=n_segs, steady_idx=steady_idx, fixed_dict=fixed_dict,
                        state_dep_drift=state_dep_drift, batch_size=B, var_idx=0,
-                       dtype=dtype, device=device)[0, :, :]
+                       dtype=dtype, device=device, **({} if clock is None else {"clock": clock}))[0, :, :]
         x_sub = x_nd[:, ::s_int][:, :N_points] if idx_c is None else torch.gather(x_nd, 1, idx_c)
         x_dim = helpers.rescale(x_sub[:, :N_k], x_scale, x_offset)      # (B, N_k), a FRESH tensor
         # Release the simulation BEFORE the lock-in: x_nd is a view and so pins its whole base, and
@@ -347,17 +365,20 @@ def _cpu_copy(t: torch.Tensor) -> torch.Tensor:
 def _probe_record(args: tuple, kwargs: dict, bounds, lo: int, hi: int, k: int, u: torch.Tensor,
                   logcyc: torch.Tensor, valid: torch.Tensor, mask: torch.Tensor) -> ProbeRecord:
     """The :class:`ProbeRecord` of one ``gen_chi_block`` call: what it handed ``gen_chi_raw`` and what
-    came back. The training generator passes the trace, the sampling interval and the recording
-    length POSITIONALLY, so they are read by binding the call to ``gen_chi_raw``'s own signature,
-    never by position. Draws no random numbers: the peak frequency is recomputed with the same
+    came back. The trace is passed positionally, and the sampling interval and the recording length
+    travel in the call's clock (or, without one, by name or position), so they are read by binding
+    the call to ``gen_chi_raw``'s own signature, never by position. Draws no random numbers: the peak
+    frequency is recomputed with the same
     deterministic estimator ``gen_chi_raw`` used on the same trace."""
     bound = inspect.signature(gen_chi_raw).bind(*args, bounds=bounds, **kwargs).arguments
-    dt_exp = float(bound["dt_exp"])
+    clk = bound.get("clock")
+    dt_exp = float(clk.dt_exp if clk is not None else bound["dt_exp"])
+    n_points = int(clk.n_points if clk is not None else bound["N_points"])
     dfrac = bound.get("duration_frac")
     return ProbeRecord(
         batch_tag=_pipeline._batch_tag(), lo=lo, hi=hi,
         f_peak=_cpu_copy(chi.peak_freq(bound["x_spont_dim"], dt_exp)),
         duration_frac=None if dfrac is None else _cpu_copy(torch.as_tensor(dfrac)),
         k=int(k), u=_cpu_copy(u), logcyc=_cpu_copy(logcyc), valid=_cpu_copy(valid),
-        packed_mask=_cpu_copy(mask), dt_exp=dt_exp, n_points=int(bound["N_points"]))
+        packed_mask=_cpu_copy(mask), dt_exp=dt_exp, n_points=n_points)
 

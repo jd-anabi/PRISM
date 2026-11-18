@@ -577,10 +577,11 @@ def stub_calibration_battery(monkeypatch, *, ks_pvals=None, tarp_ks_p=0.5) -> di
 
 def stand_in_gen_obs(model=None, params=None, t=None, inits=None, force=None, n_segs=None,
                      steady_idx=0, fixed_dict=None, state_dep_drift=False, batch_size=1,
-                     var_idx=None, dtype=torch.float32, device=torch.device("cpu")):
+                     var_idx=None, dtype=torch.float32, device=torch.device("cpu"), dt=None, clock=None):
     """A cheap stand-in for pipeline.gen_obs with its shape: the drive's first channel as the
     response, a unit oscillation at angular frequency 1 in ND time (so the passive trace has a
-    spectral peak), and a little noise from torch's global stream."""
+    spectral peak), and a little noise from torch's global stream. Its step or clock is taken and
+    not read: the grid ``t`` carries the model times."""
     n = t.shape[0] - steady_idx
     x = (force[:, 0, steady_idx:].to(dtype).expand(batch_size, n) + torch.sin(t[steady_idx:]).to(dtype)
          + 0.01 * torch.randn(batch_size, n, dtype=dtype, device=device))

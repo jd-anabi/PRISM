@@ -111,6 +111,25 @@ def test_the_schedule_filter_and_the_batch_loop_share_one_arithmetic():
         assert got.tolist() == want
 
 
+def test_the_schedule_keeps_the_first_pairs_that_fit_however_it_draws():
+    """The schedule is the first n_runs pairs of the scrambled Sobol sequence that fit, whatever the size of its
+    draws, and an empty redraw is taken to mean that nothing fits only when the redraw is large: a two-batch run on a
+    12,000-step grid, where a frame takes at least two fine steps, used to redraw six candidates at a time and give
+    up when all six missed (as it does at this seed)."""
+    from core.SBI import pipeline
+    n_grid, steady = 12_000, 500
+    t = torch.zeros(n_grid)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(9)
+        ts, Ts = pipeline._batch_schedule(2, t, (1.0, 40.0), 1000.0, 60000.0, DT_EXP, DT_MIN, steady)
+        torch.manual_seed(9)
+        pts = torch.quasirandom.SobolEngine(dimension=2, scramble=True).draw(4096)
+    want_ts = torch.exp(pts[:, 0] * math.log(40.0))
+    want_Ts = torch.exp(math.log(1000.0) + pts[:, 1] * (math.log(60000.0) - math.log(1000.0)))
+    fits = clock.training_n_fine(DT_EXP, want_ts, want_Ts, DT_MIN, steady) <= n_grid
+    assert torch.equal(ts, want_ts[fits][:2]) and torch.equal(Ts, want_Ts[fits][:2])
+
+
 def _ideal_reading(t_scale, f_khz, n_cycles):
     """A response equal to its drive, through the clock and the drive builder, locked in over whole cycles."""
     c = _clk(t_scale, n_points=int(round(n_cycles / (f_khz * DT_EXP))))
@@ -157,3 +176,68 @@ def test_the_drive_builder_takes_the_clocks_times():
     b = forcing.build_nondim_force_tensor(fp, None, resc[:, :2], fidx, hopf,
                                           t_dim=helpers.rescale(t_nd.unsqueeze(0), resc[:, 1:2], 0.0))
     assert torch.equal(a, b)
+
+
+def _ideal_gen_obs(model, params, t, inits, force, n_segs, steady_idx, **kw):
+    """The simulator replaced by an ideal system: the response is the drive, past the transient."""
+    return force[:, 0:1, steady_idx:].permute(1, 0, 2).clone()
+
+
+def test_the_probe_loop_reads_an_ideal_response_on_the_clock(monkeypatch):
+    """gen_chi_raw itself -- its placement, Nyquist test, cycle floor and ceiling, and lock-in -- with the simulator
+    replaced by "response = drive", at ten time scales between whole strides and at the whole strides: the mean
+    |chi| over the live probes is within 1 % of the truth and the median |phase| at most 0.01 rad (on the old clock
+    the means ran 0.09-0.85 between whole strides, the phases scrambled). Every live probe reads the closed-form
+    lock-in of a cosine from its top at the first frame over that probe's own window, |chi| within 1e-6."""
+    from core.SBI import chi_probes, pipeline
+    monkeypatch.setattr(pipeline, "gen_obs", _ideal_gen_obs)
+    ridx = {"x_scale": 0, "t_scale": 1, "f_scale": 2}
+    N, f_peak, X, F = 5000, 0.02, 62.14, 10.0
+    x_spont = (X * torch.sin(2 * math.pi * f_peak * torch.arange(N, dtype=torch.float32) * DT_EXP)).unsqueeze(0)
+    peak = float(chi.peak_freq(x_spont, DT_EXP)[0])
+    mults = chi.sample_multipliers(12, config.CHI_FREQ_BOUNDS, generator=torch.Generator().manual_seed(20260805))
+    for ts in (3.73, 6.0, 7.215, 12.0, 13.9, 16.0, 22.0, 25.0, 30.0, 37.13, 1.0, 2.0, 5.0, 8.0, 20.0, 40.0):
+        c = clock.frame_clock(DT_EXP, ts, N, DT_MIN, STEADY, config.CHUNK_LEN)
+        chis, u, logcyc, valid = chi_probes.gen_chi_raw(
+            "NADROWSKI", torch.zeros(1, 10), torch.tensor([[X, ts, F]]), x_spont, inits=torch.zeros(1, 3),
+            rescale_idx=ridx, multipliers=mults, f0_nd=0.15, adapt_placement=True, bounds=config.CHI_FREQ_BOUNDS,
+            clock=c)
+        live = valid[0]
+        assert int(live.sum()) >= 6, (ts, int(live.sum()))
+        r = chis[0][live] / (X / F)
+        assert 0.99 <= float(r.abs().mean()) <= 1.01 and float(torch.angle(r).abs().median()) <= 0.01, ts
+        for k in live.nonzero().flatten().tolist():
+            f = peak * math.exp(float(u[0, k]))
+            n = int(round(math.exp(float(logcyc[0, k])) / (f * DT_EXP)))
+            ref = complex(chi.lock_in_batched(torch.cos(2 * math.pi * f * torch.arange(n, dtype=torch.float64)
+                                                        * DT_EXP).unsqueeze(0),
+                                              torch.tensor([2 * math.pi * f], dtype=torch.float64), 1.0, n * DT_EXP,
+                                              DT_EXP)[0])
+            got = complex(chis[0, k]) / (X / F)
+            assert abs(abs(got) - abs(ref)) <= 1e-6 and abs(got - ref) <= 1e-4, (ts, k, got, ref)
+
+
+def test_a_forced_drive_stands_at_its_drawn_phase_at_the_first_frame(monkeypatch):
+    """A forced row's drive is built on the clock's times, so its drawn phase is its phase at the first kept frame,
+    where Group G's lock-in starts: for a response equal to its drive, the first harmonic's phase against the drive's
+    reads the same at every time scale and every drawn phase. (It used to carry 2 pi f t_scale times the transient's
+    length besides, a scramble.)"""
+    from core.SBI import pipeline, statistics
+    monkeypatch.setattr(pipeline, "gen_obs", _ideal_gen_obs)
+    fidx = {"amp": 0, "freq": 1, "phase": 2, "offset": 3}
+    sim_ridx = {"x_scale": 0, "t_scale": 1, "f_scale": 2}
+    fp = torch.tensor([[2.0, 0.05, 0.3, 0.0], [2.0, 0.05, 2.1, 0.0], [1.0, 0.11, 4.0, 0.0]])
+    g2 = []
+    for ts in (5.0, 13.9, 30.0):
+        c = clock.frame_clock(DT_EXP, ts, 3000, DT_MIN, STEADY, config.CHUNK_LEN)
+        resc = torch.tensor([[62.14, ts, 10.0]]).repeat(3, 1)
+        g = pipeline._BatchGeometry(model="NADROWSKI", clock=c, t_fine=c.grid(), T_k=3000.0, n_force_ch=1,
+                                    forcing_idx=fidx, sim_ridx=sim_ridx, fixed_dict=None, state_dep_drift=True,
+                                    dtype=torch.float32, device=torch.device("cpu"))
+        patho = dict.fromkeys(("rows", "nonfinite", "constant", "overflow"), 0)
+        rows = pipeline._forced_rows(g, torch.zeros(3, 10), resc, torch.zeros(3, 3), fp,
+                                     resc[:, 0:1], 0.0, patho)
+        lab = statistics.FEATURE_LABELS
+        g2.append(rows[:, [lab.index("G2_cos"), lab.index("G2_sin")]])
+    g2 = torch.cat(g2)
+    assert float((g2 - g2[0]).abs().max()) <= 1e-3, g2

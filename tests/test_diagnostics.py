@@ -1755,110 +1755,57 @@ def test_the_diagnostic_warnings_are_records_and_the_reports_are_information(cap
     assert out == "" and err == "", (out, err)
 
 
-_GEOMETRY_NAMES = ("T_nd_k", "dt_nd_k", "subsample_factor", "N_points_k", "n_fine_total")
+def _batch_loop_clocks(cfg, pairs):
+    """The record clock the training batch loop hands its row makers, for each (t_obs_s, t_scale) pair: the loop
+    runs with its schedule replaced by those pairs and its spontaneous row maker by a stand-in that keeps the clock
+    and returns empty rows, so nothing is simulated. Reading what the loop really built, rather than restating its
+    arithmetic, is what makes the check below a pin: a change to the loop's geometry changes the expected values."""
+    from core.SBI import pipeline, statistics
+    seen = []
+
+    def keep(g, nd, init_rows, x_scale, x_offset, _patho):
+        seen.append(g.clock)
+        return torch.zeros((nd.shape[0], statistics.SUMMARY_WIDTH + 1))
+
+    ts = torch.tensor([p[1] for p in pairs], dtype=torch.float32)
+    Ts = torch.tensor([p[0] * cfg.get_unit_conversion_factor("s") for p in pairs], dtype=torch.float32)
+    real_rows, real_schedule = pipeline._spontaneous_rows, pipeline._batch_schedule
+    pipeline._spontaneous_rows = keep
+    pipeline._batch_schedule = lambda *a, **k: (ts, Ts)
+    try:
+        class _Fixed:
+            def sample(self, shape):
+                return cfg.ground_truth_tensor.reshape(1, -1).expand(shape[0], -1).clone()
+        pipeline.gen_training_data(
+            cfg.model, _Fixed(), None, cfg.t, run_size=1, n_runs=len(pairs), steady_idx=cfg.steady_idx,
+            dt_nd_min=cfg.dt_nd_min, nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx,
+            rescale_idx=cfg.rescale_idx, dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+            t_scale_bounds=cfg.t_scale_bounds, spontaneous_only=True, n_vars=cfg.inits_tensor.shape[-1],
+            dtype=cfg.hw.dtype, device=cfg.hw.device)
+    finally:
+        pipeline._spontaneous_rows, pipeline._batch_schedule = real_rows, real_schedule
+    return seen
 
 
-def _geometry_bindings(source: str) -> list:
-    """The five geometry statements of a function's ``source``, in line order.
-
-    Every binding of the five names anywhere in the function is counted: assignment targets, including
-    names nested in tuple and list targets, augmented and annotated assignments, walrus expressions,
-    loop targets and ``with ... as`` targets. Each name must be bound exactly once, by a plain
-    single-target assignment; any other binding means the statement run here is not the value the
-    loop goes on to use, so the name is refused rather than trusted."""
-    import ast
-    import textwrap
-
-    def bound(target):
-        if isinstance(target, ast.Name):
-            yield target.id
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for element in target.elts:
-                yield from bound(element)
-        elif isinstance(target, ast.Starred):
-            yield from bound(target.value)
-
-    binders = {name: [] for name in _GEOMETRY_NAMES}
-    for node in ast.walk(ast.parse(textwrap.dedent(source))):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
-            targets = [node.target]
-        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-            targets = [node.optional_vars]
-        else:
-            continue
-        for target in targets:
-            for name in bound(target):
-                if name in binders:
-                    binders[name].append(node)
-    refused = [f"{name}: bound {len(nodes)} time(s) -- " + "; ".join(ast.unparse(n).splitlines()[0] for n in nodes)
-               for name, nodes in binders.items()
-               if not (len(nodes) == 1 and isinstance(nodes[0], ast.Assign) and len(nodes[0].targets) == 1
-                       and isinstance(nodes[0].targets[0], ast.Name))]
-    assert not refused, ("each geometry name must be bound exactly once, by a plain single-target assignment:\n"
-                         + "\n".join(refused))
-    return sorted((nodes[0] for nodes in binders.values()), key=lambda n: n.lineno)
-
-
-def _batch_loop_geometry(cfg, t_obs_s, t_scale):
-    """(N_points_k, n_fine_total, subsample_factor) as the training batch loop computes them: its own
-    five geometry statements, lifted from gen_training_data's source and run on one (length, t_scale).
-
-    Running production's statements, rather than a copy of them written here, is what makes the check
-    below a pin: a change to the batch loop's arithmetic changes the expected values with it. Each
-    name must be assigned exactly once, and the statements may read nothing but the loop's own inputs,
-    so a reshaped loop fails here by name instead of passing against a stale restatement."""
-    import ast
-    import inspect
-    from core.SBI import pipeline
-    found = _geometry_bindings(inspect.getsource(pipeline.gen_training_data))
-    scope = {"T_k": t_obs_s * cfg.get_unit_conversion_factor("s"), "t_scale_k": t_scale,
-             "dt_exp": cfg.dt_exp, "dt_nd_min": cfg.dt_nd_min, "steady_idx": cfg.steady_idx}
-    exec(compile(ast.Module(body=found, type_ignores=[]), "gen_training_data", "exec"), scope)
-    return scope["N_points_k"], scope["n_fine_total"], scope["subsample_factor"]
-
-
-_GEOMETRY_SOURCE = """
-def gen(T_k, t_scale_k, dt_exp, dt_nd_min, steady_idx):
-    T_nd_k = T_k / t_scale_k
-    dt_nd_k = dt_exp / t_scale_k
-    subsample_factor = max(1, int(dt_nd_k / dt_nd_min))
-    N_points_k = int(T_nd_k / dt_nd_k)
-    n_fine_total = steady_idx + N_points_k * subsample_factor
-"""
-
-
-@pytest.mark.parametrize("rebinding", ["N_points_k += 0", "N_points_k: int = 0", "print(N_points_k := 0)",
-                                       "N_points_k, _ = 0, 0", "[N_points_k] = [0]",
-                                       "for N_points_k in ():\n        pass"])
-def test_the_geometry_pin_refuses_a_name_bound_twice_or_not_plainly(rebinding):
-    """The geometry pin runs the batch loop's own statements, so it holds only while each of the five
-    names is bound once, by a plain assignment. Any other binding -- augmented, annotated, a walrus, a
-    tuple or list target, a loop target -- would leave the pin running a statement whose value the loop
-    then changes, and passing against a stale one. The pin names the name it refuses."""
-    assert [ast_node.targets[0].id for ast_node in _geometry_bindings(_GEOMETRY_SOURCE)] == [
-        "T_nd_k", "dt_nd_k", "subsample_factor", "N_points_k", "n_fine_total"]
-    with pytest.raises(AssertionError, match="N_points_k"):
-        _geometry_bindings(_GEOMETRY_SOURCE.replace("    n_fine_total",
-                                                    f"    {rebinding}\n    n_fine_total"))
-
-
-def test_the_recording_geometry_agrees_with_the_training_batch_formula():
-    """A probe length is sized with the training loop's own arithmetic, float truncation included, so
-    it describes the trace a training batch of that length holds. The expected values are what the
-    batch loop's own statements compute, not a restatement of them."""
+def test_the_recording_geometry_is_the_training_batchs_clock():
+    """A probe length is sized as a training batch of that length is, float truncation included, so it describes
+    the trace a training batch holds: probe_math's geometry equals the record clock the batch loop builds for the
+    same (length, t_scale) -- its frames, its fine steps and its stride."""
+    from core import cli, config
     from core.diagnostics import probe_math
     cfg = _nad_cfg()
-    for t_obs_s, t_scale in ((1.0, 3.73), (1.0, 3.7300000190734863), (5.0, 3.73),
-                             (26.909, 3.7300000190734863), (2.5, 1.0), (7.3, 40.0)):
-        want = _batch_loop_geometry(cfg, t_obs_s, t_scale)
-        assert tuple(probe_math.recording_geometry(cfg, t_obs_s, t_scale)) == want, (t_obs_s, t_scale)
+    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+    pairs = [(1.0, 3.7300000190734863), (5.0, 3.7300000190734863), (26.909, 3.7300000190734863), (2.5, 1.0),
+             (7.3, 40.0)]
+    clocks = _batch_loop_clocks(cfg, pairs)
+    assert len(clocks) == len(pairs)
+    for (t_obs_s, t_scale), c in zip(pairs, clocks):
+        want = probe_math.Geometry(n_obs=c.n_points, n_fine=c.n_fine, subsample=c.stride)
+        assert probe_math.recording_geometry(cfg, t_obs_s, t_scale) == want, (t_obs_s, t_scale, want)
     assert probe_math.recording_geometry(cfg, 5.0, 3.73) == probe_math.Geometry(
         n_obs=5000, n_fine=59000, subsample=11)
     # the truncation is training's too, and is not corrected: one second holds 999 samples at the Python
-    # float 3.73 (1000 at float32(3.73), the precision training's schedule holds); the loop above checks
-    # that the helper and the batch loop agree at both
+    # float 3.73 (1000 at float32(3.73), the precision training's schedule holds)
     assert probe_math.recording_geometry(cfg, 1.0, 3.73).n_obs == 999
 
 

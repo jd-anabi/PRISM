@@ -22,6 +22,7 @@ from core.refusals import Refusal
 from core.runs import cancel_deferred
 from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics, chi, derived
+from core.SBI import clock as _clock
 
 if TYPE_CHECKING:        # annotations only: chi_probes imports this module, so never at run time
     from collections.abc import Callable
@@ -698,15 +699,20 @@ def _plan_rows(plan, s: int, e: int, batch_size: int):
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor,
             n_segs: int, steady_idx: int, fixed_dict: dict = None, state_dep_drift: bool = False,
             batch_size: int = 1, var_idx: int | None = None,
-            dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu"), dt=None):
+            dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu"), dt=None,
+            clock=None):
     """
     Simulate one batch of observations, splitting it whenever the geometry would not fit on device.
 
     :param model: built-in model name (one of VALID_SIMS) or a registered user model.
     :param params: (batch, n_params) simulation parameters.
-    :param t: ND time grid; dtype/device are applied during processing.
+    :param t: ND time grid; dtype/device are applied during processing. With a clock only its length is
+        read, and it must be the clock's ``n_fine``.
     :param dt: the step, a float or one value per row, handed to every one of the ``n_segs`` segments;
         None leaves the simulator to read the grid's first interval.
+    :param clock: the record clock (``core.SBI.clock.FrameClock``): its segments are the simulator's plan,
+        the transient at its step and the recorded part at another. ``t``'s length, ``steady_idx`` and
+        ``n_segs`` must agree with it, so a call site that hands a stale geometry fails here.
     :param inits: (batch, n_vars) initial conditions.
     :param force: (batch, n_ch, T) drive tensor (or a broadcastable single-row drive).
     :param n_segs: time segments the simulator integrates over.
@@ -725,7 +731,17 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     from core import registry
     if VALID_SIMS.get(model.lower()) is None and not registry.is_user_model(model):
         raise ValueError(f"Invalid simulator: {model}")
-    plan = _plan_for(t.shape[0], n_segs, dt)
+    if clock is not None:
+        if dt is not None:
+            raise ValueError("gen_obs takes a clock or a step, not both")
+        got = (int(t.shape[0]), int(steady_idx), int(n_segs))
+        want = (clock.n_fine, clock.n_transient, clock.n_segments)
+        if got != want:
+            raise ValueError(f"gen_obs was handed a grid of {got[0]} points, a transient of {got[1]} steps and "
+                             f"{got[2]} segments, but its clock has {want[0]}, {want[1]} and {want[2]}")
+        plan = clock.segments()
+    else:
+        plan = _plan_for(t.shape[0], n_segs, dt)
 
     # --- memory guard: split the batch if this geometry would not fit ---
     # The simulator's tensors are all linear in the batch: the (n_vars, batch, T) solution buffer,
@@ -1047,17 +1063,15 @@ def retry_on_oom(fn, *, what: str, device: torch.device, attempts: int | None = 
 class _BatchGeometry:
     """One training batch's shared state, captured once so the three mode branches can be plain
     module-level functions instead of arms of a closure reading ~30 enclosing names (a thirty-
-    argument function is a standing invitation to a call-site drift bug -- a wrong
-    subsample_factor produces a PLAUSIBLE training row, not a crash)."""
+    argument function is a standing invitation to a call-site drift bug -- a wrong stride
+    produces a PLAUSIBLE training row, not a crash). The batch's time geometry is its record clock,
+    ONE object: the stride, the steps, the transient, the frame count and the frame interval all come
+    from it, and ``t_fine`` is its model-time grid."""
     model: str
+    clock: _clock.FrameClock
     t_fine: torch.Tensor
-    n_segs_k: int
-    steady_idx: int
-    subsample_factor: int
-    N_points_k: int
     T_k: float
     n_force_ch: int
-    dt_exp: float
     forcing_idx: dict
     sim_ridx: dict
     fixed_dict: dict
@@ -1082,11 +1096,9 @@ def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho,
     the test harness patches them on this module and must be honoured. ``row_range`` is the block's
     [lo, hi) within its batch, handed to gen_chi_block so its probe counts reach the batch probe tally
     under the range they describe."""
-    (model, t_fine, n_segs_k, steady_idx, subsample_factor, N_points_k, T_k, n_force_ch,
-     dt_exp, fixed_dict, state_dep_drift, sim_ridx, forcing_idx, dtype, device) = (
-        g.model, g.t_fine, g.n_segs_k, g.steady_idx, g.subsample_factor, g.N_points_k, g.T_k,
-        g.n_force_ch, g.dt_exp, g.fixed_dict, g.state_dep_drift, g.sim_ridx, g.forcing_idx,
-        g.dtype, g.device)
+    (model, clk, t_fine, T_k, n_force_ch, fixed_dict, state_dep_drift, sim_ridx, forcing_idx, dtype,
+     device) = (g.model, g.clock, g.t_fine, g.T_k, g.n_force_ch, g.fixed_dict, g.state_dep_drift,
+                g.sim_ridx, g.forcing_idx, g.dtype, g.device)
     n = nd.shape[0]
     chi_k_pad, chi_f0, chi_freq_bounds = g.chi_k_pad, g.chi_f0, g.chi_freq_bounds
     chi_max_cycles, chi_k_fixed, chi_gen = g.chi_max_cycles, g.chi_k_fixed, g.chi_gen
@@ -1094,33 +1106,28 @@ def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho,
     # chi(omega) mode: spontaneous run (Groups A-F + Omega_0) + K single-tone forced runs.
     # Conditioning [S(49): the 41 features, Group G zeroed, and the 8 valid flags | log(T) | the
     # padded probe block, CHI_ELEM_W x chi_k_pad] -- chi replaces the forcing block.
-    force0 = _forcing.zero_force(n, n_force_ch, t_fine.shape[0], dtype, device)
+    force0 = _forcing.zero_force(n, n_force_ch, clk.n_fine, dtype, device)
     x_nd_spont_fine = gen_obs(
         model=model, params=nd, t=t_fine, inits=init_rows,
-        force=force0, n_segs=n_segs_k, steady_idx=steady_idx,
+        force=force0, n_segs=clk.n_segments, steady_idx=clk.n_transient,
         fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-        batch_size=n, var_idx=0, dtype=dtype, device=device,
+        batch_size=n, var_idx=0, dtype=dtype, device=device, clock=clk,
     )[0, :, :]
-    x_spont_dim = helpers.rescale(
-        x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k], x_scale, x_offset)
+    x_spont_dim = helpers.rescale(clk.frames(x_nd_spont_fine), x_scale, x_offset)
     del x_nd_spont_fine, force0
     count_pathological(x_spont_dim, _patho)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        # (run, 49): the 41 features, G zeroed, then the 8 valid flags
-        training_stats = gen_stats(x_spont_dim.cpu(), None, dt_exp, None, None, None,
+        # (run, 49): the 41 features, G zeroed, then the 8 valid flags; the frames are dt_exp apart
+        training_stats = gen_stats(x_spont_dim.cpu(), None, clk.dt_exp, None, None, None,
                                    device=device, spontaneous_only=True)
     chi_block, chi_mask = gen_chi_block(
-        # init_rows, NOT inits: this one is passed POSITIONALLY, which is exactly how
-        # it survived the row-slicing sweep -- gen_obs' calls name it `inits=` and were
-        # caught. It surfaced as "Batch size: 2 cannot differ from dim 0 of parameters
-        # tensor", i.e. loudly, only because the simulator validates the two against
-        # each other; a tensor that happened to broadcast would have gone unnoticed.
-        model, nd, resc, x_spont_dim, t_fine, init_rows, sim_ridx,
-        n_segs_k, steady_idx, subsample_factor, N_points_k, dt_exp,
-        b_mults, chi_f0, state_dep_drift=state_dep_drift, fixed_dict=fixed_dict,
+        # Every argument after the trace BY NAME: init_rows was once passed positionally, which is how
+        # it survived a row-slicing sweep that caught every `inits=`.
+        model, nd, resc, x_spont_dim, inits=init_rows, rescale_idx=sim_ridx,
+        multipliers=b_mults, f0_nd=chi_f0, state_dep_drift=state_dep_drift, fixed_dict=fixed_dict,
         k_pad=chi_k_pad, bounds=chi_freq_bounds, duration_frac=dfrac,
-        max_cycles=chi_max_cycles,
+        max_cycles=chi_max_cycles, clock=clk,
         # THE ONLY adapt_placement=True in the codebase. Training is the one path that
         # gets to choose where it probes; every other caller is reproducing an experiment
         # whose frequencies are already fixed.
@@ -1141,31 +1148,27 @@ def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho,
 
 def _spontaneous_rows(g: _BatchGeometry, nd, init_rows, x_scale, x_offset, _patho) -> torch.Tensor:
     """One spontaneous-mode row block: a single unforced run -> [S | log T]."""
-    (model, t_fine, n_segs_k, steady_idx, subsample_factor, N_points_k, T_k, n_force_ch,
-     dt_exp, fixed_dict, state_dep_drift, sim_ridx, forcing_idx, dtype, device) = (
-        g.model, g.t_fine, g.n_segs_k, g.steady_idx, g.subsample_factor, g.N_points_k, g.T_k,
-        g.n_force_ch, g.dt_exp, g.fixed_dict, g.state_dep_drift, g.sim_ridx, g.forcing_idx,
-        g.dtype, g.device)
+    (model, clk, t_fine, T_k, n_force_ch, fixed_dict, state_dep_drift, dtype, device) = (
+        g.model, g.clock, g.t_fine, g.T_k, g.n_force_ch, g.fixed_dict, g.state_dep_drift, g.dtype, g.device)
     n = nd.shape[0]
     # No drive: one spontaneous run (Groups A-F; Group G is zero-padded), no forcing block.
-    force = _forcing.zero_force(n, n_force_ch, t_fine.shape[0], dtype, device)
+    force = _forcing.zero_force(n, n_force_ch, clk.n_fine, dtype, device)
     x_nd_spont_fine = gen_obs(
         model=model, params=nd, t=t_fine, inits=init_rows,
-        force=force, n_segs=n_segs_k, steady_idx=steady_idx,
+        force=force, n_segs=clk.n_segments, steady_idx=clk.n_transient,
         fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-        batch_size=n, var_idx=0, dtype=dtype, device=device,
+        batch_size=n, var_idx=0, dtype=dtype, device=device, clock=clk,
     )[0, :, :]
     # Rescale STRAIGHT off the strided view: helpers.rescale materialises a fresh
     # contiguous tensor, so nothing keeps a reference to the fine buffer and the `del`
     # genuinely releases it. Binding the view to a name first (as this used to) pins the
     # whole (n, n_fine) storage until that name dies -- the `del` frees nothing.
-    x_spont_dim = helpers.rescale(
-        x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k], x_scale, x_offset)
+    x_spont_dim = helpers.rescale(clk.frames(x_nd_spont_fine), x_scale, x_offset)
     del x_nd_spont_fine, force
     count_pathological(x_spont_dim, _patho)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        training_stats = gen_stats(x_spont_dim.cpu(), None, dt_exp, None, None, None,
+        training_stats = gen_stats(x_spont_dim.cpu(), None, clk.dt_exp, None, None, None,
                                    device=device, spontaneous_only=True)
         return statistics.conditioning_rows(training_stats, T_k)
 
@@ -1173,23 +1176,23 @@ def _spontaneous_rows(g: _BatchGeometry, nd, init_rows, x_scale, x_offset, _path
 
 def _forced_rows(g: _BatchGeometry, nd, resc, init_rows, fparams, x_scale, x_offset, _patho) -> torch.Tensor:
     """One forced-mode row block: driven + spontaneous runs -> [S | log T | theta_force]."""
-    (model, t_fine, n_segs_k, steady_idx, subsample_factor, N_points_k, T_k, n_force_ch,
-     dt_exp, fixed_dict, state_dep_drift, sim_ridx, forcing_idx, dtype, device) = (
-        g.model, g.t_fine, g.n_segs_k, g.steady_idx, g.subsample_factor, g.N_points_k, g.T_k,
-        g.n_force_ch, g.dt_exp, g.fixed_dict, g.state_dep_drift, g.sim_ridx, g.forcing_idx,
+    (model, clk, t_fine, T_k, fixed_dict, state_dep_drift, sim_ridx, forcing_idx, dtype, device) = (
+        g.model, g.clock, g.t_fine, g.T_k, g.fixed_dict, g.state_dep_drift, g.sim_ridx, g.forcing_idx,
         g.dtype, g.device)
     n = nd.shape[0]
-    # 2. Build nondimensional force tensor at fine resolution (uses PHYSICAL rescale)
+    # 2. Build nondimensional force tensor at fine resolution (uses PHYSICAL rescale), on the clock's
+    #    times: the drawn phase is the drive's phase at the first kept frame, where the recording and
+    #    its lock-in (Group G) start, as a bench drive's is.
     force = build_nondim_sin_force_tensor(
-        fparams, t_fine, resc, forcing_idx, sim_ridx
+        fparams, None, resc, forcing_idx, sim_ridx, t_dim=clk.drive_times(dtype, device)
     )
 
     # 3. Simulate the FORCED run (drive on) -> Group G
     x_nd_fine = gen_obs(
         model=model, params=nd, t=t_fine, inits=init_rows,
-        force=force, n_segs=n_segs_k, steady_idx=steady_idx,
+        force=force, n_segs=clk.n_segments, steady_idx=clk.n_transient,
         fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-        batch_size=n, var_idx=0, dtype=dtype, device=device,
+        batch_size=n, var_idx=0, dtype=dtype, device=device, clock=clk,
     )[0, :, :]
     # 4a. Redimensionalize the forced run IMMEDIATELY (uses PHYSICAL rescale).
     # Order matters: helpers.rescale materialises a fresh contiguous tensor, so the `del`
@@ -1198,20 +1201,18 @@ def _forced_rows(g: _BatchGeometry, nd, resc, init_rows, fparams, x_scale, x_off
     # second gen_obs call below -- two full fine trajectories resident where one
     # subsampled slice was needed, several GB at n=2048. That also made
     # _max_sim_batch split batches it did not need to, and k chunks cost k x wall-clock.
-    x_dim = helpers.rescale(
-        x_nd_fine[:, ::subsample_factor][:, :N_points_k], x_scale, x_offset)
+    x_dim = helpers.rescale(clk.frames(x_nd_fine), x_scale, x_offset)
     del x_nd_fine
 
     # 3b. Simulate the SPONTANEOUS run (zero force) -> Groups A-F
     x_nd_spont_fine = gen_obs(
         model=model, params=nd, t=t_fine, inits=init_rows,
-        force=torch.zeros_like(force), n_segs=n_segs_k, steady_idx=steady_idx,
+        force=torch.zeros_like(force), n_segs=clk.n_segments, steady_idx=clk.n_transient,
         fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-        batch_size=n, var_idx=0, dtype=dtype, device=device,
+        batch_size=n, var_idx=0, dtype=dtype, device=device, clock=clk,
     )[0, :, :]
     # 4b. Same treatment for the spontaneous run.
-    x_spont_dim = helpers.rescale(
-        x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k], x_scale, x_offset)
+    x_spont_dim = helpers.rescale(clk.frames(x_nd_spont_fine), x_scale, x_offset)
     del x_nd_spont_fine, force
     count_pathological(x_spont_dim, _patho)
     count_pathological(x_dim, _patho)
@@ -1222,7 +1223,8 @@ def _forced_rows(g: _BatchGeometry, nd, resc, init_rows, fparams, x_scale, x_off
         drive_amp = fparams[:, forcing_idx["amp"]].cpu()
         drive_freq = fparams[:, forcing_idx["freq"]].cpu()
         drive_phase = fparams[:, forcing_idx["phase"]].cpu()
-        training_stats = gen_stats(x_spont_dim.cpu(), x_dim.cpu(), dt_exp, drive_amp, drive_freq, drive_phase, device=device)
+        training_stats = gen_stats(x_spont_dim.cpu(), x_dim.cpu(), clk.dt_exp, drive_amp, drive_freq, drive_phase,
+                                   device=device)
         return statistics.conditioning_rows(training_stats, T_k, fparams.cpu())
 
 
@@ -1274,17 +1276,16 @@ def _batch_schedule(n_runs: int, t: torch.Tensor, t_scale_bounds, t_min_exp, t_m
     log_t_scale_lo, log_t_scale_hi = math.log(t_scale_lo), math.log(t_scale_hi)
     log_T_lo, log_T_hi = math.log(t_min_exp), math.log(t_max_exp)
 
-    # A batch must fit BOTH ceilings. N_ND_MAX is the cost cap; len(t) is the hard length of the ND
-    # grid every batch slices with `t_fine = t[:n_fine_total]`, which CLIPS SILENTLY when it is
-    # exceeded. An over-long draw then produces a self-inconsistent training row: the spontaneous
-    # trace is built by SLICING (so it comes back short) while gen_chi_block GATHERS to N_points
-    # (its clamp replicating the last sample), so chi and the summary statistics describe different
-    # trace lengths, and log(T_k) records a duration neither of them actually has. Filtering the
-    # draw is the honest fix -- these geometries cannot be simulated at the requested resolution, so
-    # they must not enter the training set at all.
-    #   Built-in bounds are unaffected: t_scale in (1, 40) puts len(t) at ~2.4M against a 300k cap,
-    #   so nothing was ever clipped. It bites model-builder bounds, where t_scale in (v/2, v*2)
-    #   makes len(t) = 240k -- SHORTER than N_ND_MAX -- and ~20% of accepted draws truncated.
+    # A batch must fit BOTH ceilings. N_ND_MAX is the cost cap; len(t) is the longest run the model's
+    # configuration provides for. A batch used to slice its grid out of `t`, which CLIPPED SILENTLY past
+    # it and gave a self-inconsistent row (the spontaneous trace short, the chi path padded to N_points,
+    # log(T_k) a duration neither had); the batch now takes its grid from its clock and cannot clip, but
+    # the ceiling stays what it was, so the schedule admits what it always admitted at a given cost.
+    #   Built-in bounds: t_scale in (1, 40) puts len(t) at ~2.4M against a 300k cap. Model-builder
+    #   bounds, where t_scale in (v/2, v*2) makes len(t) = 240k -- SHORTER than N_ND_MAX -- meet it.
+    #   Near the top of such a box a frame takes ceil(r) fine steps for r of the finest, up to twice r
+    #   just above r = 1, so the longest recording drawn there shrinks; the filter drops the over-long
+    #   draws as it drops every one.
     n_fine_max = min(N_ND_MAX, t.shape[0])
 
     def _draw_and_filter(n_candidates: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1292,10 +1293,9 @@ def _batch_schedule(n_runs: int, t: torch.Tensor, t_scale_bounds, t_min_exp, t_m
         pts = sobol.draw(n_candidates)
         cand_t_scales = torch.exp(log_t_scale_lo + pts[:, 0] * (log_t_scale_hi - log_t_scale_lo))
         cand_Ts = torch.exp(log_T_lo + pts[:, 1] * (log_T_hi - log_T_lo))
-        dt_nd_cand = dt_exp / cand_t_scales
-        subsample_cand = torch.clamp(torch.round(dt_nd_cand / dt_nd_min), min=1).long()
-        N_points_cand = (cand_Ts / dt_exp).long()
-        n_fine_cand = steady_idx + N_points_cand * subsample_cand
+        # The batch loop's own clock arithmetic (core/SBI/clock.py), vectorised: the filter and the loop
+        # agree on every candidate's fine steps.
+        n_fine_cand = _clock.training_n_fine(dt_exp, cand_t_scales, cand_Ts, dt_nd_min, steady_idx)
         valid = n_fine_cand <= n_fine_max
         return cand_t_scales[valid], cand_Ts[valid]
 
@@ -1304,9 +1304,14 @@ def _batch_schedule(n_runs: int, t: torch.Tensor, t_scale_bounds, t_min_exp, t_m
     valid_t_scales, valid_Ts = _draw_and_filter(n_runs * oversample)
     # Fallback: keep drawing more candidates until we have enough valid ones. A whole draw coming
     # back empty means NO (t_scale, T_obs) in the t_scale bounds and recording range fits the grid,
-    # so redrawing would spin forever -- say what is wrong instead of hanging.
+    # so redrawing would spin forever -- say what is wrong instead of hanging. That reading needs a
+    # redraw large enough to be empty only when nothing fits: a run of a few batches on a narrow box
+    # (a frame takes a whole number of fine steps, at least two just below the box's top) would draw
+    # a handful of candidates that can all miss. Drawing more changes no schedule: the Sobol sequence
+    # continues where it was, and the first n_runs candidates that fit are the ones kept.
+    redraw = max(n_runs * oversample, 1024)
     while valid_t_scales.shape[0] < n_runs:
-        more_t_scales, more_Ts = _draw_and_filter(n_runs * oversample)
+        more_t_scales, more_Ts = _draw_and_filter(redraw)
         if more_t_scales.numel() == 0:
             raise ValueError(
                 f"No (t_scale, T_obs) pair in the t_scale bounds and recording range fits the "
@@ -1342,10 +1347,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     Each batch shares a single (t_scale_k, T_k) pair sampled via Sobol sequence over the
     2D space [t_scale_lo, t_scale_hi] x [t_min_exp, t_max_exp]. Within a batch, the 11 ND
     parameters and (D, K_gs*D) vary per-simulation, but t_scale is overridden to the
-    batch-level value. The pre-simulated ND trajectory is subsampled to dt_nd_k = dt_exp / t_scale_k
-    and truncated to T_nd_k = T_k / t_scale_k points, so that after rescaling every simulation
-    has physical duration T_k at sampling rate 1/dt_exp. Summary statistics are computed with
-    the fixed dt_exp, and log(T_k) is appended to the conditioning vector.
+    batch-level value. Each batch runs on its record clock (core/SBI/clock.py): the transient at
+    dt_nd_min, then a whole number of fine steps per frame of exactly dt_nd_k = dt_exp / t_scale_k,
+    kept for T_k / dt_exp frames, so that after rescaling every simulation is the cell at t_scale_k
+    recorded for T_k at the rate 1/dt_exp, with its drive's clock starting at the first frame. Summary
+    statistics are computed with dt_exp, the frames' true spacing, and log(T_k) is appended to the
+    conditioning vector.
 
     If theta_transform is provided, `prior` is interpreted as a LATENT prior. Samples z
     from it, applies theta_transform(z) to get physical θ for the simulator, and stores
@@ -1663,16 +1670,18 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 # correct; recording the wrong thing is not.
                 _pending_rng = _try_rng_snapshot(_tc, device, chi_gen)
                 _pending_rng_at = batch_k
-            # --- Batch-level scale and duration (unchanged) ---
+            # --- Batch-level scale and duration ---
             t_scale_k = batch_t_scales[batch_k].item()
             T_k = batch_Ts[batch_k].item()
             T_nd_k = T_k / t_scale_k
             dt_nd_k = dt_exp / t_scale_k
-            subsample_factor = max(1, round(dt_nd_k / dt_nd_min))
             N_points_k = int(T_nd_k / dt_nd_k)
-            n_fine_total = steady_idx + N_points_k * subsample_factor
-            t_fine = t[:n_fine_total]
-            n_segs_k = max(1, math.ceil(n_fine_total / CHUNK_LEN))
+            # The batch's record clock: the transient at dt_nd_min, then a whole number of fine steps per
+            # frame of exactly dt_nd_k, so the trace is the cell at t_scale_k and its frames are dt_exp
+            # apart (core/SBI/clock.py). The schedule's filter used the same arithmetic.
+            clock_k = _clock.frame_clock(dt_exp, t_scale_k, N_points_k, dt_nd_min, steady_idx, CHUNK_LEN)
+            n_fine_total = clock_k.n_fine
+            t_fine = clock_k.grid(dtype, device)
             # Everything that determines this batch's memory footprint, in one string, set BEFORE the
             # first allocation that could fail. K is deliberately absent: the probe count is drawn
             # below, and the tag has to exist before force0 -- the largest single allocation in a chi
@@ -1751,9 +1760,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                                               * (math.log(1.0) - math.log(0.3)) + math.log(0.3)))
 
             geom = _BatchGeometry(
-                model=model, t_fine=t_fine, n_segs_k=n_segs_k, steady_idx=steady_idx,
-                subsample_factor=subsample_factor, N_points_k=N_points_k, T_k=T_k,
-                n_force_ch=n_force_ch, dt_exp=dt_exp, forcing_idx=forcing_idx, sim_ridx=sim_ridx,
+                model=model, clock=clock_k, t_fine=t_fine, T_k=T_k,
+                n_force_ch=n_force_ch, forcing_idx=forcing_idx, sim_ridx=sim_ridx,
                 fixed_dict=fixed_dict, state_dep_drift=state_dep_drift, dtype=dtype, device=device,
                 **(dict(chi_k_pad=chi_k_pad, chi_f0=chi_f0, chi_freq_bounds=chi_freq_bounds,
                         chi_max_cycles=chi_max_cycles, chi_k_fixed=chi_k_fixed, chi_gen=chi_gen,
