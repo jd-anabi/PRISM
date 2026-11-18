@@ -8,7 +8,7 @@ def _nadrowski_compiled_step(
     tau_c: torch.Tensor, s: torch.Tensor, a: torch.Tensor, beta: torch.Tensor,
     n: torch.Tensor, temp: torch.Tensor,
     x_noise: torch.Tensor, y_noise: torch.Tensor,
-    dt: float, sqrt_dt: float,
+    dt: torch.Tensor, sqrt_dt: torch.Tensor,
 ) -> torch.Tensor:
     """One Euler-Maruyama step for Nadrowski (state-dependent diffusion), JIT-scripted.
 

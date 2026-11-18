@@ -110,7 +110,7 @@ def test_state_dependent_noise_detection_and_gx():
     from core.Solvers import sdeint
     res = sdeint.Solver().euler(
         UserModel(c, (torch.ones(1),), torch.zeros(1, 1, 101), batch_size=1),
-        torch.tensor([[0.1]]), (0.0, 0.5), 101, state_dep_drift=True)
+        torch.tensor([[0.1]]), torch.full((1, 1), 0.5 / 100), 101, state_dep_drift=True)
     assert torch.isfinite(res).all()
 
     # additive stays False + cached + x-invariant
@@ -142,15 +142,15 @@ def test_compiled_step_matches_eager():
                        batch_size=B)
         assert hasattr(um, "compiled_step") and um.compiled_params() == um.params
         inits = torch.full((B, n_vars), 0.2)
-        torch.manual_seed(3); a = solver.euler(um, inits, (0.0, 0.25), 50, state_dep_drift=sdd)
-        torch.manual_seed(3); b = solver.euler_compiled(um, inits, (0.0, 0.25), 50, state_dep_drift=sdd)
+        torch.manual_seed(3); a = solver.euler(um, inits, 0.25 / 49, 50, state_dep_drift=sdd)
+        torch.manual_seed(3); b = solver.euler_compiled(um, inits, 0.25 / 49, 50, state_dep_drift=sdd)
         assert torch.allclose(a, b, atol=1e-4, rtol=1e-4), (variables, (a - b).abs().max().item())
 
     # No compiled step built -> no compiled_step attr -> __sols stays on eager euler (safe fallback).
     c0 = parse_user_model([{"name": "x", "drift": "-x", "D": "d0"}])   # compiled_step_fn stays None
     um0 = UserModel(c0, (torch.full((4,), 0.02),), torch.zeros(4, 1, 10), batch_size=4)
     assert not hasattr(um0, "compiled_step")
-    assert torch.isfinite(solver.euler(um0, torch.zeros(4, 1), (0.0, 0.05), 10)).all()
+    assert torch.isfinite(solver.euler(um0, torch.zeros(4, 1), 0.05 / 9, 10)).all()
 
 
 def test_user_model_constant_and_zero_noise_normalization():

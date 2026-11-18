@@ -1,5 +1,4 @@
 import logging
-import math
 from typing import Any
 
 import torch
@@ -94,14 +93,35 @@ def _advance(bar, k: int) -> None:
 #
 # The PARAMETERS are static buffers copied into per call rather than captured by reference, which is
 # what lets one graph serve every training batch at a given geometry. Capturing `params` directly
-# would bake the address of one model's tensors and silently replay stale physics for the next.
+# would bake the address of one model's tensors and silently replay stale physics for the next. The
+# STEP and its root are static buffers too, copied in the same way: every training batch integrates at
+# its own step, so a step baked into the capture (or into its key) would capture once per batch.
 _GRAPH_CACHE: dict = {}
 _GRAPH_DISABLED = False          # set once if capture fails, so we do not retry every segment
 
 
-def _graph_key(step, x0, force, dt, chunk):
+def _graph_key(step, x0, force, chunk):
     return (id(step), tuple(x0.shape), int(force.shape[1]), chunk,
-            str(x0.dtype), str(x0.device), float(dt))
+            str(x0.dtype), str(x0.device))
+
+
+def step_tensors(dt, batch_size: int, dtype: torch.dtype, device) -> tuple[torch.Tensor, torch.Tensor]:
+    """The step and its square root as ``(batch, 1)`` tensors of the state's dtype, one value per row.
+
+    ``dt`` is a float or a tensor of one value or of one value per row. It is taken in double, its root is
+    taken in double, and each is rounded ONCE to the state's dtype -- exactly what a step handed to the
+    arithmetic as two Python floats computes, so the tensor form changes no number. A pair of times, the
+    argument this replaced, is refused: the solver never derives a step from times.
+    """
+    if isinstance(dt, (tuple, list)):
+        raise TypeError("the solver takes its step, not a pair of times; pass the step itself")
+    d = (dt.to(dtype=torch.float64) if torch.is_tensor(dt)
+         else torch.tensor(float(dt), dtype=torch.float64)).reshape(-1, 1)
+    if d.shape[0] not in (1, batch_size):
+        raise ValueError(f"a step for {d.shape[0]} rows cannot serve a batch of {batch_size}")
+    d = d.expand(batch_size, 1)
+    return (d.to(dtype=dtype, device=device).contiguous(),
+            torch.sqrt(d).to(dtype=dtype, device=device).contiguous())
 
 
 def drop_graph_cache() -> int:
@@ -128,13 +148,16 @@ def drop_graph_cache() -> int:
 
 
 def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
-    """Capture (or fetch) a graph replaying ``chunk`` Euler steps. None => caller runs eager."""
+    """Capture (or fetch) a graph replaying ``chunk`` Euler steps. None => caller runs eager.
+
+    ``dt`` and ``sqrt_dt`` are this call's ``(batch, 1)`` step tensors; the capture reads static copies of
+    them, which the caller fills per call like the parameters."""
     global _GRAPH_DISABLED
     if _GRAPH_DISABLED or not getattr(config, "SOLVER_CUDA_GRAPHS", True):
         return None
     if x0.device.type != "cuda" or not torch.cuda.is_available():
         return None
-    key = _graph_key(step, x0, force, dt, chunk)
+    key = _graph_key(step, x0, force, chunk)
     ent = _GRAPH_CACHE.get(key)
     if ent is not None:
         return ent
@@ -147,6 +170,7 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
         f_s = torch.zeros((B, n_ch, chunk), **kw)
         out_s = torch.empty((chunk, B, d), **kw)
         p_s = tuple(p.clone() for p in params)
+        dt_s, sq_s = dt.clone(), sqrt_dt.clone()
 
         # Warm-up on a side stream is required before capture; three passes is the documented
         # minimum that lets lazy allocations and any autotuning settle.
@@ -157,7 +181,7 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
                 xx = x_s.clone()
                 for j in range(chunk):
                     dW_s.normal_()
-                    xx = step(xx, f_s[:, :, j], dW_s, *p_s, dt, sqrt_dt)
+                    xx = step(xx, f_s[:, :, j], dW_s, *p_s, dt_s, sq_s)
         torch.cuda.current_stream().wait_stream(s)
         torch.cuda.synchronize()
 
@@ -166,7 +190,7 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
             cur = x_s
             for j in range(chunk):
                 dW_s.normal_()
-                cur = step(cur, f_s[:, :, j], dW_s, *p_s, dt, sqrt_dt)
+                cur = step(cur, f_s[:, :, j], dW_s, *p_s, dt_s, sq_s)
                 out_s[j] = cur
             # Chain the state forward INSIDE the graph, so consecutive chunks need no copy between
             # replays -- x_s is both the graph's input and its output.
@@ -175,7 +199,7 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
         if len(_GRAPH_CACHE) >= getattr(config, "SOLVER_GRAPH_CACHE_MAX", 8):
             _GRAPH_CACHE.pop(next(iter(_GRAPH_CACHE)))
         ent = {"graph": g, "x": x_s, "dW": dW_s, "force": f_s, "out": out_s,
-               "params": p_s, "chunk": chunk}
+               "params": p_s, "dt": dt_s, "sqrt_dt": sq_s, "chunk": chunk}
         _GRAPH_CACHE[key] = ent
         return ent
     except Exception as e:                     # noqa: BLE001 -- a solver must never die on a speedup
@@ -187,20 +211,17 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
 
 class Solver:
     def __init__(self):
-        def euler(sde: Any, x0: torch.Tensor, ts: tuple[float, float], n: int, state_dep_drift: bool = False) -> torch.Tensor:
+        def euler(sde: Any, x0: torch.Tensor, dt, n: int, state_dep_drift: bool = False) -> torch.Tensor:
             """
-            Explicit Euler-Maruyama SDE solver.
+            Explicit Euler-Maruyama SDE solver: ``n`` points, ``n - 1`` steps of ``dt``.
 
-            Noise is assumed diagonal: `sde.g(...)` returns a (batch, d) vector of
-            per-channel amplitudes, and the update is `x + f*dt + g*dW` elementwise.
+            ``dt`` is the step, a float or one value per row (see :func:`step_tensors`); the caller hands
+            it, and nothing here derives one from times. Noise is assumed diagonal: `sde.g(...)` returns a
+            (batch, d) vector of per-channel amplitudes, and the update is `x + f*dt + g*dW` elementwise.
             """
             x0 = x0.to(sde.device)
-
-            t = torch.linspace(*ts, n, device=x0.device)
-            dt = t[1].item() - t[0].item()
-            sqrt_dt = math.sqrt(dt)
-
             batch_size, d = x0.shape
+            dt, sqrt_dt = step_tensors(dt, batch_size, x0.dtype, x0.device)
 
             # empty, not zeros: row 0 is assigned immediately below and _step_iter is range(n-1), so
             # the loop writes every remaining row. The zero-fill was a full memset of a buffer that
@@ -229,13 +250,14 @@ class Solver:
 
             return xs
 
-        def euler_compiled(sde: Any, x0: torch.Tensor, ts: tuple[float, float], n: int, state_dep_drift: bool = False) -> torch.Tensor:
+        def euler_compiled(sde: Any, x0: torch.Tensor, dt, n: int, state_dep_drift: bool = False) -> torch.Tensor:
             """
-            Euler-Maruyama via the model's `compiled_step`, replayed from a CUDA Graph where possible.
+            Euler-Maruyama via the model's `compiled_step`, replayed from a CUDA Graph where possible:
+            ``n`` points, ``n - 1`` steps of ``dt``, the step handed in as in :func:`euler`.
 
             The model must expose:
               - `compiled_step(x, force_step, dW, *params, dt, sqrt_dt) -> next_x`, a
-                `@torch.jit.script` function
+                `@torch.jit.script` function whose step and root are ``(batch, 1)`` tensors
               - `compiled_params()` returning the params tuple, POSITIONALLY load-bearing
               - `f_pure(x, force_step)`
 
@@ -263,12 +285,8 @@ class Solver:
             ``test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity``.
             """
             x0 = x0.to(sde.device)
-
-            t = torch.linspace(*ts, n, device=x0.device)
-            dt = t[1].item() - t[0].item()
-            sqrt_dt = math.sqrt(dt)
-
             batch_size, d = x0.shape
+            dt, sqrt_dt = step_tensors(dt, batch_size, x0.dtype, x0.device)
 
             # empty, not zeros -- same reasoning as the eager euler above.
             xs = torch.empty((n, batch_size, d), dtype=x0.dtype, device=x0.device)
@@ -283,10 +301,12 @@ class Solver:
                    if n_steps >= chunk else None)
 
             if ent is not None:
-                # Copy THIS call's parameters into the captured statics. The graph replays whatever
-                # is in these buffers, so this is what makes one capture serve every batch.
+                # Copy THIS call's parameters and step into the captured statics. The graph replays
+                # whatever is in these buffers, so this is what makes one capture serve every batch.
                 for ps, p in zip(ent["params"], params):
                     ps.copy_(p)
+                ent["dt"].copy_(dt)
+                ent["sqrt_dt"].copy_(sqrt_dt)
                 ent["x"].copy_(x0)
                 f_s, out_s, g = ent["force"], ent["out"], ent["graph"]
                 n_full = n_steps // chunk

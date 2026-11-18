@@ -672,16 +672,41 @@ def _max_sim_batch(batch_size: int, n_fine: int, steady_idx: int, n_vars: int, n
     return max(_MIN_SIM_CHUNK, 1 << (int(fits).bit_length() - 1))
 
 
+def _plan_for(n_points: int, n_segs: int, dt) -> list | None:
+    """The simulator's plan for a step ``dt`` given as a float or one value per row: ``n_segs`` even
+    segments over the grid, every one at that step. None for no step (the simulator then reads the grid's)."""
+    if dt is None:
+        return None
+    from core.Simulator.simulator import segment_bounds
+    bounds = segment_bounds(n_points, n_segs)
+    return [(bounds[k], bounds[k + 1], dt) for k in range(len(bounds) - 1)]
+
+
+def _plan_rows(plan, s: int, e: int, batch_size: int):
+    """``plan`` for rows [s, e) of a batch of ``batch_size``: a per-row step is sliced with the rows, as
+    params, inits and the drive are, so a split or halved batch integrates each row at its own step."""
+    if plan is None:
+        return None
+    out = []
+    for a, b, dt in plan:
+        if torch.is_tensor(dt) and dt.dim() > 0 and dt.shape[0] == batch_size and batch_size > 1:
+            dt = dt[s:e]
+        out.append((a, b, dt))
+    return out
+
+
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor,
             n_segs: int, steady_idx: int, fixed_dict: dict = None, state_dep_drift: bool = False,
             batch_size: int = 1, var_idx: int | None = None,
-            dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
+            dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu"), dt=None):
     """
     Simulate one batch of observations, splitting it whenever the geometry would not fit on device.
 
     :param model: built-in model name (one of VALID_SIMS) or a registered user model.
     :param params: (batch, n_params) simulation parameters.
     :param t: ND time grid; dtype/device are applied during processing.
+    :param dt: the step, a float or one value per row, handed to every one of the ``n_segs`` segments;
+        None leaves the simulator to read the grid's first interval.
     :param inits: (batch, n_vars) initial conditions.
     :param force: (batch, n_ch, T) drive tensor (or a broadcastable single-row drive).
     :param n_segs: time segments the simulator integrates over.
@@ -700,6 +725,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     from core import registry
     if VALID_SIMS.get(model.lower()) is None and not registry.is_user_model(model):
         raise ValueError(f"Invalid simulator: {model}")
+    plan = _plan_for(t.shape[0], n_segs, dt)
 
     # --- memory guard: split the batch if this geometry would not fit ---
     # The simulator's tensors are all linear in the batch: the (n_vars, batch, T) solution buffer,
@@ -739,7 +765,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
                 model, params[s:e], t, inits[s:e],
                 force[s:e] if force.shape[0] == batch_size else force,
                 n_segs, steady_idx, fixed_dict, state_dep_drift, e - s, var_idx, dtype, device,
-                out=out[:, s:e, :])
+                out=out[:, s:e, :], plan=_plan_rows(plan, s, e, batch_size))
         # Counted as CLEAN even though it split. What _budget_note_ok tracks is "no OOM happened",
         # not "no split happened" -- a predictive split is the guard working, not failing. Keying
         # recovery on un-split batches instead would deadlock the cap: after one OOM tightens it, the
@@ -748,13 +774,13 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
         _budget_note_ok()
         return out
     out = _gen_obs_retry(model, params, t, inits, force, n_segs, steady_idx, fixed_dict,
-                         state_dep_drift, batch_size, var_idx, dtype, device)
+                         state_dep_drift, batch_size, var_idx, dtype, device, plan=plan)
     _budget_note_ok()
     return out
 
 
 def _gen_obs_retry(model, params, t, inits, force, n_segs, steady_idx, fixed_dict,
-                   state_dep_drift, batch_size, var_idx, dtype, device, out=None):
+                   state_dep_drift, batch_size, var_idx, dtype, device, out=None, plan=None):
     """One simulation batch, halving and re-running if it hits an out-of-memory.
 
     THE COMPANION TO _max_sim_batch, NOT A REPLACEMENT. That guard is PREDICTIVE, and on a shared card
@@ -785,7 +811,7 @@ def _gen_obs_retry(model, params, t, inits, force, n_segs, steady_idx, fixed_dic
     """
     try:
         return _gen_obs_one(model, params, t, inits, force, n_segs, steady_idx, fixed_dict,
-                            state_dep_drift, batch_size, var_idx, dtype, device, out=out)
+                            state_dep_drift, batch_size, var_idx, dtype, device, out=out, plan=plan)
     except RuntimeError as err:
         # RuntimeError, NOT Exception: every OOM form derives from it (SimulationError,
         # torch.OutOfMemoryError, torch.AcceleratorError), and staying this narrow is also what keeps
@@ -830,7 +856,7 @@ def _gen_obs_retry(model, params, t, inits, force, n_segs, steady_idx, fixed_dic
             model, params[s:e], t, inits[s:e],
             force[s:e] if force.shape[0] == batch_size else force,
             n_segs, steady_idx, fixed_dict, state_dep_drift, e - s, var_idx, dtype, device,
-            out=out[:, s:e, :])
+            out=out[:, s:e, :], plan=_plan_rows(plan, s, e, batch_size))
     return out
 
 
@@ -912,12 +938,13 @@ def _rows_with_oom_retry(fn, lo: int, hi: int, *, per_row_elements: int,
 
 
 def _gen_obs_one(model, params, t, inits, force, n_segs, steady_idx, fixed_dict,
-                 state_dep_drift, batch_size, var_idx, dtype, device, out=None):
+                 state_dep_drift, batch_size, var_idx, dtype, device, out=None, plan=None):
     """One un-split simulation batch. Split planning lives in gen_obs; this is the body.
 
     ``out``, when given, is the ``(n_out, batch, T')`` DESTINATION these rows belong in -- normally an
     ``out[:, s:e, :]`` view owned by a splitting caller. Writing into it instead of returning a fresh
-    clone is what makes splitting memory-NEUTRAL rather than memory-POSITIVE; see gen_obs.
+    clone is what makes splitting memory-NEUTRAL rather than memory-POSITIVE; see gen_obs. ``plan`` is
+    the simulator's (``Simulator.simulate``), already sliced to these rows.
     """
     from core import registry
 
@@ -945,7 +972,7 @@ def _gen_obs_one(model, params, t, inits, force, n_segs, steady_idx, fixed_dict,
         simulator_cls = VALID_SIMS[model.lower()]
         simulator = simulator_cls(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
 
-    sol = simulator.simulate(state_dep_drift=state_dep_drift)
+    sol = simulator.simulate(state_dep_drift=state_dep_drift, plan=plan)
     # Slice BEFORE the copy: the clone has to coexist with the solver's full (n_vars, batch, T)
     # buffer, so narrowing to the one variable the caller reads is the difference between two
     # n_vars-deep tensors and one. Slicing keeps dim 0, so [0, :, :] means the same thing either way.

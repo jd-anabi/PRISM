@@ -207,7 +207,7 @@ def build_compiled_step(compiled: "CompiledUserModel"):
 
         params_sig = "".join(f", p{k}: torch.Tensor" for k in range(len(param_names)))
         lines = [f"def _user_step(x: torch.Tensor, force_step: torch.Tensor, dW: torch.Tensor"
-                 f"{params_sig}, dt: float, sqrt_dt: float) -> torch.Tensor:"]
+                 f"{params_sig}, dt: torch.Tensor, sqrt_dt: torch.Tensor) -> torch.Tensor:"]
         for j in range(n_vars):
             lines.append(f"    x{j} = x[:, {j}]")
         for j in range(n_vars):

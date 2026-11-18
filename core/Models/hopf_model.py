@@ -5,7 +5,7 @@ import torch
 def _hopf_compiled_step(
     x: torch.Tensor, force_step: torch.Tensor, dW: torch.Tensor,
     mu: torch.Tensor, beta: torch.Tensor, g: torch.Tensor,
-    dt: float, sqrt_dt: float,
+    dt: torch.Tensor, sqrt_dt: torch.Tensor,
 ) -> torch.Tensor:
     """One Euler-Maruyama step for Hopf, JIT-scripted for Python-overhead removal."""
     x0 = x[:, 0]

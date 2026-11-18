@@ -1709,10 +1709,14 @@ def test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity():
     x, dW = torch.randn(B, d), torch.randn(B, d)
     dt = 1e-4
     force_step = torch.zeros(B, 1)
-    got = _nadrowski_compiled_step(x, force_step, dW, *m.compiled_params(), dt, _math.sqrt(dt))
-    want = x + m.f_pure(x, force_step) * dt + m.g(x) * dW * _math.sqrt(dt)
+    # the step and its root are (batch, 1) tensors, one value per row, each rounded once from the double
+    dt_t, sq_t = torch.full((B, 1), dt), torch.full((B, 1), _math.sqrt(dt))
+    got = _nadrowski_compiled_step(x, force_step, dW, *m.compiled_params(), dt_t, sq_t)
+    want = x + m.f_pure(x, force_step) * dt_t + m.g(x) * dW * sq_t
     assert torch.equal(got, want), \
         f"compiled step diverged from eager by {(got - want).abs().max().item():g}"
+    # the tensor step computes exactly what a step given as two floats computes
+    assert torch.equal(want, x + m.f_pure(x, force_step) * dt + m.g(x) * dW * _math.sqrt(dt))
 
 
 def test_each_compiled_step_follows_its_models_registered_noise_flag():
@@ -1742,14 +1746,182 @@ def test_each_compiled_step_follows_its_models_registered_noise_flag():
         flag = registry.state_dep_drift(name)
         x0 = torch.full((B, d), 0.1)
         torch.manual_seed(7)
-        eager = _sdeint_mod.Solver().euler(make(), x0.clone(), (0.0, 0.2), T, state_dep_drift=flag)
+        eager = _sdeint_mod.Solver().euler(make(), x0.clone(), 0.2 / (T - 1), T, state_dep_drift=flag)
         torch.manual_seed(7)
-        comp = _sdeint_mod.Solver().euler_compiled(make(), x0.clone(), (0.0, 0.2), T,
+        comp = _sdeint_mod.Solver().euler_compiled(make(), x0.clone(), 0.2 / (T - 1), T,
                                                    state_dep_drift=flag)
         assert float((eager[-1] - eager[0]).abs().max()) > 1e-3, f"{name}: nothing moved"
         assert torch.allclose(eager, comp, rtol=1e-5, atol=1e-6), (
             f"{name}: the compiled step and the registry's noise flag disagree, max|diff| "
             f"{float((eager - comp).abs().max()):.3e}")
+
+
+class _ClockSDE:
+    """Drift 1, no noise: the state after its steps is the sum of the steps the solver took, so the
+    solver's own clock reads off directly. Float64."""
+
+    def __init__(self, B: int = 1, n_t: int = 1):
+        self.device = torch.device("cpu")
+        self.force = torch.zeros((B, 1, n_t), dtype=torch.float64)
+
+    def f(self, x, i):
+        return torch.ones_like(x)
+
+    def g(self, x=None):
+        return torch.zeros((1, 1), dtype=torch.float64)
+
+
+def _clock_simulator():
+    """A Simulator whose model is _ClockSDE: Simulator.simulate's segments and seams, read off its own clock."""
+    from core.Simulator import simulator as _sim
+
+    class ClockSim(_sim.Simulator):
+        def _set_up_model(self):
+            self.sde = _ClockSDE()
+            self.sde.force = self._force
+
+    return ClockSim
+
+
+def test_the_solver_takes_its_step_and_never_derives_one_from_times():
+    """The solver is handed its step; it no longer re-derives one from a float32 grid of the segment's end
+    points, which made every later segment's step 0.1-0.4 % off (the grid's spacing far from zero is coarse).
+
+    The step is one value per row, (batch, 1): rows at different steps each advance by their own, and a
+    step given as one float computes exactly what the same step as a tensor computes. A time pair, the old
+    argument, is refused."""
+    import inspect
+    sde = _ClockSDE(B=3)
+    x0 = torch.zeros((3, 1), dtype=torch.float64)
+    steps = torch.tensor([[0.01], [0.02], [0.03]], dtype=torch.float64)
+    xs = _sdeint_mod.Solver().euler(sde, x0, steps, 11)
+    assert xs.shape == (11, 3, 1)
+    assert torch.allclose(xs[:, :, 0], torch.arange(11, dtype=torch.float64).unsqueeze(1) * steps.T,
+                          rtol=0, atol=1e-12), xs[-1]
+    with pytest.raises(TypeError):
+        _sdeint_mod.Solver().euler(sde, x0, (0.0, 0.1), 11)
+    assert "linspace" not in inspect.getsource(_sdeint_mod), "the solver derives a step from times again"
+
+    from core.Models.nadrowski_model import NadrowskiModel
+    B, T = 4, 30
+    col = lambda v: torch.full((B,), float(v))                     # noqa: E731
+
+    def run(dt):
+        m = NadrowskiModel(k=col(0.3), lam=col(10.0), f=col(0.5), tau=col(0.05), tau_c=col(0.5), s=col(0.6),
+                           delta_e=col(1.0), beta=col(1.5), n=col(50.0), temp=col(1.2),
+                           force=torch.zeros(B, 1, T), batch_size=B)
+        torch.manual_seed(11)
+        return _sdeint_mod.Solver().euler(m, torch.full((B, 3), 0.1), dt, T, state_dep_drift=True)
+
+    assert torch.equal(run(0.0243), run(torch.full((B, 1), 0.0243, dtype=torch.float64))), \
+        "the step given as a float and as a tensor integrate differently"
+
+
+def test_a_segmented_run_equals_one_long_run_bitwise():
+    """Segment k starts from the state at the previous segment's last index and is handed the drive from
+    that index: index g holds the state after g steps in every segment, and drive index m serves step
+    m -> m+1. So a run cut into many segments equals the same steps in two, bit for bit on the CPU, with
+    a drive that changes every step and the noise on. (Each seam used to repeat a sample, and the drive's
+    index then led the state's by one.)"""
+    from core.Simulator.nadrowski_simulator import NadrowskiSimulator
+    B, n, n_tr = 3, 241, 40
+    p = torch.tensor([[0.8, 3.57, 1.32, 0.027, 0.268, 0.95, 10.0, 14.1, 50.0, 1.5]]).repeat(B, 1)
+    force = (0.2 * torch.sin(torch.arange(n, dtype=torch.float32) * 0.37)).reshape(1, 1, n).repeat(B, 1, 1)
+    inits = torch.tensor([[-0.11, -1.32, 0.5]]).repeat(B, 1)
+    two = [(0, n_tr, 0.025), (n_tr, n - 1, 0.0231)]
+    many = [(0, n_tr, 0.025), (n_tr, 41, 0.0231), (41, 97, 0.0231), (97, 98, 0.0231), (98, 200, 0.0231),
+            (200, n - 1, 0.0231)]
+
+    def run(plan):
+        sim = NadrowskiSimulator(p, force, inits, torch.zeros(n), segs=len(plan), batch_size=B)
+        torch.manual_seed(5)
+        return sim.simulate(state_dep_drift=True, plan=plan)[:, 0]
+
+    a, b = run(two), run(many)
+    assert torch.equal(a, b), f"a segmented run differs from one long run, max|diff| {float((a - b).abs().max()):.3e}"
+    assert torch.equal(a[:, :, 0], inits.T), "index 0 must be the initial state"
+    assert bool((a[:, :, 1:] != a[:, :, :-1]).any(dim=(0, 1)).all()), "a seam repeated a sample"
+
+
+def test_the_clock_holds_its_steps_across_every_seam():
+    """The solver's own clock, through Simulator.simulate: the transient's steps at its step, then the
+    recorded steps at theirs, the step switching once, at the transient's end; across every seam the clock
+    holds g * dt1 through the transient and n_tr * dt1 + (g - n_tr) * dt2 after it, at every index, to 1e-12.
+    (On the old grid it ended 783 fine steps behind over 300,000.)"""
+    n, n_tr, dt1, dt2 = 1201, 100, 0.025, 0.0231
+    plan = [(0, n_tr, dt1)] + [(a, min(a + 137, n - 1), dt2) for a in range(n_tr, n - 1, 137)]
+    sim = _clock_simulator()(torch.zeros((1, 1)), torch.zeros((1, 1, n), dtype=torch.float64),
+                             torch.zeros((1, 1), dtype=torch.float64), torch.zeros(n, dtype=torch.float64),
+                             segs=len(plan), batch_size=1)
+    clock = sim.simulate(plan=plan)[0, 0, 0, :]
+    g = torch.arange(n, dtype=torch.float64)
+    want = torch.where(g <= n_tr, g * dt1, n_tr * dt1 + (g - n_tr) * dt2)
+    assert len(plan) > 5
+    assert float((clock - want).abs().max()) < 1e-12, float((clock - want).abs().max())
+
+
+def test_a_plan_less_simulation_keeps_its_first_interval_in_every_segment():
+    """With no plan (the prior's screens hand none), Simulator.simulate reads the step ONCE, from the
+    grid's first interval exactly as its first segment always has, and keeps it in every segment: no later
+    segment re-derives a coarser one from the float32 grid far from zero, and no seam repeats a sample."""
+    t = torch.linspace(0, 1000, 40_001)[:3000]                      # float32, as the config's grid is built
+    sim = _clock_simulator()(torch.zeros((1, 1)), torch.zeros((1, 1, t.shape[0]), dtype=torch.float64),
+                             torch.zeros((1, 1), dtype=torch.float64), t, segs=3, batch_size=1)
+    clock = sim.simulate()[0, 0, 0, :].double()                    # stored in the grid's float32
+    first = torch.linspace(t[0], t[999], 1000)
+    dt0 = first[1].item() - first[0].item()
+    want = torch.arange(t.shape[0], dtype=torch.float64) * dt0
+    # two float32 rounding steps of the stored clock at its largest value (about 75): 1.5e-5. The old
+    # segments' own steps put the clock 1e-3 off by the last index, and each seam repeated a sample.
+    assert float((clock - want).abs().max()) < 1.6e-5, float((clock - want).abs().max())
+    assert float((clock[1:] - clock[:-1]).min()) > 0.02, "a seam repeated a sample"
+
+
+def test_gen_obs_carries_a_per_row_step_through_its_splits():
+    """A per-row step travels with its rows: gen_obs' predictive split and the out-of-memory halving
+    slice it with params, inits and the drive, so a split batch equals the whole one (the noise off), and
+    every row equals that row simulated alone."""
+    from core.Simulator.simulator import SimulationError
+    B, n = 8, 61
+    params = torch.tensor([[0.2, 0.5, 0.0, 0.0]]).repeat(B, 1)              # Hopf: mu, beta, no noise
+    params[:, 0] = torch.linspace(-0.3, 0.4, B)
+    inits = torch.stack([torch.linspace(0.1, 0.8, B), torch.linspace(-0.2, 0.3, B)], dim=1)
+    force = (0.1 * torch.cos(torch.arange(n) * 0.3)).reshape(1, 1, n).repeat(B, 2, 1)
+    steps = torch.linspace(0.01, 0.03, B, dtype=torch.float64)
+
+    def run(**kw):
+        return pipeline_mod.gen_obs(model="HOPF", params=params, t=torch.zeros(n), inits=inits, force=force,
+                                    n_segs=2, steady_idx=5, batch_size=B, dt=steps, **kw)
+
+    whole = run()
+    saved_plan, saved_one = pipeline_mod._max_sim_batch, pipeline_mod._gen_obs_one
+    try:
+        pipeline_mod._max_sim_batch = lambda *a, **k: 3
+        split = run()
+        pipeline_mod._max_sim_batch = saved_plan
+
+        def oom_above_two(*a, **k):
+            if a[1].shape[0] > 2:
+                try:
+                    raise torch.OutOfMemoryError("CUDA error: out of memory")
+                except RuntimeError as e:
+                    raise SimulationError("HopfModel euler failed (batch, out of memory)") from e
+            return saved_one(*a, **k)
+        pipeline_mod._gen_obs_one = oom_above_two
+        floor, pipeline_mod._MIN_SIM_CHUNK = pipeline_mod._MIN_SIM_CHUNK, 1
+        try:
+            halved = run()
+        finally:
+            pipeline_mod._MIN_SIM_CHUNK = floor
+    finally:
+        pipeline_mod._max_sim_batch, pipeline_mod._gen_obs_one = saved_plan, saved_one
+    assert torch.equal(whole, split), "the predictive split lost the per-row step"
+    assert torch.equal(whole, halved), "the out-of-memory halving lost the per-row step"
+    for r in (0, 5):
+        alone = pipeline_mod.gen_obs(model="HOPF", params=params[r:r + 1], t=torch.zeros(n), inits=inits[r:r + 1],
+                                     force=force[r:r + 1], n_segs=2, steady_idx=5, batch_size=1, dt=steps[r:r + 1])
+        assert torch.equal(alone[:, 0], whole[:, r]), f"row {r} simulated alone differs"
+    assert not torch.equal(whole[:, 0], whole[:, 1]) and float((whole[:, -1] - whole[:, 0]).abs().max()) > 1e-3
 
 
 def test_box_roundtrip_never_yields_a_nonfinite_latent_target():
@@ -3864,17 +4036,17 @@ def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
     dev = torch.device("cuda")
     B, T = 128, 2 * _cfg.SOLVER_GRAPH_CHUNK + 3        # 2 full chunks + a 2-step tail
     x0 = torch.linspace(-0.2, 0.2, B, device=dev).unsqueeze(1).repeat(1, 3).contiguous()
-    ts = (0.0, (T - 1) * 0.001)
+    dt = 0.001
 
     prev = _cfg.SOLVER_CUDA_GRAPHS
     try:
         _cfg.SOLVER_CUDA_GRAPHS = False
         for _ in range(3):                             # specialise the scripted step; see above
-            _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), ts, T)
-        eager = _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), ts, T)
+            _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+        eager = _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
         _cfg.SOLVER_CUDA_GRAPHS = True
         _sd._GRAPH_CACHE.clear()
-        graphed = _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), ts, T)
+        graphed = _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
     finally:
         _cfg.SOLVER_CUDA_GRAPHS = prev
 
@@ -3910,7 +4082,7 @@ def test_the_cuda_graph_preserves_the_rng_contract_a_cache_resume_depends_on():
     dev = torch.device("cuda")
     B, T = 128, 2 * _cfg.SOLVER_GRAPH_CHUNK + 1
     x0 = torch.zeros((B, 3), device=dev)
-    ts = (0.0, (T - 1) * 0.001)
+    dt = 0.001
 
     def run():
         from core.Models.nadrowski_model import NadrowskiModel
@@ -3918,7 +4090,7 @@ def test_the_cuda_graph_preserves_the_rng_contract_a_cache_resume_depends_on():
         f = torch.zeros((B, 1, T), device=dev)
         m = NadrowskiModel(o(0.8), o(3.57), o(1.32), o(0.027), o(0.268), o(0.95), o(10.), o(14.1),
                            o(50.), o(1.5), f, batch_size=B, device=dev, dtype=torch.float32)
-        return _sd.Solver().euler_compiled(m, x0.clone(), ts, T)
+        return _sd.Solver().euler_compiled(m, x0.clone(), dt, T)
 
     prev = _cfg.SOLVER_CUDA_GRAPHS
     try:
@@ -3938,6 +4110,41 @@ def test_the_cuda_graph_preserves_the_rng_contract_a_cache_resume_depends_on():
              "would break")
     finally:
         _cfg.SOLVER_CUDA_GRAPHS = prev
+
+
+@pytest.mark.gpu
+def test_two_batches_at_different_steps_share_one_capture():
+    """The step is a static buffer copied into the captured graph per call, like the parameters, and not
+    part of the capture's key: batches of one width at different steps (every training batch has its own)
+    replay one graph, and each integrates at its own step -- the graph equals the eager loop at that step."""
+    from core import config as _cfg
+    from core.Solvers import sdeint as _sd
+    if not torch.cuda.is_available():
+        print("      (no CUDA -- skipping the shared-capture check)")
+        return
+    dev = torch.device("cuda")
+    B, T = 128, 2 * _cfg.SOLVER_GRAPH_CHUNK + 3
+    x0 = torch.linspace(-0.2, 0.2, B, device=dev).unsqueeze(1).repeat(1, 3).contiguous()
+    prev = _cfg.SOLVER_CUDA_GRAPHS
+    try:
+        _cfg.SOLVER_CUDA_GRAPHS = False
+        eager = {}
+        for dt in (0.001, 0.0017):
+            for _ in range(3):                         # warm the scripted step (see the bitwise test above)
+                _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+            eager[dt] = _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+        _cfg.SOLVER_CUDA_GRAPHS = True
+        _sd._GRAPH_CACHE.clear()
+        graphed = {dt: _sd.Solver().euler_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+                   for dt in (0.001, 0.0017)}
+        assert len(_sd._GRAPH_CACHE) == 1, f"{len(_sd._GRAPH_CACHE)} captures for one width"
+    finally:
+        _cfg.SOLVER_CUDA_GRAPHS = prev
+    assert not torch.equal(graphed[0.001], graphed[0.0017]), "the second step was not honoured"
+    for dt in graphed:
+        assert torch.equal(graphed[dt], eager[dt]), \
+            f"step {dt}: the shared capture disagrees with the eager loop, max|diff| " \
+            f"{float((graphed[dt] - eager[dt]).abs().max()):.3e}"
 
 
 @pytest.mark.gpu

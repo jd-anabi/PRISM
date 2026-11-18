@@ -486,7 +486,8 @@ class ModelBuilderScreen(QWidget):
             model = UserModel(compiled, torch.unbind(params, dim=1), force, batch_size=1)
             inits = torch.tensor([[float(v["init"]) for v in doc["variables"]]])
             dt_nd = DT_EXP_S / (2.0 * t_scale)
-            res = sdeint.Solver().euler(model, inits, (0.0, _SMOKE_STEPS * dt_nd), _SMOKE_STEPS + 1,
+            res = sdeint.Solver().euler(model, inits, torch.full((1, 1), dt_nd, dtype=torch.float64),
+                                        _SMOKE_STEPS + 1,
                                         state_dep_drift=compiled.state_dep_noise)
             if not bool(torch.isfinite(res).all()):
                 self._set_status("Validation integration diverged (NaN/inf) -- check the drift/noise "
