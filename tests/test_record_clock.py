@@ -274,9 +274,8 @@ class _Recorder:
         return x + 0.01 * torch.randn_like(x)
 
 
-def test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step():
-    """gen_obs requires its run's clock or its step, and every call of it in the program's code names one: a call
-    that named neither would run on a step read off its grid, the plausible-looking row a wrong clock gives."""
+def _calls_in_core(name):
+    """Every call of a function or method called ``name`` in the program's code: (file, line, keywords named)."""
     import ast
     from pathlib import Path
     from tests._fixtures import CODE_ROOTS
@@ -287,13 +286,30 @@ def test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step():
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if isinstance(node, ast.Call):
                     f = node.func
-                    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
-                    if name == "gen_obs":
-                        named = {k.arg for k in node.keywords}
-                        calls.append((path.relative_to(repo).as_posix(), node.lineno, bool(named & {"clock", "dt"})))
+                    if (f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)) == name:
+                        calls.append((path.relative_to(repo).as_posix(), node.lineno,
+                                      {k.arg for k in node.keywords}))
+    return calls
+
+
+def test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step():
+    """gen_obs requires its run's clock or its step, and every call of it in the program's code names one: a call
+    that named neither would run on a step read off its grid, the plausible-looking row a wrong clock gives."""
+    calls = _calls_in_core("gen_obs")
     assert len(calls) >= 10, calls
-    bare = [(p, n) for p, n, ok in calls if not ok]
+    bare = [(p, n) for p, n, named in calls if not named & {"clock", "dt"}]
     assert not bare, f"gen_obs called with neither a clock nor a step: {bare}"
+
+
+def test_every_sinusoidal_drive_in_core_is_built_on_its_clocks_times():
+    """Every sinusoidal drive the program builds is handed its clock's times (``t_dim=``), so its phase is counted
+    from the first kept frame, where every lock-in starts. A drive built from the model-time grid instead would
+    start its clock at the settling's start and carry 2 pi f t_scale times the settling's length into every phase:
+    a plausible-looking trace, wrong in the one channel a lock-in reads. No call is excepted."""
+    calls = _calls_in_core("build_nondim_sin_force_tensor")
+    assert len(calls) >= 9, calls
+    bare = [(p, n) for p, n, named in calls if "t_dim" not in named]
+    assert not bare, f"a sinusoidal drive built without its clock's times: {bare}"
 
 
 def test_gen_obs_refuses_a_call_without_a_clock_or_a_step_and_a_stale_geometry():
@@ -428,20 +444,37 @@ def test_a_predictive_check_runs_each_draw_at_its_own_time_scale_on_the_frames(m
 
 def test_the_simulated_observation_is_on_its_clock(store, monkeypatch):
     """A simulated observation is the cell at its own time scale on the record clock: at 30 ms, two fine steps per
-    frame (the nearest whole number of the old rule, one, would make a cell at 40 ms), its drive's clock at the
-    first frame."""
+    frame (the nearest whole number of the old rule, one, would make a cell at 40 ms), and its drive's clock at the
+    first frame: on frame k the forced drive is the drive's own value k frame intervals after its drawn phase, so it
+    stands at that phase at the first frame, as training's forced rows do."""
     from core import orchestrator
     from core.SBI import pipeline
-    real = pipeline.gen_obs
-    seen = []
+    real, real_force = pipeline.gen_obs, pipeline.build_nondim_sin_force_tensor
+    seen, drives = [], []
 
     def wrap(*a, **k):
         seen.append(k.get("clock"))
         return real(*a, **k)
+
+    def wrap_force(fp, t, rescale, fidx, ridx, **k):
+        out = real_force(fp, t, rescale, fidx, ridx, **k)
+        drives.append((fp.double(), rescale.double(), dict(fidx), dict(ridx), out))
+        return out
     monkeypatch.setattr(pipeline, "gen_obs", wrap)
+    monkeypatch.setattr(pipeline, "build_nondim_sin_force_tensor", wrap_force)
     cfg = _master_cfg(t_scale=30.0)
     from matplotlib import pyplot as plt
     orchestrator.generate_observations(cfg, fig_sink=lambda title, fig: plt.close(fig))
     want = clock.frame_clock(cfg.dt_exp, 30.0, 200, cfg.dt_nd_min, cfg.steady_idx, config.CHUNK_LEN)
     assert seen and all(c is not None and (c.stride, c.n_fine, c.n_points) == (want.stride, want.n_fine, 200)
                         for c in seen), seen
+    assert len(drives) == 1, len(drives)
+    fp, resc, fidx, ridx, out = drives[0]
+    k = torch.arange(want.n_points, dtype=torch.float64)
+    p = {name: float(fp[0, fidx[name]]) for name in ("amp", "freq", "phase", "offset")}
+    f_dim = p["amp"] * torch.sin(2 * math.pi * p["freq"] * k * cfg.dt_exp + p["phase"]) + p["offset"]
+    f_nd = f_dim / float(resc[0, ridx["f_scale"]])
+    on_frames = out[0, 0, want.n_transient + want.stride * k.long()].double()
+    assert float(f_nd.abs().max()) > 0
+    assert torch.allclose(on_frames, f_nd, rtol=1e-4, atol=1e-5 * float(f_nd.abs().max())), \
+        float((on_frames - f_nd).abs().max())
