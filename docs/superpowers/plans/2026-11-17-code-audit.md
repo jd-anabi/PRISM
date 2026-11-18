@@ -53,7 +53,9 @@ antropy and pybispectra leave `requirements.txt`); Q3 "Yes, all sixteen"; the pl
 - A page never holds a toolkit item across its list's rebuild; a test that reads state the whole process shares takes
   a reading first or works on a stand-in; a guard's or a test's message never prints what it read from the computer.
 - Git: the local `main`, one commit per logical step, a short subject, never amended, the Co-Authored-By trailer; a
-  builder has the tree to itself; every suite a commit edits runs WHOLE before the commit.
+  builder has the tree to itself; every suite a commit edits, and every suite that imports a module it changes
+  directly, runs WHOLE before the commit; the broad set (every suite that reads a file the task edits) runs ONCE per
+  task, before its last commit that changes code (the owner, 2026-11-17 15:33 PST: "Yes, once per task").
 
 ## Review Focus
 
@@ -274,6 +276,29 @@ S5-24.
   training resumes, what is still the command line's and why; and a statement of readiness that says where Q1 stands.
 - [ ] One Opus drafter, one Sonnet reader against the window at HEAD; the exit's `CLAUDE.md` edits drafted for the
   owner (the sentence that calls the runbook a command-line one).
+
+## Task A9: The cell at its exact time scale (added 2026-11-17; runs after A1, before A2)
+
+**Items:** the pointer P2's 3A-8 and its two neighbours, as A0 measured them (`reports/a0-stride.md`, checked by
+`reviews/a0-check.md`). **Spec:** `docs/superpowers/specs/2026-11-17-exact-time-scale-design.md`. **The owner's
+answers (2026-11-17):** 11:25 "Exact, all three fixed" and "In this audit"; 11:53 the design "Yes, as recommended",
+the chi settings "Yes, re-measure", the bench's drive at the known point "Yes, they can"; between 12:22 and 12:53 the
+frame rate "can differ" (reading a bench recording at its own measured frame interval is a later task, owed before any
+inference on bench recordings). **The dispatch:** `.superpowers/sdd/2026-11-17-code-audit/briefs/a9-dispatch.md`.
+
+On those answers this task alone opens what the Global Constraints fence, and only as the spec's section 10 says:
+`core/Solvers`, `core/Simulator`, `core/Models`, the simulated paths it names, and `core/artifacts/identity.py` (a new
+entry, `record_clock`; `FORMAT` `training-rows/3` to `training-rows/4`). A simulated row changes, and so does the
+simulation set's identity: the finished set `Artifacts/simulations/eda5c2a1e468` stays on disk untouched, but a
+training of the new code no longer matches it, and the set is simulated again, from the window, by the owner, after
+the audit. `core/config.py` stays byte-identical until step 7's own commit, on the owner's yes; `FIT_CODE`,
+`gen_training_data`'s signature, `TrainingPlan` and `FIT_CONSTANTS` do not change.
+
+- [ ] Step 0: M1 (the varying step leaks into no channel the network reads), M2 (the cost) and M3 (the card's step
+  time); a checkpoint; an M1 FAIL goes to the owner with its numbers.
+- [ ] Steps 1 to 5 as the spec's section 10, each test first; a checkpoint after step 3 (the training rows).
+- [ ] Gate after step 5: fast + real-screen, then the card smoke gate with run 5's drill and the diagnostic card.
+- [ ] Step 6, the guides; step 7, the chi re-measurement on the card, its numbers to the owner.
 
 ## The review and the exit
 
