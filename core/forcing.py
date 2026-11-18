@@ -117,6 +117,7 @@ def build_nondim_force_tensor(
     *,
     exp_sign: float = 1.0,
     name_suffix: str = "",
+    t_dim: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Build a batch of non-dimensional force tensors for one carrier ``kind``.
@@ -141,6 +142,10 @@ def build_nondim_force_tensor(
     :param kind: one of FORCE_KINDS.
     :param exp_sign: +1.0 or -1.0; the exponential's grow/decay sign (spec metadata, not a parameter).
     :param name_suffix: appended to every forcing param name before the forcing_idx lookup.
+    :param t_dim: the drive's physical time at every point, ``(T,)`` or ``(batch, T)``, counted from the
+                  recording's first frame (``core.SBI.clock.FrameClock.drive_times``); each row's t_offset is
+                  added here. When given, ``t_nd`` is not read (pass None); t_scale is still read for a
+                  Hopf-style force scale. None builds the times from ``t_nd`` scaled by each row's t_scale.
     :return: non-dimensional force tensor, shape (batch, n_channels, T); n_channels = 2 only for the
              legacy un-suffixed sin + "amp_y" case, else 1.
     """
@@ -167,8 +172,11 @@ def build_nondim_force_tensor(
         f_scale = x_scale / t_scale
         f_offset = torch.zeros_like(f_scale)
 
-    # nd -> dim time; (T,) -> (1, T) for broadcasting against (batch, 1)
-    t_dim = helpers.rescale(t_nd.unsqueeze(0), t_scale, t_offset)        # (batch, T)
+    if t_dim is None:
+        # nd -> dim time; (T,) -> (1, T) for broadcasting against (batch, 1)
+        t_dim = helpers.rescale(t_nd.unsqueeze(0), t_scale, t_offset)    # (batch, T)
+    else:
+        t_dim = (t_dim if t_dim.dim() == 2 else t_dim.unsqueeze(0)) + t_offset   # (1 or batch, T)
 
     amp = fp("amp")
     offset = fp("offset")
@@ -236,6 +244,8 @@ def build_nondim_sin_force_tensor(
     rescale_params: torch.Tensor,
     forcing_idx: dict,
     rescale_idx: dict,
+    *,
+    t_dim: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Build a batch of non-dimensional sinusoidal force tensors.
@@ -258,11 +268,12 @@ def build_nondim_sin_force_tensor(
                         follow algebraically from F_ND = F_dim / (l * omega_0) with
                         l = x_scale and 1/omega_0 = t_scale. One that names "T" and no
                         "f_scale" raises RuntimeError (``require_simulator_index``).
+    :param t_dim: the drive's physical times, as ``build_nondim_force_tensor`` takes them.
     :return: Non-dimensional force tensor, shape (batch, n_force_channels, T) where
              n_force_channels = 2 if "amp_y" in forcing_idx else 1.
     """
     # The math now lives in core/forcing.py (shared with the new step/triangular/exponential kinds);
     # kind="sin" is numerically identical to the original body here (pinned by a golden test).
     return build_nondim_force_tensor(
-        forcing_params, t_nd, rescale_params, forcing_idx, rescale_idx, kind="sin")
+        forcing_params, t_nd, rescale_params, forcing_idx, rescale_idx, kind="sin", t_dim=t_dim)
 

@@ -73,7 +73,11 @@ _WINDOWS_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL"}
 
 # Streaming feasibility ceiling for t_scale (seconds per ND unit): the emitted bounds DOUBLE t_scale,
 # and SimConfig.steady_idx = TRANSIENT_ND_UNITS / (DT_EXP_S / (2*t_scale)) must stay < N_ND_MAX or
-# every Simulate run dies on the config.py steady_idx assert after a clean save.
+# every Simulate run dies on the config.py steady_idx assert after a clean save. The transient is those
+# steady_idx steps at the box's finest step, whatever the time scale; a recording then takes a whole
+# number of steps per frame, ceil(r) for a frame of r finest steps (core.SBI.clock), so one near the
+# box's top needs ceil(r)/r more recorded steps than r -- up to twice as many just above r = 1, where a
+# model at this ceiling has the least room left for its recording.
 T_SCALE_MAX_S = config.N_ND_MAX * config.DT_EXP_S / (2.0 * config.TRANSIENT_ND_UNITS)
 
 
