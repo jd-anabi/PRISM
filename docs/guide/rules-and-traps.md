@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 7180ad5c.
+Checked against commit e904e514.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -401,8 +401,8 @@ What the window remembers, and why, is in
 - **A new draft replaces the session; installing a configuration edits it.** Mixing them up discards
   the session's prior, posterior and observation, or the draft in the middle of a stage.
   `InferenceScreen.new_draft` replaces the session, because another model or unit system invalidates
-  every record it holds; `install_config` sets a configuration in place and no page calls it now:
-  step 2's configuration comes into use with its prior, in place, through `take_prior`. Guard: step 1
+  every record it holds; step 2's configuration comes into use with its prior, in place, through
+  `take_prior`. Guard: step 1
   asks before a new draft
   releases anything ([The dialogs](window.md#the-dialogs)). Pinned by
   `tests/test_nav_and_gating.py::test_apply_confirms_before_it_discards_the_session`.
@@ -498,7 +498,7 @@ These are conventions, and no guard enforces them.
   parameter's axis in seconds: its value is in the cell's time unit per model unit
   (`core.Helpers.labels.rescale_axis_label`).
 - **`SimConfig.inferred_labels` returns LaTeX**, which matplotlib renders; Qt cannot, so the window's
-  own labels use `labels.pretty_gui`'s rich text, and a log line that prints a parameter's label
+  own labels are Qt's rich text (`labels.gui_forcing_label`), and a log line that prints a parameter's label
   shows the raw `$...$`.
 - **Most figures are non-dimensional** and say "(ND)"; only the dimensional trace axes carry units.
 

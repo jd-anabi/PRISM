@@ -168,7 +168,7 @@ simulation cache instead of resuming the old one.
 | Config | Decorrelating Fisher rotation | none: the tool takes `REPARAM_ROTATE` | `make_sim_config(reparam_rotate=)` | on | Rotates the flow's latent coordinates into the eigenbasis of a simulated Fisher matrix, so that strongly correlated parameters become axis-aligned. The rotation is orthogonal, so it adds and removes no information; computing it costs extra simulations before training. Part of the cache's identity. |
 | Config | VRAM ceiling per batch (GiB, 0 = off) | none: the `PRISM_VRAM_CEILING_GIB` environment variable | none: the field sets `core.config.SIM_VRAM_CEILING_GIB` | 0 (off) | A hard ceiling on the card memory one simulation batch may plan to hold. See below the table. |
 | Prior | Bounds | `--bounds` | `make_sim_config(bounds_file)`; with **Edit values**, `bounds_dicts=` | none | Which parameters are inferred, in what order and over what box, and so the observation mode. **Edit values** starts from the selected file and lets you change only the numbers. |
-| Prior | Prior | `--prior` on `train`; `prior` always builds | `build_prior(ref, build_new)` | (from scratch) | A saved prior to load, or "(from scratch)" to build one. Choosing an entry does nothing until **Build / Load prior**. |
+| Prior | Prior | `--prior` on `train`; `prior` always builds | `build_prior(ref, build_new)` | a saved one when one is saved, else a new build | A saved prior to load, on the step's view "Use a saved prior", or a new one built, on its view "Build a new prior"; choosing a saved prior does nothing until the view's main button is pressed. |
 | Prior | Global rounds | `--num-iterations` | `build_prior(num_iterations=)` | 50 | The rounds of the global census; the candidates screened are the rounds times the candidates per round, and each round integrates its candidates over the whole Stability duration, as the random walk does, so rounds cost time. |
 | Prior | Candidates per round (0 = auto) | `--sweep-batch` | `build_prior(sweep_batch=)` | 0: the hardware batch | Not a speed dial: see [below](#settings-that-are-not-speed-dials). |
 | Prior | Max accepted sets | `--max-sets` | `build_prior(max_sets=)` | 175000 | The accepted sets that stop the random walk: the point cloud the prior is fitted to. Not a speed dial. |
@@ -176,7 +176,7 @@ simulation cache instead of resuming the old one.
 | Prior | Stability duration (ND units) | `--stability-units` | `build_prior(stability_units=)` | 1000 | Not a speed dial. |
 | Prior | Min cluster size | `--min-cluster-size` | `build_prior(min_cluster_size=)` | 50 | Not a speed dial. |
 | Prior | Min samples | `--min-samples` | `build_prior(min_samples=)` | 10 | Not a speed dial. |
-| Posterior | Posterior | `--posterior` on the commands that load one; `train` always trains | `build_posterior(ref, train_new)` | (from scratch) | A saved posterior to load, or "(from scratch)" to train one on the loaded prior. |
+| Posterior | Posterior | `--posterior` on the commands that load one; `train` always trains | `build_posterior(ref, train_new)` | a new training | A saved posterior to load, on the step's view "Use a saved posterior", or a new one trained on the prior in use, on its training view. |
 | Posterior | Batches | `--num-runs` | `build_posterior(num_runs=)` | 5000 | The training batches to simulate. Every row of a batch shares one (t_scale, T_obs) operating point, so the batch count is the training set's operating-point diversity as well as its size, and it is what wall-clock scales with. Part of the cache's identity. |
 | Posterior | Max rows per batch (0 = auto) | `--run-size` | `build_posterior(run_size_cap=)` | 0: the hardware batch | A memory escape hatch, not a speed control. The hardware batch is 2,048 rows on a CUDA card and 64 elsewhere; the solver is bound by kernel launches, so a narrower batch is not faster (measured: 7.37 s at 2,048 rows against 7.74 s at 1,024), and a lower cap trades training rows for peak memory about one for one. Part of the cache's identity. |
 | Posterior | Hidden features | `--hidden-features` | `build_posterior(hidden_features=)` | 128 | The flow's width: hidden units per spline transform. Not part of the cache's identity, so a complete cache can retrain the flow at another width without simulating again. |
@@ -295,8 +295,9 @@ log says "Reusing the Fisher rotation stored with the training checkpoint".
 
 The window keeps what it remembers in `PRISM.ini`, a Qt settings file in your user settings folder
 (`%APPDATA%\PRISM\` on Windows, `~/.config/PRISM/` on macOS and Linux; `core.gui.settings.settings`).
-Each panel writes its own group when the window closes (`MainWindow._save_state`); a splitter
-position is written a moment after you drag it, and the appearance as soon as you change it. A key
+The window writes its size and position, and Records its kind and its table's sort, when the window
+closes (`MainWindow._save_state`); each step of Parameter inference writes what it remembers as it comes
+into use, and the appearance is written as soon as you change it. A key
 an older build wrote and this one does not read is ignored, never restored.
 
 | screen or tab | kept from the last session | opens fresh on every launch |
@@ -308,7 +309,7 @@ an older build wrote and this one does not read is ignored, never restored.
 | Infer | the mode; the Cell picker; the three T_obs boxes; the Spontaneous, Forced and Passive paths; Drive F₀ (N) | the drive boxes and the probe table, which are built from the configuration; the cell's value grid; **Run on a different observation** |
 | TSNPE | the Observation picker; Batches; Max rows per batch | HPD level and Directions truncated; the new-simulation tick |
 | Artifacts | the kind and the table's sort | nothing |
-| the window | its size and position, each panel's splitter positions, the appearance | the screen: it always opens on Home |
+| the window | its size and position, the appearance | the screen: it always opens on Home |
 
 On the Parameter Inference tabs, then, the window remembers selections (the pickers, the model, the
 units, the chi and rotation ticks), the boxes that describe a recording, and the training budget;

@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit 7180ad5c.
+Checked against commit e904e514.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -110,8 +110,6 @@ when it holds nothing but a docstring.
 - `Priors/Scaling Priors/scaling_prior.py`: the rescale block's prior, uniform or log-uniform per
   parameter.
 - `Priors/Forcing Priors/forcing_prior.py`: the drive parameters' prior.
-- `Priors/Forcing Priors/sin_prior.py`: a four-parameter sine-drive prior; nothing in `core` imports
-  it.
 - `Priors/Product Prior/product_prior.py`: `ProductPrior`, the ND prior and the rescale prior as one
   distribution.
 
@@ -222,10 +220,9 @@ when it holds nothing but a docstring.
 - `panels/run_host.py`: `RunHost`, the mixin that makes a page the host of a run: `dispatch()` to the
   run controller, the set of pages every run locks, and the moves of the run's page in and out of the
   page's column, its figures with it. A page lists it first among its bases.
-- `panels/base_panel.py`: `BasePanel(RunHost, QWidget)`, the older frame: a controls column, a
-  results column (the page's figures over its own lines, or the run's page in their place), and the
-  refusal box. No step is built on it now, but the sink that renders a run's figures to PNG on the
-  worker (`_png_fig_sink`) lives here, and a test that needs a bare run host builds one on it.
+- `panels/base_panel.py`: the sink that renders a run's figures to PNG on the worker
+  (`_png_fig_sink`), and the warning said once for each figure that could not be shown
+  (`FigureNotShown`).
 - `panels/inference_tabs.py`: the import surface of the six inference steps' panels; Help reads it by
   string path.
 - `panels/inference/base.py`: what a training's page and a narrowing round's share: the stages of
@@ -293,7 +290,7 @@ when it holds nothing but a docstring.
 - `chain.py`: the six steps' rules, with no widget: what each holds or waits for, the step in hand,
   and Home's next step, with the sentence that names what was in use last time.
 - `keys.py`: the window's places and keys as tables, with no widget: the parts in the rail's order,
-  the six steps, the pages of a part that has several, and the keys that open each.
+  the six steps, and the keys that open each.
 - `session.py`: `SbiSession` and `ConfigDraft`, what the six inference steps share.
 - `step_facts.py`: what a step says before it starts, as values with no widget and no engine: a fact
   (a marker with its lead word and sentence, blocking or not), the order facts stand in, the reason
@@ -339,7 +336,6 @@ when it holds nothing but a docstring.
 - `streams.py`: the routing of a run's output to its lines, its progress rows and its text file,
   `CancelToken` and `WorkerCancelled`.
 - `vt.py`: turns what tqdm writes into progress rows and log lines.
-- `plot_watcher.py`: shows each PNG a run saves into its record's `figures/` folder.
 - `one_instance.py`: one PRISM at a time: the lock beside the settings file, and the local server a
   second start knocks on.
 - `this_computer.py`: every request PRISM makes of Windows for a run (staying awake, the reason not
@@ -377,7 +373,6 @@ when it holds nothing but a docstring.
   main button. The foot never scrolls; the facts scroll inside a height of their own.
 - `widgets/in_use.py`: the head of a page's scrolling body: what the step holds, how many choices
   below are changed and not applied, and the page's own line.
-- `widgets/page_names.py`: the row of a part's page names, above its page.
 - `widgets/ask.py`: the one dialog the window asks and tells through: a question, a notice, a refusal
   or a failure.
 - `widgets/marker.py`: the state marker, as a widget and as an icon.
@@ -398,8 +393,7 @@ when it holds nothing but a docstring.
 - `widgets/artifact_picker.py`: the input-file picker (`ArtifactPicker`) and its store twin
   (`StorePicker`).
 - `widgets/artifact_table.py`: Records' table and its one row formatter.
-- `widgets/log_pane.py`: a read-only pane of text lines: a page's own lines under its figures, and a
-  run's full text on its page.
+- `widgets/log_pane.py`: a read-only pane of text lines: a run's full text on its page.
 - `widgets/figure_stack.py`: a page's figures, as tabs of pictures, each with "Pop out"; while a run's
   page holds the stack, only that run's figures are in sight, and while a run is live a figure pops
   out as its picture.
@@ -427,7 +421,6 @@ when it holds nothing but a docstring.
   and `emit_figure`.
 - `plot_colours.py`: the four named colours every figure the engine draws takes a colour from; it
   imports nothing.
-- `model_helpers.py`: rescaling helpers; nothing in `core` imports it.
 
 ### Two notes
 
@@ -799,7 +792,7 @@ stage without freezing, shows its output and stops it.
   six steps of parameter inference share one `SbiSession`, owned by `InferenceScreen`, which works out
   each step's state and greys each step's own buttons through `refresh_gates`. Every page that runs
   something is a run host (`RunHost`, in `panels/run_host.py`, listed first among its bases); each of
-  the six steps is a `StepPage`, and no page is built on the older frame, `BasePanel`. A host has a
+  the six steps is a `StepPage`. A host has a
   results column that holds the page's figures and, while a run of
   the page shows, the run's page in their place (`core.gui.run.view.RunView`), and `dispatch()`, which
   hands the call to the process's one run controller (`core.gui.run.controller.controller()`). The
@@ -874,9 +867,7 @@ stage without freezing, shows its output and stops it.
     process, unless the page offers to continue or resume that run.
   - A figure is rendered to PNG on the worker (`base_panel._png_fig_sink`), and pickled for the
     pop-out window; the GUI thread shows the image and never paints a figure built on the worker,
-    which deadlocks on matplotlib's global lock. A run that saves its figures to disk instead is shown
-    through `plot_watcher`, which watches the folder the run writes its figures into; no page of
-    the window runs one today.
+    which deadlocks on matplotlib's global lock.
   - `core.gui.__main__.main` switches matplotlib to its Agg backend before it imports the window, and
     so before any module that draws, so a stray `plt.show()` in a stage is a no-op on a worker thread.
 - **Stream routing.** `streams.redirect_streams` swaps `sys.stdout` and `sys.stderr` for two
