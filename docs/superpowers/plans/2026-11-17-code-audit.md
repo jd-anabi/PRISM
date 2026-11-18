@@ -300,6 +300,21 @@ the audit. `core/config.py` stays byte-identical until step 7's own commit, on t
 - [ ] Gate after step 5: fast + real-screen, then the card smoke gate with run 5's drill and the diagnostic card.
 - [ ] Step 6, the guides; step 7, the chi re-measurement on the card, its numbers to the owner.
 
+## Task A10: A step-correcting rule, measured (added 2026-11-18; after A9's build, before the retrain)
+
+**Items:** M1's FAIL, accepted by the owner at the step as designed: the simulator's rule takes an error that shrinks
+only in proportion to the step (`reports/a9-builder.md`, "Checkpoint 1b": no finer step passes M1's bar, at 29 to 52
+card hours). **The owner's answer (2026-11-17, 22:54):** "Yes, after A9's build": measure a rule that corrects each
+step, before the retrain; adopting it is the owner's separate decision, taken before the retrain so the set is
+simulated once.
+
+- [ ] In scratch only (`audit\a10\`), no file under `core/` changed, about an hour on the processor: one
+  step-correcting rule that the solver's noise form admits, on M1's paired ensemble at A9's step, its error left and
+  its cost per step against today's rule at the step and at 2 and 4 times finer; the same twelve time scales, the same
+  bar.
+- [ ] Its numbers to the owner as one plain question with a recommendation. A yes opens `core/Solvers` in a task of its
+  own, planned then; a no leaves A9's solver as built.
+
 ## The review and the exit
 
 - [ ] The three-reader review of `b245f20b..HEAD` (seats as `stage-5/briefs/review-seats.md`, re-pointed to this plan),
