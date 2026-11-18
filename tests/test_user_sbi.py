@@ -3019,10 +3019,12 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     assert ia["truncation"] is None, "an amortized identity records truncation=None"
     # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
     # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
-    # deliberately, with a migration for the checkpoints on disk. Belongs to training-rows/3 (the units
-    # file's fingerprint joined the identity, because the derived force scale depends on k_B in the
-    # cell's units); the training-rows/2 digest this superseded was "1912d2139359".
-    assert tc.identity_digest(ia) == "1d799334fcf7", \
+    # deliberately, with a migration for the checkpoints on disk. Belongs to training-rows/4: the
+    # record clock joined the identity, so that no set simulated under the older clock (each cell at
+    # a time scale near its own, its drive started before the first frame) is ever continued; such a
+    # set is kept and never resumed. The training-rows/3 digest this superseded was "1d799334fcf7"
+    # (the units file's fingerprint had joined it), and the training-rows/2 one "1912d2139359".
+    assert tc.identity_digest(ia) == "f553827c095b", \
         f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
     assert set(ia) == {
         "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs",
@@ -3030,7 +3032,7 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
         "steady_idx", "dt_nd_min", "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid",
         "spontaneous_only", "summary_flags", "feature_set_version", "chi_mode", "chi_layout",
         "chi_k_pad", "chi_elem_w", "chi_f0", "chi_freq_bounds", "chi_max_cycles", "device", "dtype",
-        "truncation", "units_sha256"}, sorted(ia)
+        "truncation", "units_sha256", "record_clock"}, sorted(ia)
     assert tc.identity_digest(ia) == tc.identity_digest(
         orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=None))
 

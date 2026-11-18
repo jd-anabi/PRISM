@@ -703,7 +703,7 @@ _IDENTITY_KEYS = {
     "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs", "steady_idx", "dt_nd_min",
     "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid", "spontaneous_only", "summary_flags",
     "feature_set_version", "chi_mode", "chi_layout", "chi_k_pad", "chi_elem_w", "chi_f0", "chi_freq_bounds",
-    "chi_max_cycles", "device", "dtype", "truncation", "units_sha256"}
+    "chi_max_cycles", "device", "dtype", "truncation", "units_sha256", "record_clock"}
 
 
 def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monkeypatch):
@@ -732,6 +732,26 @@ def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monke
     assert SimulationIdentity.from_cfg(cfg, _LoadedLike(), 2048, 5000).to_dict()["prior_fingerprint"] == "f" * 16
 
 
+def test_a_simulation_set_made_before_the_record_clock_is_never_one_setting_away(tmp_path):
+    """A set simulated before the record clock joined the identity differs from today's in two entries, its format and
+    its clock, so it is never offered as one setting away (a setting nobody can set, to continue rows that hold each cell
+    at another time scale); the run's log names it as differing in its format, and the window says it was made by
+    another version of PRISM."""
+    from core.artifacts.identity import FORMAT, SimulationIdentity
+    from core.gui import fields as gui_fields
+    from core.SBI import clock, training_checkpoint as tc
+    mine = SimulationIdentity.from_cfg(_nad_cfg(chi_mode=True), None, 4, 10).to_dict()
+    assert FORMAT == "training-rows/4" and mine["format"] == FORMAT and mine["record_clock"] == clock.RECORD_CLOCK
+    before = {key: value for key, value in mine.items() if key != "record_clock"}
+    before["format"] = "training-rows/3"
+    write_simulation_set(tmp_path, before, 10, complete=True)
+    assert tc.near_miss_siblings(mine, tmp_path) == []
+    (row,) = tc.sibling_differences(mine, tmp_path)
+    assert [one["field"] for one in row.fields] == ["format", "record_clock"]
+    assert gui_fields.difference_lines(row.fields, prior_label=lambda fp: None) == (gui_fields.OTHER_VERSION_TEXT,)
+    assert f"{tc.identity_digest(before)} (10 batches, differs in format)" in tc.describe_siblings(mine, tmp_path)
+
+
 def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(tmp_path):
     """The derived force scale depends on Boltzmann's constant in the cell's units, so the cache identity
     carries the units file's fingerprint: line endings do not change it, an edit does, and a config with
@@ -741,7 +761,7 @@ def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(t
     cfg = _nad_cfg()
     lf = Path(cfg.sources["units"]).read_bytes().replace(b"\r\n", b"\n")
     ident = SimulationIdentity.from_cfg(cfg, None, 4, 2).to_dict()
-    assert FORMAT == "training-rows/3" and ident["format"] == FORMAT
+    assert FORMAT == "training-rows/4" and ident["format"] == FORMAT
     assert ident["units_sha256"] == hashlib.sha256(lf).hexdigest()
     crlf, edited = tmp_path / "crlf.txt", tmp_path / "edited.txt"
     crlf.write_bytes(lf.replace(b"\n", b"\r\n"))
@@ -1469,6 +1489,27 @@ def test_load_posterior_refuses_each_mismatch_class(store):
         _posterior_artifact(store, cfg, name=tag, over=over)
         with pytest.raises(ValueError, match=why):
             store.load_posterior(cfg, tag)
+
+
+def test_load_posterior_refuses_a_posterior_trained_on_rows_of_another_clock(store, monkeypatch):
+    """A posterior records the clock its rows were simulated on. One whose record names no clock was trained on rows of
+    an older PRISM, which held each cell at a time scale near its own rather than at it, and one of another clock on
+    rows that mean something else: both are refused before the payload is read; today's loads."""
+    from core.SBI import clock
+    cfg = _nad_cfg(chi_mode=True)
+    assert mf.conditioning_block(cfg)["record_clock"] == clock.RECORD_CLOCK
+    today = _posterior_artifact(store, cfg, name="today")
+    assert store.load_posterior(cfg, "today").id == today.id
+    real = mf.conditioning_block
+    monkeypatch.setattr(mf, "conditioning_block",
+                        lambda c: {key: value for key, value in real(c).items() if key != "record_clock"})
+    _posterior_artifact(store, cfg, name="before-the-clock")
+    monkeypatch.setattr(mf, "conditioning_block", real)
+    _posterior_artifact(store, cfg, name="another-clock", over={("conditioning", "record_clock"): "frame-exact/0"})
+    for name, why in (("before-the-clock", "names no clock"), ("another-clock", "'frame-exact/0'")):
+        with pytest.raises(Refusal, match=why) as caught:
+            store.load_posterior(cfg, name)
+        assert caught.value.field == "posterior", name
 
 
 def test_load_posterior_refuses_a_chi_posterior_trained_at_another_drive(store, monkeypatch):

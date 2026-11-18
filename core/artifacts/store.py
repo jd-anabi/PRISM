@@ -1219,7 +1219,7 @@ class ArtifactStore:
         import torch
         from sbi.inference import DirectPosterior
         from core import config as _config
-        from core.SBI import reparam, truncate
+        from core.SBI import clock as _clock, reparam, truncate
         from core.SBI.run_guards import _assert_chi_config_is_deliberate, _gmm_fingerprint
         from core.SBI.statistics import SUMMARY_WIDTH
         from core.orchestrator import expected_forcing_dim
@@ -1280,6 +1280,17 @@ class ArtifactStore:
             _bad(f"conditions on {cond['width']} features (forcing/chi block {cond['forcing_dim']}), but this "
                  f"config expects {SUMMARY_WIDTH + 1 + want_dim} (block {want_dim}). Conditioning widths are "
                  f"incompatible.")
+        # The clock its rows were simulated on (core/SBI/clock.py). Rows of a PRISM from before the clock was
+        # recorded held each cell at a time scale near its own rather than at it, with its drive's clock started
+        # before the first frame, so what such a posterior learnt is not what this build's rows and checks mean.
+        held = cond.get("record_clock")
+        if held != _clock.RECORD_CLOCK:
+            where = (f"on the record clock {held!r}" if held is not None else
+                     "by an older version of PRISM, whose record names no clock (those rows held each cell at a "
+                     "time scale near its own rather than at it)")
+            _bad(f"was trained on rows simulated {where}; this version simulates every row on the record clock "
+                 f"{_clock.RECORD_CLOCK!r}, so the rows it learnt from are not the rows it would be read against. "
+                 f"Retrain on rows of this version.")
 
         latent = torch.load(str(sub / "posterior.pt"), map_location=cfg.hw.device, weights_only=False)
         if not isinstance(latent, DirectPosterior):

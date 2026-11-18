@@ -236,8 +236,8 @@ IDENTITY_ROWS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("chi_freq_bounds",), "Frequency band in training", ""),
     (("truncation",), "Made by a narrowing round: a training never continues it.", ""),
     (("device", "dtype"), "This computer", ""),
-    (("format", "summary_flags", "feature_set_version", "chi_layout", "chi_elem_w"), "Made by another version of PRISM",
-     ""),
+    (("format", "summary_flags", "feature_set_version", "chi_layout", "chi_elem_w", "record_clock"),
+     "Made by another version of PRISM", ""),
 )
 #: How a kind of observation reads in a difference.
 _KINDS = {"chi": "a frequency response", "forced": "a spontaneous recording and one driven recording",

@@ -31,6 +31,14 @@ other rows. The declaration comes from one of two places, fingerprinted differen
     carries no meaning; prefixed, so it is never the fingerprint of a usable units file: a file
     holding exactly that text has no ``# Units`` section and so declares no units at all.
 
+``record_clock`` names the clock the rows are simulated on (``core.SBI.clock.RECORD_CLOCK``), and it is
+what moved the format from training-rows/3 to training-rows/4. Rows made before it took a whole number
+of finest steps per frame by rounding, so each cell ran at a time scale near its own rather than at
+it, its drive's clock started before the first frame, and every segment after the first ran at a step
+read off its own slice of the grid: the same settings now simulate other rows. The format and the clock
+move together, so a set made before differs in two entries and is never offered as one setting away,
+a setting nobody could set to continue rows that mean something else.
+
 A named file that cannot be read, and a config with neither a file nor tokens (a stand-in), fail open
 to None, as the GUI's pre-Train status line computes identities from stand-ins. A cache written
 under the older format keys a different directory, so it is never found for a resume, and a
@@ -42,7 +50,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-FORMAT = "training-rows/3"
+FORMAT = "training-rows/4"
 
 
 _TOKENS_PREFIX = "units-tokens:"
@@ -77,6 +85,7 @@ class SimulationIdentity:
         is fingerprinted), or anything else (None -- the GUI's pre-Train status line passes stubs and
         must fail open)."""
         from core import config as _config
+        from core.SBI.clock import RECORD_CLOCK
         from core.SBI.reparam import resolved_log_params
         from core.SBI.run_guards import _gmm_fingerprint, _log_params_for
         from core.SBI.statistics import FEATURE_SET_VERSION, VALID_FLAG_LABELS
@@ -119,6 +128,7 @@ class SimulationIdentity:
             "dtype": str(cfg.hw.dtype),
             "truncation": None if truncation is None else truncation.identity_fields(),
             "units_sha256": _units_sha256(cfg),
+            "record_clock": RECORD_CLOCK,
         }
         return cls(vals)
 

@@ -184,8 +184,10 @@ def from_json_text(text: str) -> Manifest:
 
 
 def conditioning_block(cfg) -> dict:
-    """The conditioning geometry a posterior/observation is frozen into; one derivation."""
+    """The conditioning geometry a posterior/observation is frozen into, and the record clock its rows are
+    simulated on (``core.SBI.clock.RECORD_CLOCK``); one derivation."""
     from core import config as _config
+    from core.SBI.clock import RECORD_CLOCK
     from core.SBI.statistics import FEATURE_SET_VERSION, SUMMARY_WIDTH, VALID_FLAG_LABELS
     from core.orchestrator import expected_forcing_dim
     fdim = int(expected_forcing_dim(cfg))
@@ -201,6 +203,7 @@ def conditioning_block(cfg) -> dict:
         "chi_max_cycles": float(cfg.chi_max_cycles) if chi else None,
         "summary_flags": list(VALID_FLAG_LABELS),
         "feature_set_version": int(FEATURE_SET_VERSION),
+        "record_clock": RECORD_CLOCK,
     }
 
 
