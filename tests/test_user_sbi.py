@@ -1793,6 +1793,46 @@ def test_a_segmented_run_equals_one_long_run_bitwise():
     assert bool((a[:, :, 1:] != a[:, :, :-1]).any(dim=(0, 1)).all()), "a seam repeated a sample"
 
 
+class _DriveSDE:
+    """Drift equal to the drive's first channel, no noise: the state after g steps is the sum of the drive at the
+    steps taken, so where the state first moves says which drive index served which step. Float64."""
+
+    def __init__(self):
+        self.device = torch.device("cpu")
+        self.force = torch.zeros((1, 1, 1), dtype=torch.float64)
+
+    def f(self, x, i):
+        return self.force[:, 0:1, i]
+
+    def g(self, x=None):
+        return torch.zeros((1, 1), dtype=torch.float64)
+
+
+def test_the_drive_index_serves_the_step_after_it_across_seams():
+    """Drive index m serves step m -> m+1 in every segment: a drive that switches on at fine index K first moves the
+    state at index K + 1, wherever K falls against the seams -- the transient's last step, a segment's first, one
+    a single step long, the middle of one, the run's last -- with the noise off. A drive handed to a segment one
+    index ahead (or behind) would move it at K (or K + 2): a phase of one fine step that depends on the stride."""
+    from core.Simulator import simulator as _sim
+
+    class DriveSim(_sim.Simulator):
+        def _set_up_model(self):
+            self.sde = _DriveSDE()
+            self.sde.force = self._force
+
+    n, n_tr = 241, 40
+    plan = [(0, n_tr, 0.025), (n_tr, 41, 0.0231), (41, 97, 0.0231), (97, 98, 0.0231), (98, 200, 0.0231),
+            (200, n - 1, 0.0231)]
+    for K in (39, 40, 41, 97, 98, 150, 239):
+        force = torch.zeros((1, 1, n), dtype=torch.float64)
+        force[..., K:] = 1.0
+        sim = DriveSim(torch.zeros((1, 1)), force, torch.zeros((1, 1), dtype=torch.float64),
+                       torch.zeros(n, dtype=torch.float64), segs=len(plan), batch_size=1)
+        x = sim.simulate(plan=plan)[0, 0, 0, :]
+        moved = torch.nonzero(x).flatten()
+        assert len(moved) and int(moved[0]) == K + 1, (K, moved[:3].tolist())
+
+
 def test_the_clock_holds_its_steps_across_every_seam():
     """The solver's own clock, through Simulator.simulate: the transient's steps at its step, then the
     recorded steps at theirs, the step switching once, at the transient's end; across every seam the clock

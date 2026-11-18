@@ -724,10 +724,11 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     w = _posterior_artifact(store, cfg, name="lap_post", V=V,
                             prior=_LatentPriorStub(P))
     lp = store.load_posterior(cfg, w.id)
-    calls = []
+    calls, strides = [], []
 
     def _fake_raw(cfg_, nd, res, force, m, crn, n_obs, stride=None):
         calls.append((int(m), bool(crn), int(n_obs)))
+        strides.append((bool(crn), stride, cfg_, res.detach().clone(), int(n_obs)))
         n_feat = identifiability.feature_sets.n_features(cfg_)
         g = torch.zeros(int(m), 8, dtype=torch.float64)
         row = np.arange(n_feat, dtype=float) + float(nd.sum())
@@ -771,6 +772,17 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     # random numbers (crn True), or the finite difference is noise over 2d
     assert {c for mm, c, _ in calls if mm == 16} == {False}, calls
     assert {c for mm, c, _ in calls if mm == 4} == {True}, calls
+    # Every simulation of a point, its noise ensemble and every arm, runs at the ONE stride the point shares with
+    # its arms (_point_stride, from the point's own rescale, which the ensemble's call is handed), or the arms'
+    # common random numbers would differ in their step counts.
+    groups = []
+    for crn, stride, cfg_, res_, n_obs in strides:
+        if not crn:                                   # a point's noise ensemble opens its calls
+            groups.append((identifiability._point_stride(cfg_, res_, 0.02, n_obs), []))
+        groups[-1][1].append(stride)
+    assert len(groups) == 2, len(groups)
+    for want, got in groups:
+        assert want is not None and set(got) == {want}, (want, got)
 
     # This fake makes the numbers a closed form, derived here and pinned so a units/arithmetic
     # slip in _analyze_point's covariance inversion fails LOUDLY rather than merely changing a number.
@@ -1018,11 +1030,12 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     # "degenerate" (|cos|==1) by construction: a rank-1 Jacobian the assertions below could not tell
     # apart from a real, non-degenerate one.
     W = ((np.arange(n_feat)[:, None] * 7 + np.arange(n_theta)[None, :] * 3) % 5 + 1).astype(float)
-    crns = []
+    crns, strides = [], []
 
     def _fake_feats(ctx, pvec, rescale_vec, m, crn, stride=None):
         import torch
         crns.append((int(m), bool(crn)))
+        strides.append((stride, ctx, rescale_vec.detach().clone()))
         theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
         idx = np.arange(n_feat)
         base = (idx + 1).astype(float)
@@ -1049,6 +1062,10 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     # the m_noise ensemble without common random numbers, every +-d arm with them
     assert {c for mm, c in crns if mm == 16} == {False}, crns
     assert {c for mm, c in crns if mm == 4} == {True}, crns
+    # the baseline and every +-d arm at the ONE stride the ground truth shares with its arms
+    _s, ctx0, gt_rescale = strides[0]
+    want = identifiability._point_stride(ctx0.cfg, gt_rescale, 0.02, ctx0.n_obs)
+    assert want is not None and {s for s, _, _ in strides} == {want}, (want, {s for s, _, _ in strides})
     assert d.variant == "jacobian" and d.manifest.parents == {}
     assert res["observation_mode"] == "forced" and res["T_obs_s"] == 2.0
     assert res["n_features"] == n_feat
@@ -1756,35 +1773,13 @@ def test_the_diagnostic_warnings_are_records_and_the_reports_are_information(cap
 
 
 def _batch_loop_clocks(cfg, pairs):
-    """The record clock the training batch loop hands its row makers, for each (t_obs_s, t_scale) pair: the loop
-    runs with its schedule replaced by those pairs and its spontaneous row maker by a stand-in that keeps the clock
-    and returns empty rows, so nothing is simulated. Reading what the loop really built, rather than restating its
-    arithmetic, is what makes the check below a pin: a change to the loop's geometry changes the expected values."""
-    from core.SBI import pipeline, statistics
-    seen = []
-
-    def keep(g, nd, init_rows, x_scale, x_offset, _patho):
-        seen.append(g.clock)
-        return torch.zeros((nd.shape[0], statistics.SUMMARY_WIDTH + 1))
-
+    """The record clock the training batch loop builds for each (t_obs_s, t_scale) pair, read off the loop itself
+    (`tests._fixtures.batch_loop_clocks`), each pair held as training's schedule holds it, in float32 and the cell's
+    units: a change to the loop's geometry changes the values the check below expects."""
+    from tests._fixtures import batch_loop_clocks
     ts = torch.tensor([p[1] for p in pairs], dtype=torch.float32)
     Ts = torch.tensor([p[0] * cfg.get_unit_conversion_factor("s") for p in pairs], dtype=torch.float32)
-    real_rows, real_schedule = pipeline._spontaneous_rows, pipeline._batch_schedule
-    pipeline._spontaneous_rows = keep
-    pipeline._batch_schedule = lambda *a, **k: (ts, Ts)
-    try:
-        class _Fixed:
-            def sample(self, shape):
-                return cfg.ground_truth_tensor.reshape(1, -1).expand(shape[0], -1).clone()
-        pipeline.gen_training_data(
-            cfg.model, _Fixed(), None, cfg.t, run_size=1, n_runs=len(pairs), steady_idx=cfg.steady_idx,
-            dt_nd_min=cfg.dt_nd_min, nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx,
-            rescale_idx=cfg.rescale_idx, dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
-            t_scale_bounds=cfg.t_scale_bounds, spontaneous_only=True, n_vars=cfg.inits_tensor.shape[-1],
-            dtype=cfg.hw.dtype, device=cfg.hw.device)
-    finally:
-        pipeline._spontaneous_rows, pipeline._batch_schedule = real_rows, real_schedule
-    return seen
+    return batch_loop_clocks(cfg, ts, Ts)
 
 
 def test_the_recording_geometry_is_the_training_batchs_clock():

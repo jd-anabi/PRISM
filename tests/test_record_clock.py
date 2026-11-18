@@ -95,21 +95,30 @@ def test_a_clock_with_a_step_per_row_shares_one_stride():
 
 
 def test_the_schedule_filter_and_the_batch_loop_share_one_arithmetic():
-    """training_n_fine, vectorised in float64 from the schedule's float32 values, equals the clock the batch loop
-    builds from each pair read back as a Python float, over a whole Sobol draw of the built-in box and of a model
+    """training_n_fine, vectorised in float64 from the schedule's float32 values, equals the n_fine of the clock the
+    batch loop itself builds for each pair, read off the loop and not restated, over a Sobol draw and over
+    whole-second lengths (where a frame count's truncation is most fragile), on the built-in box and on a model
     builder's box (t_scale in (v/2, 2v), whose transient is long)."""
-    for lo, hi, steady, dt_min in ((1.0, 40.0, STEADY, DT_MIN), (150.0, 600.0, 120_000, DT_EXP / 600.0)):
+    from tests._fixtures import batch_loop_clocks
+    builder = _master_cfg()
+    builder.rescale_params["t_scale"] = (300.0, (150.0, 600.0))
+    for cfg in (_master_cfg(), builder):
+        lo, hi = cfg.t_scale_bounds
         with torch.random.fork_rng(devices=[]):                     # the scrambled engine draws at construction
             torch.manual_seed(3)
-            pts = torch.quasirandom.SobolEngine(dimension=2, scramble=True).draw(3000)
-        ts32 = torch.exp(math.log(lo) + pts[:, 0] * (math.log(hi) - math.log(lo)))
+            pts = torch.quasirandom.SobolEngine(dimension=2, scramble=True).draw(400)
+        span = math.log(hi) - math.log(lo)
+        ts32 = torch.exp(math.log(lo) + pts[:, 0] * span)
         T32 = torch.exp(math.log(1000.0) + pts[:, 1] * (math.log(60000.0) - math.log(1000.0)))
-        got = clock.training_n_fine(DT_EXP, ts32, T32, dt_min, steady)
-        want = []
-        for a, b in zip(ts32.tolist(), T32.tolist()):
-            n_points = int((b / a) / (DT_EXP / a))
-            want.append(clock.frame_clock(DT_EXP, a, n_points, dt_min, steady, config.CHUNK_LEN).n_fine)
-        assert got.tolist() == want
+        whole_s = torch.arange(1, 61, dtype=torch.float32) * 1000.0
+        for f in (0.0, 0.17, 0.36, 0.5, 0.73, 0.91, 0.999):
+            ts32 = torch.cat([ts32, torch.full((60,), math.exp(math.log(lo) + f * span))])
+            T32 = torch.cat([T32, whole_s])
+        ts32, T32 = ts32.to(torch.float32), T32.to(torch.float32)
+        got = clock.training_n_fine(cfg.dt_exp, ts32, T32, cfg.dt_nd_min, cfg.steady_idx)
+        loop = batch_loop_clocks(cfg, ts32, T32)
+        assert len(loop) == ts32.shape[0]
+        assert got.tolist() == [c.n_fine for c in loop]
 
 
 def test_the_schedule_keeps_the_first_pairs_that_fit_however_it_draws():
@@ -430,8 +439,9 @@ def test_a_predictive_check_runs_each_draw_at_its_own_time_scale_on_the_frames(m
                                                      torch.float32, torch.device("cpu"))
     assert rec.clocks and all(c.per_row and c.stride == 14 for c in rec.clocks)
     # each draw's step is the one it would take alone at the bin's stride: its own frame interval over 14
+    own = sorted(sres[:, cfg.sim_rescale_idx["t_scale"]].tolist())
     alone = [float(clock.frame_clock(cfg.dt_exp, float(ts), 200, cfg.dt_nd_min, cfg.steady_idx, config.CHUNK_LEN,
-                                     stride=14).step) for ts in sorted(sres[:, cfg.sim_rescale_idx["t_scale"]].tolist())]
+                                     stride=14).step) for ts in own]
     for c in rec.clocks:
         assert torch.allclose(c.step.double().flatten().cpu(), torch.tensor(alone, dtype=torch.float64), rtol=1e-12,
                               atol=0), (c.step, alone)

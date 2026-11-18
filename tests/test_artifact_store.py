@@ -734,9 +734,9 @@ def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monke
 
 def test_a_simulation_set_made_before_the_record_clock_is_never_one_setting_away(tmp_path):
     """A set simulated before the record clock joined the identity differs from today's in two entries, its format and
-    its clock, so it is never offered as one setting away (a setting nobody can set, to continue rows that hold each cell
-    at another time scale); the run's log names it as differing in its format, and the window says it was made by
-    another version of PRISM."""
+    its clock, so it is never offered as one setting away (a setting nobody can set, to continue rows that hold each
+    cell at another time scale); the run's log names it as differing in its format, and the window says it was made
+    by another version of PRISM."""
     from core.artifacts.identity import FORMAT, SimulationIdentity
     from core.gui import fields as gui_fields
     from core.SBI import clock, training_checkpoint as tc
@@ -1506,10 +1506,18 @@ def test_load_posterior_refuses_a_posterior_trained_on_rows_of_another_clock(sto
     _posterior_artifact(store, cfg, name="before-the-clock")
     monkeypatch.setattr(mf, "conditioning_block", real)
     _posterior_artifact(store, cfg, name="another-clock", over={("conditioning", "record_clock"): "frame-exact/0"})
+    real_load, unpickled = torch.load, []
+
+    def spy_load(*a, **k):
+        unpickled.append(a[0] if a else k.get("f"))
+        return real_load(*a, **k)
+
+    monkeypatch.setattr(torch, "load", spy_load)
     for name, why in (("before-the-clock", "names no clock"), ("another-clock", "'frame-exact/0'")):
         with pytest.raises(Refusal, match=why) as caught:
             store.load_posterior(cfg, name)
         assert caught.value.field == "posterior", name
+        assert unpickled == [], f"the clock was compared only after the payload was unpickled: {unpickled}"
 
 
 def test_load_posterior_refuses_a_chi_posterior_trained_at_another_drive(store, monkeypatch):

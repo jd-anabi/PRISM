@@ -580,15 +580,56 @@ def stand_in_gen_obs(model=None, params=None, t=None, inits=None, force=None, n_
                      var_idx=None, dtype=torch.float32, device=torch.device("cpu"), dt=None, clock=None):
     """A cheap stand-in for pipeline.gen_obs with its shape: the drive's first channel as the
     response, a unit oscillation at angular frequency 1 in ND time (so the passive trace has a
-    spectral peak), and a little noise from torch's global stream. Its step or clock is taken and
-    not read: the grid ``t`` carries the model times."""
+    spectral peak), and a little noise from torch's global stream. The oscillation runs on the model
+    time of every fine point: the grid ``t``'s own, which is the model time for a step or a clock with
+    one step, or each row's from its clock when the clock has a step per row (a predictive-check bin,
+    the probe simulator), whose grid holds only a length."""
     n = t.shape[0] - steady_idx
-    x = (force[:, 0, steady_idx:].to(dtype).expand(batch_size, n) + torch.sin(t[steady_idx:]).to(dtype)
+    if clock is not None and clock.per_row:
+        g = torch.arange(t.shape[0], dtype=torch.float64)
+        n_tr, h_tr = clock.n_transient, clock.transient_step
+        h = clock.step.to(torch.float64).reshape(-1, 1)
+        model_t = torch.where(g <= n_tr, g * h_tr, n_tr * h_tr + (g - n_tr) * h)[:, steady_idx:]
+    else:
+        model_t = t[steady_idx:]
+    x = (force[:, 0, steady_idx:].to(dtype).expand(batch_size, n)
+         + torch.sin(model_t).to(dtype=dtype, device=device)
          + 0.01 * torch.randn(batch_size, n, dtype=dtype, device=device))
     out = torch.zeros((1 if var_idx is not None else inits.shape[-1], batch_size, n), dtype=dtype,
                       device=device)
     out[0] = x
     return out
+
+
+def batch_loop_clocks(cfg, t_scales, T_obs) -> list:
+    """The record clock the training batch loop builds and hands its row makers, for each (t_scale, T_obs) pair of
+    a schedule (float32 tensors in the cell's units, as the schedule holds them): the loop runs with its schedule
+    replaced by those pairs and its spontaneous row maker by a stand-in that keeps the clock and returns empty rows,
+    so nothing is simulated. Reading what the loop really built, rather than restating its arithmetic, is what makes
+    a check against it a pin: a change to the loop's geometry changes the values read."""
+    from core.SBI import pipeline, statistics
+    seen = []
+
+    def keep(g, nd, init_rows, x_scale, x_offset, _patho):
+        seen.append(g.clock)
+        return torch.zeros((nd.shape[0], statistics.SUMMARY_WIDTH + 1))
+
+    real_rows, real_schedule = pipeline._spontaneous_rows, pipeline._batch_schedule
+    pipeline._spontaneous_rows = keep
+    pipeline._batch_schedule = lambda *a, **k: (t_scales, T_obs)
+    try:
+        class _Fixed:
+            def sample(self, shape):
+                return cfg.ground_truth_tensor.reshape(1, -1).expand(shape[0], -1).clone()
+        pipeline.gen_training_data(
+            cfg.model, _Fixed(), None, cfg.t, run_size=1, n_runs=len(t_scales), steady_idx=cfg.steady_idx,
+            dt_nd_min=cfg.dt_nd_min, nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx,
+            rescale_idx=cfg.rescale_idx, dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+            t_scale_bounds=cfg.t_scale_bounds, spontaneous_only=True, n_vars=cfg.inits_tensor.shape[-1],
+            dtype=cfg.hw.dtype, device=cfg.hw.device)
+    finally:
+        pipeline._spontaneous_rows, pipeline._batch_schedule = real_rows, real_schedule
+    return seen
 
 
 @contextmanager
