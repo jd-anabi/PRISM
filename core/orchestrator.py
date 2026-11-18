@@ -61,6 +61,7 @@ from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
                   truncate,
                   statistics, training_checkpoint, fit_state)
+from .SBI import clock as _clock
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
     build_inferred_bijection, TransformedPosterior, build_rescale_bijection, kept_inverse,
@@ -165,14 +166,15 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     # Ground-truth t_scale for this observation
     t_scale_gt = rescale_gt[:, cfg.rescale_idx["t_scale"]].item()
 
-    # Compute ND quantities for this observation (same logic as training loop)
+    # Compute ND quantities for this observation (same logic as training loop): its record clock, the
+    # transient at dt_nd_min and then a whole number of fine steps per frame of exactly dt_nd_gt, so the
+    # observation is the cell at t_scale_gt with frames dt_exp apart and its drive's clock starting at
+    # the first frame (core/SBI/clock.py).
     dt_nd_gt = cfg.dt_exp / t_scale_gt
     T_nd_obs = cfg.T_obs / t_scale_gt
-    subsample_factor = max(1, round(dt_nd_gt / cfg.dt_nd_min))
     N_obs = int(T_nd_obs / dt_nd_gt)
-
-    # Fine-resolution time vector: transient + enough to downsample into N_obs points
-    n_fine_total = cfg.steady_idx + N_obs * subsample_factor
+    obs_clock = _clock.frame_clock(cfg.dt_exp, t_scale_gt, N_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN)
+    n_fine_total = obs_clock.n_fine
 
     # OOD warning: NN was only trained on combinations with n_fine_total <= N_ND_MAX
     if n_fine_total > N_ND_MAX:
@@ -186,8 +188,9 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     # Cost ceiling: if simulation exceeds the pre-simulated grid, clip and update T_obs
     # so that log(T_obs) conditioning matches the actual trajectory length downstream.
     if n_fine_total > len(t):
-        N_obs = (len(t) - cfg.steady_idx) // subsample_factor
-        n_fine_total = cfg.steady_idx + N_obs * subsample_factor
+        N_obs = (len(t) - cfg.steady_idx) // obs_clock.stride
+        obs_clock = _clock.frame_clock(cfg.dt_exp, t_scale_gt, N_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN)
+        n_fine_total = obs_clock.n_fine
         actual_T_obs = N_obs * cfg.dt_exp
         warnings.warn(
             f"Observation cost ceiling hit: requested T_obs={cfg.T_obs:.4f} exceeds "
@@ -204,11 +207,11 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     # widths, and _emit_overlay_figures' shape guard dropped all five overlay figures without a word.
     cfg.n_obs = N_obs
 
-    t_fine = t[:n_fine_total]
+    t_fine = obs_clock.grid(cfg.hw.dtype, cfg.hw.device)
     n_vars = cfg.inits_tensor.shape[-1]
 
-    # Auto-derive n_segs based on CHUNK_LEN (per-chunk memory cap)
-    n_segs_gt = max(1, math.ceil(n_fine_total / CHUNK_LEN))
+    # The clock's segments: the transient, then recorded segments of at most CHUNK_LEN steps each
+    n_segs_gt = obs_clock.n_segments
 
     x_scale = rescale_gt[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
     x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
@@ -217,15 +220,16 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     def _spont_run(force_tensor):
         x_fine = pipeline.gen_obs(
             model=cfg.model, params=cfg.params_tensor, t=t_fine, inits=cfg.inits_tensor,
-            force=force_tensor, n_segs=n_segs_gt, steady_idx=cfg.steady_idx,
+            force=force_tensor, n_segs=n_segs_gt, steady_idx=obs_clock.n_transient,
             state_dep_drift=cfg.state_dep_drift, var_idx=0,
-            dtype=cfg.hw.dtype, device=cfg.hw.device,
+            dtype=cfg.hw.dtype, device=cfg.hw.device, clock=obs_clock,
         )[0, :, :]
-        return x_fine[:, ::subsample_factor][:, :N_obs]
+        return obs_clock.frames(x_fine)
 
     if cfg.has_forcing and not cfg.chi_mode:
-        force = pipeline.build_nondim_sin_force_tensor(forcing_gt, t_fine, rescale_gt,
-                                                      cfg.forcing_idx, cfg.sim_rescale_idx)
+        force = pipeline.build_nondim_sin_force_tensor(forcing_gt, None, rescale_gt,
+                                                      cfg.forcing_idx, cfg.sim_rescale_idx,
+                                                      t_dim=obs_clock.drive_times(cfg.hw.dtype, cfg.hw.device))
         x_nd = _spont_run(force)                                 # forced run -> Group G
         x_nd_spont = _spont_run(torch.zeros_like(force))         # spontaneous -> Groups A-F
         x_dim = helpers.rescale(x_nd, x_scale, x_offset)
@@ -256,11 +260,10 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
                                        device=cfg.hw.device, spontaneous_only=True)
         obs_mults = chi.chi_multipliers_for(cfg)
         chi_block, _chi_mask = pipeline.gen_chi_block(
-            cfg.model, cfg.params_tensor, rescale_gt, x_spont_dim, t_fine, cfg.inits_tensor,
-            cfg.sim_rescale_idx, n_segs_gt, cfg.steady_idx, subsample_factor, N_obs, cfg.dt_exp,
-            obs_mults, cfg.chi_f0, k_pad=cfg.chi_k_pad, bounds=cfg.chi_freq_bounds,
-            max_cycles=cfg.chi_max_cycles,
-            state_dep_drift=cfg.state_dep_drift, dtype=cfg.hw.dtype, device=cfg.hw.device)
+            cfg.model, cfg.params_tensor, rescale_gt, x_spont_dim, inits=cfg.inits_tensor,
+            rescale_idx=cfg.sim_rescale_idx, multipliers=obs_mults, f0_nd=cfg.chi_f0, k_pad=cfg.chi_k_pad,
+            bounds=cfg.chi_freq_bounds, max_cycles=cfg.chi_max_cycles,
+            state_dep_drift=cfg.state_dep_drift, dtype=cfg.hw.dtype, device=cfg.hw.device, clock=obs_clock)
         # Record the ABSOLUTE probe frequencies this observation was measured at, so the PPC drives
         # the same experiment rather than re-deriving frequencies from each posterior sample's own
         # f_peak -- which would simulate a different experiment and make the PPC agree for the wrong
@@ -2730,24 +2733,22 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             central_rescale = derived.to_sim_rescale(central_nd, central_rescale, cfg.rescale_idx,
                                                     *cfg.tier1_args)              # tier 1, as above
             t_scale_c = central_rescale[0, cfg.rescale_idx["t_scale"]].item()
-            subsample_c = max(1, round((cfg.dt_exp / t_scale_c) / cfg.dt_nd_min))
-            n_fine_c = min(cfg.steady_idx + N_points_obs * subsample_c, len(t))
-            t_fine_c = t[:n_fine_c]
-            n_segs_c = max(1, math.ceil(n_fine_c / CHUNK_LEN))
+            # its own record clock, as the observation's: the cell at its own t_scale, on the obs's frames
+            clock_c = _clock.frame_clock(cfg.dt_exp, t_scale_c, N_points_obs, cfg.dt_nd_min, cfg.steady_idx,
+                                         CHUNK_LEN)
+            t_fine_c = clock_c.grid(dtype, device)
             if cfg.has_forcing and not cfg.chi_mode:
                 force_c = pipeline.build_nondim_sin_force_tensor(
-                    forcing_gt, t_fine_c, central_rescale, cfg.forcing_idx, cfg.sim_rescale_idx)
+                    forcing_gt, None, central_rescale, cfg.forcing_idx, cfg.sim_rescale_idx,
+                    t_dim=clock_c.drive_times(dtype, device))
             else:
-                force_c = torch.zeros((1, n_force_ch, t_fine_c.shape[0]), dtype=dtype, device=device)
+                force_c = torch.zeros((1, n_force_ch, clock_c.n_fine), dtype=dtype, device=device)
             x_nd_c = pipeline.gen_obs(
                 model=cfg.model, params=central_nd, t=t_fine_c, inits=inits,
-                force=force_c, n_segs=n_segs_c, steady_idx=cfg.steady_idx,
-                state_dep_drift=cfg.state_dep_drift, var_idx=0, dtype=dtype, device=device,
+                force=force_c, n_segs=clock_c.n_segments, steady_idx=clock_c.n_transient,
+                state_dep_drift=cfg.state_dep_drift, var_idx=0, dtype=dtype, device=device, clock=clock_c,
             )[0, :, :]                                                       # (1, n_fine_c - steady_idx)
-            idx_c = torch.clamp(
-                torch.arange(N_points_obs, device=device) * subsample_c, max=x_nd_c.shape[1] - 1
-            )
-            x_nd_c_ds = x_nd_c[:, idx_c]                                     # (1, N_points_obs)
+            x_nd_c_ds = clock_c.frames(x_nd_c)                               # (1, N_points_obs)
             x_scale_c = central_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
             x_offset_c = central_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
             return (x_scale_c * x_nd_c_ds + x_offset_c)[0].cpu().numpy()     # (N_points_obs,)

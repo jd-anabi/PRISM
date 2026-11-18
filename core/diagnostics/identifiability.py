@@ -251,17 +251,29 @@ def _refuse_bad_arm_settings(m, rel, min_valid) -> None:
     require_between("min_valid", min_valid, 0.0, 1.0, open_lo=True)
 
 
-def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
-    """``(features (m, n_feat) float64, x_forced, x_spont)`` at one point. The fine grid is re-derived
-    from ``res`` because perturbing t_scale changes the subsample factor and the grid length."""
+def _point_stride(cfg, rescale_vec, rel, n_obs) -> int:
+    """The stride a point and its finite-difference arms share: from the smallest of the time scales they
+    simulate, the t_scale arm's -d among them (core.SBI.clock.rows_clock). Every arm then takes the same
+    number of steps, so the fixed seeds give every arm the same draws -- the common random numbers a
+    central difference rests on -- while each keeps its own step."""
     from core.config import CHUNK_LEN
-    from core.SBI import derived, pipeline
+    from core.SBI import clock
+    t_scale = float(rescale_vec[cfg.rescale_idx["t_scale"]])
+    lo, hi = cfg.rescale_params["t_scale"][1]
+    d = max(rel * (hi - lo), 1e-5 * abs(t_scale))
+    arms = [max(t_scale - d, 1e-6 * t_scale), t_scale, t_scale + d]
+    return clock.rows_clock(cfg.dt_exp, arms, n_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN).stride
+
+
+def _laplace_raw(cfg, nd, res, force, m, crn, n_obs, stride=None):
+    """``(features (m, n_feat) float64, x_forced, x_spont)`` at one point, on its record clock at the
+    ``stride`` its point shares with its arms (:func:`_point_stride`); None takes the point's own."""
+    from core.config import CHUNK_LEN
+    from core.SBI import clock, derived, pipeline
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_scale = float(res[cfg.rescale_idx["t_scale"]])
-    subs = max(1, round((cfg.dt_exp / t_scale) / cfg.dt_nd_min))
-    n_fine = min(cfg.steady_idx + n_obs * subs, len(cfg.t))
-    t_fine = cfg.t[:n_fine]
-    n_segs = max(1, math.ceil(n_fine / CHUNK_LEN))
+    clk = clock.frame_clock(cfg.dt_exp, t_scale, n_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN, stride=stride)
+    t_fine = clk.grid(dtype, device)
     p = nd.unsqueeze(0).expand(m, -1).contiguous()
     rv = res.unsqueeze(0).expand(m, -1).contiguous()
     # The drive gets the simulator's block: on a tier-1 box, the force scale this point's temperature
@@ -270,15 +282,15 @@ def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
     # derived force scale.
     rv_sim, sim_idx = derived.for_simulation(cfg, p, rv)
     fv = force.unsqueeze(0)
-    forcef = pipeline.build_nondim_sin_force_tensor(fv.expand(m, -1), t_fine, rv_sim,
-                                                    cfg.forcing_idx, sim_idx)
+    forcef = pipeline.build_nondim_sin_force_tensor(fv.expand(m, -1), None, rv_sim,
+                                                    cfg.forcing_idx, sim_idx, t_dim=clk.drive_times(dtype, device))
 
     def sim(f):
-        return pipeline.gen_obs(model=cfg.model, params=p, t=t_fine,
-                                inits=cfg.inits_tensor.expand(m, -1).contiguous(), force=f,
-                                n_segs=n_segs, steady_idx=cfg.steady_idx,
-                                state_dep_drift=cfg.state_dep_drift, batch_size=m, dtype=dtype,
-                                device=device)[0][:, ::subs][:, :n_obs]
+        return clk.frames(pipeline.gen_obs(model=cfg.model, params=p, t=t_fine,
+                                           inits=cfg.inits_tensor.expand(m, -1).contiguous(), force=f,
+                                           n_segs=clk.n_segments, steady_idx=clk.n_transient,
+                                           state_dep_drift=cfg.state_dep_drift, batch_size=m, dtype=dtype,
+                                           device=device, clock=clk)[0])
 
     if crn:
         # fork_rng CONFINED to the CRN-seeded arms only. manual_seed(_SF)/(_SS) exist so the
@@ -324,8 +336,10 @@ def _analyze_point(ctx, nd, res, force):
         mag = (xf_d.abs().amax(1) < cap) & (xs_d.abs().amax(1) < cap)
         return (fin & mag).cpu().numpy()
 
+    stride = _point_stride(cfg, res, ctx.rel, ctx.n_obs)
+
     def measure(nd_, res_, force_, m, cap):
-        feats, xf_d, xs_d = _laplace_raw(cfg, nd_, res_, force_, m, True, ctx.n_obs)
+        feats, xf_d, xs_d = _laplace_raw(cfg, nd_, res_, force_, m, True, ctx.n_obs, stride)
         v = _valid(xf_d, xs_d, cap)
         if not v.any():
             return np.full(n_feat, np.nan), 0.0
@@ -343,7 +357,7 @@ def _analyze_point(ctx, nd, res, force):
             return (f0 - fm) / d
         return np.full(n_feat, np.nan)
 
-    f0, xf0, xs0 = _laplace_raw(cfg, nd, res, force, ctx.m_noise, False, ctx.n_obs)
+    f0, xf0, xs0 = _laplace_raw(cfg, nd, res, force, ctx.m_noise, False, ctx.n_obs, stride)
     fin0 = (torch.isfinite(xf0).all(1) & torch.isfinite(xs0).all(1)).cpu().numpy()
     if fin0.sum() < 10:
         return np.full(P, np.nan), 0
@@ -504,18 +518,17 @@ class _JacCtx:
     n_force_ch: int
 
 
-def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
+def _jacobian_features(ctx, pvec, rescale_vec, m, crn, stride=None):
     """``(features (m, n_feat) float64, x_for_validity, x_spont)`` at one point, in the mode's own
-    feature set. The grid is re-derived from ``rescale_vec`` (perturbing t_scale changes it)."""
+    feature set, on its record clock at the ``stride`` the point shares with its arms
+    (:func:`_point_stride`); None takes the point's own."""
     from core.config import CHUNK_LEN
-    from core.SBI import chi as chi_mod, derived, pipeline
+    from core.SBI import chi as chi_mod, clock, derived, pipeline
     cfg = ctx.cfg
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_scale = float(rescale_vec[cfg.rescale_idx["t_scale"]])
-    subs = max(1, round((cfg.dt_exp / t_scale) / cfg.dt_nd_min))
-    n_fine = min(cfg.steady_idx + ctx.n_obs * subs, len(cfg.t))
-    t_fine = cfg.t[:n_fine]
-    n_segs = max(1, math.ceil(n_fine / CHUNK_LEN))
+    clk = clock.frame_clock(cfg.dt_exp, t_scale, ctx.n_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN, stride=stride)
+    t_fine = clk.grid(dtype, device)
     p = pvec.unsqueeze(0).expand(m, -1).contiguous()
     rv = rescale_vec.unsqueeze(0).expand(m, -1).contiguous()
     # The probes and the drive get the simulator's block, as in _laplace_raw: on a tier-1 box the
@@ -524,10 +537,10 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
     inits_m = cfg.inits_tensor.expand(m, -1).contiguous()
 
     def sim(f):
-        return pipeline.gen_obs(model=cfg.model, params=p, t=t_fine, inits=inits_m, force=f,
-                                n_segs=n_segs, steady_idx=cfg.steady_idx,
-                                state_dep_drift=cfg.state_dep_drift, batch_size=m, dtype=dtype,
-                                device=device)[0][:, ::subs][:, :ctx.n_obs]
+        return clk.frames(pipeline.gen_obs(model=cfg.model, params=p, t=t_fine, inits=inits_m, force=f,
+                                           n_segs=clk.n_segments, steady_idx=clk.n_transient,
+                                           state_dep_drift=cfg.state_dep_drift, batch_size=m, dtype=dtype,
+                                           device=device, clock=clk)[0])
 
     xsc = rescale_vec[cfg.rescale_idx["x_scale"]].double()
     xof = rescale_vec[cfg.rescale_idx["x_offset"]].double() if "x_offset" in cfg.rescale_idx else 0.0
@@ -551,8 +564,7 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
             # `[:2]` here once bound `logcyc_v = u`.
             chi_v, _u_v, _logcyc_v, valid_v = pipeline.gen_chi_raw(
                 model=cfg.model, params_nd=p, rescale=rv_sim, x_spont_dim=xs_d.to(dtype),
-                t_fine=t_fine, inits=inits_m, rescale_idx=sim_idx, n_segs=n_segs,
-                steady_idx=cfg.steady_idx, subsample=subs, N_points=ctx.n_obs, dt_exp=cfg.dt_exp,
+                inits=inits_m, rescale_idx=sim_idx, clock=clk,
                 multipliers=ctx.mults, f0_nd=cfg.chi_f0, state_dep_drift=cfg.state_dep_drift,
                 # Ceiling ON, filter OFF -- see the note at the same call in SBI/decorrelate.feats.
                 max_cycles=cfg.chi_max_cycles, resolution_filter=False, dtype=dtype, device=device)
@@ -567,8 +579,8 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
             feats = np.concatenate([spont[:, ctx.keep_idx], chi_block.double().cpu().numpy()], axis=1)
             return feats, xs_d, xs_d
 
-        force = pipeline.build_nondim_sin_force_tensor(ctx.forcing_gt.expand(m, -1), t_fine, rv_sim,
-                                                        cfg.forcing_idx, sim_idx)
+        force = pipeline.build_nondim_sin_force_tensor(ctx.forcing_gt.expand(m, -1), None, rv_sim,
+                                                        cfg.forcing_idx, sim_idx, t_dim=clk.drive_times(dtype, device))
         if crn:
             torch.manual_seed(_SF)
         xf = sim(force)
@@ -660,9 +672,10 @@ def _jacobian(ctx, gt_nd, gt_rescale, fnoise, cap, m, rel, min_valid):
     sides do."""
     cfg = ctx.cfg
     device = cfg.hw.device
+    stride = _point_stride(cfg, gt_rescale, rel, ctx.n_obs)
 
     def feats_valid(pvec, rescale_vec, m_):
-        feats, xf_d, xs_d = _jacobian_features(ctx, pvec, rescale_vec, m_, True)
+        feats, xf_d, xs_d = _jacobian_features(ctx, pvec, rescale_vec, m_, True, stride)
         fin = torch.isfinite(xf_d).all(1) & torch.isfinite(xs_d).all(1)
         mag = (xf_d.abs().amax(1) < cap) & (xs_d.abs().amax(1) < cap)
         v = (fin & mag).cpu().numpy()
@@ -902,7 +915,8 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
 
     with store.create("diagnostic", cfg, name=name, note=note) as w:
         with seeded(int(seed), device):
-            feats0, xf0, xs0 = _jacobian_features(ctx, gt_nd, gt_rescale, int(m_noise), False)
+            feats0, xf0, xs0 = _jacobian_features(ctx, gt_nd, gt_rescale, int(m_noise), False,
+                                                   _point_stride(cfg, gt_rescale, float(rel), ctx.n_obs))
             fin0 = (torch.isfinite(xf0).all(1) & torch.isfinite(xs0).all(1)).cpu().numpy()
             if fin0.sum() < 10:
                 # This mirrors _analyze_point's own guard (laplace). Below this the noise floor is not

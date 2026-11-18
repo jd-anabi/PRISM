@@ -24,7 +24,6 @@ bijection round-trip and the rotation reuse are pinned by tests/test_user_sbi.py
 and `python -m core smoke` exercises the rotation end to end on the card.
 """
 import logging
-import math
 
 import numpy as np
 import torch
@@ -34,6 +33,7 @@ from core.config import CHUNK_LEN, REPARAM_FISHER_M, REPARAM_FISHER_DZ, REPARAM_
 from core.SBI import chi as _chi
 from core.SBI import pipeline
 from core.SBI import derived
+from core.SBI import clock as _clock
 from core.SBI.reparam import build_inferred_bijection, fisher_eigenbasis
 
 log = logging.getLogger(__name__)
@@ -148,14 +148,14 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
     #
     # If this is ever revisited, the honest test is to build V both ways at several operating points
     # and compare the resulting eigenbasis -- not to reason from the output dtype.
-    def feats(theta_row, mm):
+    def feats(theta_row, mm, stride):
+        """The features at one point on its record clock, at the stride its whole central difference shares
+        (see fisher_at): the same number of steps at every arm, so the seeds give every arm the same draws."""
         nd = theta_row[:nd_dim].unsqueeze(0).expand(mm, -1).contiguous()
         res = theta_row[nd_dim:]
         t_scale = float(res[cfg.rescale_idx["t_scale"]])
-        subs = max(1, round((cfg.dt_exp / t_scale) / cfg.dt_nd_min))
-        n_fine = min(cfg.steady_idx + N_obs * subs, len(cfg.t))
-        t_fine = cfg.t[:n_fine]
-        n_segs = max(1, math.ceil(n_fine / CHUNK_LEN))
+        clk = _clock.frame_clock(cfg.dt_exp, t_scale, N_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN, stride=stride)
+        t_fine = clk.grid(dtype, device)
         rv = res.unsqueeze(0).expand(mm, -1).contiguous()
         # TIER 1 (a box that declares T instead of f_scale): the Fisher must be built over the
         # SIMULATED experiment, so the
@@ -168,11 +168,11 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
         sim_ridx = cfg.sim_rescale_idx
 
         def s(f):
-            return pipeline.gen_obs(model=cfg.model, params=nd, t=t_fine,
-                                    inits=base_inits.expand(mm, -1).contiguous(), force=f,
-                                    n_segs=n_segs, steady_idx=cfg.steady_idx,
-                                    state_dep_drift=cfg.state_dep_drift, batch_size=mm, var_idx=0,
-                                    dtype=dtype, device=device)[0][:, ::subs][:, :N_obs]
+            return clk.frames(pipeline.gen_obs(model=cfg.model, params=nd, t=t_fine,
+                                               inits=base_inits.expand(mm, -1).contiguous(), force=f,
+                                               n_segs=clk.n_segments, steady_idx=clk.n_transient,
+                                               state_dep_drift=cfg.state_dep_drift, batch_size=mm, var_idx=0,
+                                               dtype=dtype, device=device, clock=clk)[0])
 
         def stats_no_flags(*a, **kw):
             """gen_stats WITHOUT its trailing valid-flag block.
@@ -237,9 +237,7 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
                 # logcyc's slot and contaminated every chi Jacobian for three commits.
                 chi_v, _u_v, _logcyc_v, _valid_v = pipeline.gen_chi_raw(
                     model=cfg.model, params_nd=nd, rescale=rv, x_spont_dim=xs_d.to(dtype),
-                    t_fine=t_fine, inits=base_inits.expand(mm, -1).contiguous(),
-                    rescale_idx=sim_ridx, n_segs=n_segs, steady_idx=cfg.steady_idx,
-                    subsample=subs, N_points=N_obs, dt_exp=cfg.dt_exp,
+                    inits=base_inits.expand(mm, -1).contiguous(), rescale_idx=sim_ridx, clock=clk,
                     multipliers=chi_mults, f0_nd=cfg.chi_f0,
                     # The duration ceiling STAYS ON here, unlike resolution_filter. The filter is a
                     # theta-dependent MASK and so poisons a central difference; the ceiling shortens
@@ -256,8 +254,9 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
                 fisher_block = _chi.fisher_features(chi_v)
                 return np.concatenate([spont, fisher_block.double().cpu().numpy()], axis=1)
             if has_drive:
-                force = pipeline.build_nondim_sin_force_tensor(forcing_gt.expand(mm, -1), t_fine, rv,
-                                                               cfg.forcing_idx, sim_ridx)
+                force = pipeline.build_nondim_sin_force_tensor(forcing_gt.expand(mm, -1), None, rv,
+                                                               cfg.forcing_idx, sim_ridx,
+                                                               t_dim=clk.drive_times(dtype, device))
                 torch.manual_seed(1); xf = s(force)
                 torch.manual_seed(2); xs = s(torch.zeros_like(force))
                 return stats_no_flags(xsc * xs.double() + xof, xsc * xf.double() + xof, cfg.dt_exp,
@@ -278,18 +277,28 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
 
     def fisher_at(theta_row):
         """Per-point standardized feature-Fisher F_k = J^T J, or None if features are non-finite."""
-        f0 = feats(theta_row, max(4 * m, 128))
-        if not np.isfinite(f0).all():
-            return None
-        fnoise = np.maximum(f0.std(0), 1e-9)
         z0 = T.inv(theta_row)
-        # Row count from the ACTUAL feature width, not len(FEATURE_LABELS): chi mode returns 41 + 3K,
-        # and hardcoding 41 would have silently truncated the chi block out of the Jacobian.
-        J = np.zeros((f0.shape[1], P))
+        arms = []
         for i in range(P):
             zp = z0.clone(); zp[i] += dz
             zm = z0.clone(); zm[i] -= dz
-            J[:, i] = (feats(T(zp), m).mean(0) - feats(T(zm), m).mean(0)) / (2 * dz) / fnoise
+            arms.append((T(zp), T(zm)))
+        # ONE stride for the point and all 2P arms, from the smallest of their time scales
+        # (core.SBI.clock.rows_clock): a t_scale arm may cross a whole number of finest steps per frame,
+        # and an arm at another stride would take another number of steps and so other draws, which
+        # the common random numbers below exist to prevent. Each arm keeps its own step.
+        ts_i = nd_dim + cfg.rescale_idx["t_scale"]
+        t_scales = [float(theta_row[ts_i])] + [float(a[ts_i]) for pair in arms for a in pair]
+        stride = _clock.rows_clock(cfg.dt_exp, t_scales, N_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN).stride
+        f0 = feats(theta_row, max(4 * m, 128), stride)
+        if not np.isfinite(f0).all():
+            return None
+        fnoise = np.maximum(f0.std(0), 1e-9)
+        # Row count from the ACTUAL feature width, not len(FEATURE_LABELS): chi mode returns 41 + 3K,
+        # and hardcoding 41 would have silently truncated the chi block out of the Jacobian.
+        J = np.zeros((f0.shape[1], P))
+        for i, (rp, rm) in enumerate(arms):
+            J[:, i] = (feats(rp, m, stride).mean(0) - feats(rm, m, stride).mean(0)) / (2 * dz) / fnoise
         return None if not np.isfinite(J).all() else (J.T @ J)
 
     # Anchor point, then (n_points-1) prior draws (if a prior was provided). GT-free training anchors

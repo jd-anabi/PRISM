@@ -708,8 +708,8 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     :param params: (batch, n_params) simulation parameters.
     :param t: ND time grid; dtype/device are applied during processing. With a clock only its length is
         read, and it must be the clock's ``n_fine``.
-    :param dt: the step, a float or one value per row, handed to every one of the ``n_segs`` segments;
-        None leaves the simulator to read the grid's first interval.
+    :param dt: the step, a float or one value per row, handed to every one of the ``n_segs`` segments.
+        One of ``dt`` and ``clock`` is required.
     :param clock: the record clock (``core.SBI.clock.FrameClock``): its segments are the simulator's plan,
         the transient at its step and the recorded part at another. ``t``'s length, ``steady_idx`` and
         ``n_segs`` must agree with it, so a call site that hands a stale geometry fails here.
@@ -740,8 +740,13 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
             raise ValueError(f"gen_obs was handed a grid of {got[0]} points, a transient of {got[1]} steps and "
                              f"{got[2]} segments, but its clock has {want[0]}, {want[1]} and {want[2]}")
         plan = clock.segments()
-    else:
+    elif dt is not None:
         plan = _plan_for(t.shape[0], n_segs, dt)
+    else:
+        # REQUIRED, never defaulted: a call site handing neither would run on a step read off its grid --
+        # the plausible-looking row, not a crash, that a wrong clock always produces.
+        raise ValueError("gen_obs needs the run's record clock (clock=) or its step (dt=); it reads no step "
+                         "from the grid")
 
     # --- memory guard: split the batch if this geometry would not fit ---
     # The simulator's tensors are all linear in the batch: the (n_vars, batch, T) solution buffer,

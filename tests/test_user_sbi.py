@@ -585,56 +585,6 @@ def test_peak_freq_sub_batching_is_bit_identical():
         assert torch.equal(full, subbed), f"B={B} n={n}: sub-batching changed peak_freq"
 
 
-def test_chi_downsample_slice_matches_clamped_gather():
-    """gen_chi_block downsamples fine -> dt_exp without materialising a (B, N_points) int64 index when
-    the subsample is a uniform int AND the fine grid is long enough. That fast path must be exactly the
-    clamped gather it replaces -- and the guard must FALL BACK to the gather when the grid was clipped,
-    because slicing truncates there while the gather replicates the last sample."""
-    def selected(x_nd, subsample, N_points):
-        """Mirrors the branch in pipeline.gen_chi_block (n_avail == x_nd's width)."""
-        B, n_avail = x_nd.shape[0], x_nd.shape[1]
-        s_int = None if torch.is_tensor(subsample) else max(1, int(subsample))
-        if s_int is not None and s_int * (N_points - 1) < n_avail:
-            return x_nd[:, ::s_int][:, :N_points], True
-        subs = (subsample.long().clamp(min=1) if torch.is_tensor(subsample)
-                else torch.full((B,), s_int, dtype=torch.long))
-        idx = subs.unsqueeze(1) * torch.arange(N_points, dtype=torch.long).unsqueeze(0)
-        return torch.gather(x_nd, 1, idx.clamp_(max=n_avail - 1)), False
-
-    def old_gather(x_nd, subsample, N_points):
-        B = x_nd.shape[0]
-        subs = (subsample.long().clamp(min=1) if torch.is_tensor(subsample)
-                else torch.full((B,), int(subsample), dtype=torch.long))
-        idx = subs.unsqueeze(1) * torch.arange(N_points, dtype=torch.long).unsqueeze(0)
-        return torch.gather(x_nd, 1, idx.clamp(max=x_nd.shape[1] - 1))
-
-    torch.manual_seed(3)
-    # Training geometry: gen_obs returns exactly N_points * subsample columns, so the clamp is dead.
-    for B in (1, 3, 50):
-        for s in (1, 2, 5, 17, 40):
-            for N in (1, 2, 101, 1000):
-                x = torch.randn(B, N * s)
-                got, fast = selected(x, s, N)
-                assert fast, f"B={B} s={s} N={N}: should have taken the no-index fast path"
-                assert torch.equal(got, old_gather(x, s, N)), f"B={B} s={s} N={N}: fast path differs"
-
-    # PPC passes a (B,) per-sample subsample; rows have different strides -> must keep the gather.
-    x = torch.randn(50, 4000)
-    subs = torch.randint(1, 6, (50,))
-    got, fast = selected(x, subs, 700)
-    assert not fast, "a (B,) subsample must not take the strided fast path"
-    assert torch.equal(got, old_gather(x, subs, 700)), "tensor-subsample path differs from the gather"
-
-    # Clipped fine grid (t_fine = t[:n] runs out; ~20% of accepted draws on model-builder bounds).
-    s, N = 4, 10
-    x = torch.arange(2 * 25, dtype=torch.float32).reshape(2, 25)     # 25 < s*(N-1)+1 == 37
-    got, fast = selected(x, s, N)
-    assert not fast, "a clipped fine grid must fall back to the clamped gather"
-    assert got.shape == (2, N), f"clipped grid must still yield N_points columns, got {tuple(got.shape)}"
-    assert torch.equal(got, old_gather(x, s, N)), "clipped-grid result differs from the clamped gather"
-    assert x[:, ::s][:, :N].shape != got.shape, "test is toothless: unguarded slicing did not truncate"
-
-
 def test_zero_force_tensor_channel_width():
     """The driveless runs in gen_training_data / generate_observations size their zero-force tensor with
     forcing.n_force_channels, not n_vars -- that is the single largest tensor in a training batch and
@@ -662,7 +612,7 @@ def test_zero_force_tensor_channel_width():
         try:
             pipeline_mod.gen_obs(model=model, params=cfg.params_tensor, t=t, inits=cfg.inits_tensor,
                                  force=torch.zeros((1, n_ch, 60), dtype=cfg.hw.dtype),
-                                 n_segs=1, steady_idx=10, state_dep_drift=sdd,
+                                 n_segs=1, steady_idx=10, state_dep_drift=sdd, dt=1.0 / 59,
                                  dtype=cfg.hw.dtype, device=cfg.hw.device)
         except IndexError as e:
             raise AssertionError(f"{model}: {n_ch}-channel zero-force is too narrow for the drift ({e})")
@@ -914,9 +864,10 @@ def test_lock_in_duration_is_capped_at_chi_max_cycles():
     dtype = cfg.hw.dtype
 
     B, N_points, cap = 2, 4000, 20.0
-    steady_idx, subsample = 200, 1
-    t_fine = torch.linspace(0, (steady_idx + N_points) * cfg.dt_nd_min,
-                            steady_idx + N_points, dtype=dtype)
+    steady_idx = 200
+    from core.SBI import clock
+    t_scale = float(cfg.rescale_params["t_scale"][0])
+    clk = clock.frame_clock(cfg.dt_exp, t_scale, N_points, cfg.dt_nd_min, steady_idx, config.CHUNK_LEN)
     nd = cfg.params_tensor[0].reshape(1, -1).expand(B, -1).contiguous()
     rescale = torch.tensor([[v for v, _ in cfg.rescale_params.values()]],
                            dtype=dtype).expand(B, -1).contiguous()
@@ -940,9 +891,8 @@ def test_lock_in_duration_is_capped_at_chi_max_cycles():
 
     def _cycles(max_cycles):
         _chi, _u, logcyc, _valid = pipeline_mod.gen_chi_raw(
-            model=model, params_nd=nd, rescale=rescale, x_spont_dim=x_spont, t_fine=t_fine,
-            inits=inits, rescale_idx=cfg.rescale_idx, n_segs=1, steady_idx=steady_idx,
-            subsample=subsample, N_points=N_points, dt_exp=cfg.dt_exp,
+            model=model, params_nd=nd, rescale=rescale, x_spont_dim=x_spont,
+            inits=inits, rescale_idx=cfg.rescale_idx, clock=clk,
             multipliers=torch.tensor([f_abs], dtype=dtype), f0_nd=cfg.chi_f0,
             absolute_freqs=True, resolution_filter=False, max_cycles=max_cycles,
             state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=cfg.hw.device)
@@ -1031,7 +981,7 @@ def test_solver_failure_raises_instead_of_killing_the_process():
         return pipeline_mod.gen_obs(
             model=model, params=cfg.params_tensor, t=torch.linspace(0, 1.0, 50, dtype=cfg.hw.dtype),
             inits=cfg.inits_tensor, force=torch.zeros((1, n_ch, 50), dtype=cfg.hw.dtype),
-            n_segs=1, steady_idx=5, state_dep_drift=sdd, var_idx=0,
+            n_segs=1, steady_idx=5, state_dep_drift=sdd, var_idx=0, dt=1.0 / 49,
             dtype=cfg.hw.dtype, device=cfg.hw.device)
 
     def solver_raising(exc):
@@ -1127,7 +1077,7 @@ def _oom_gen_obs_setup():
     return dict(model=model, params=cfg.params_tensor.expand(B, -1).contiguous(),
                 t=torch.linspace(0, 1.0, n, dtype=cfg.hw.dtype), inits=inits,
                 force=torch.zeros((B, n_ch, n), dtype=cfg.hw.dtype),
-                n_segs=1, steady_idx=10, state_dep_drift=sdd, batch_size=B,
+                n_segs=1, steady_idx=10, state_dep_drift=sdd, batch_size=B, dt=1.0 / (n - 1),
                 var_idx=0, dtype=cfg.hw.dtype, device=cfg.hw.device)
 
 
@@ -1601,7 +1551,7 @@ def test_split_gen_obs_concatenates_correctly():
         out = pipeline_mod.gen_obs(model=model, params=params,
                                    t=torch.linspace(0, 1.0, n, dtype=cfg.hw.dtype), inits=inits,
                                    force=torch.zeros((B, n_ch, n), dtype=cfg.hw.dtype),
-                                   n_segs=1, steady_idx=10, state_dep_drift=sdd, batch_size=B,
+                                   n_segs=1, steady_idx=10, state_dep_drift=sdd, batch_size=B, dt=1.0 / (n - 1),
                                    var_idx=0, dtype=cfg.hw.dtype, device=cfg.hw.device)
         assert out.shape == (1, B, n - 10), f"split gen_obs returned {tuple(out.shape)}"
         assert torch.isfinite(out).all(), "split gen_obs produced non-finite values"

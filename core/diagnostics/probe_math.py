@@ -3,10 +3,8 @@
 The probe checks re-measure the chi probe settings -- the band, the drive strength, the masking -- on
 a lab's own cell or prior. They measure and never change a setting, and what they measure only means
 something if a probe length describes the same trace a training batch of that length holds. So the
-geometry here RESTATES the training batch loop's arithmetic and the Sobol pre-filter's ceiling, float
-truncation included; it does not replace them. The production copies stay where they are, and they
-are not merged with each other either: the pre-filter works in float32 and the batch loop in Python
-floats, and the two disagree on a handful of candidates.
+geometry here is the training batch's: the batch loop's frame count, float truncation included, on the
+record clock the loop and the Sobol pre-filter share (core/SBI/clock.py), and the pre-filter's ceiling.
 
 Nothing here logs, prints, simulates or refuses. A mismatch between two ensembles handed to the
 own-peak ratio is a programming error and raises ``ValueError``.
@@ -30,25 +28,31 @@ class Geometry(NamedTuple):
     subsample: int
 
 
+def _clock(cfg, t_scale: float, n_obs: int):
+    """The record clock a training batch at ``t_scale`` holding ``n_obs`` frames runs on."""
+    from core.SBI import clock
+    return clock.frame_clock(cfg.dt_exp, t_scale, n_obs, cfg.dt_nd_min, cfg.steady_idx, config.CHUNK_LEN)
+
+
 def _subsample(cfg, t_scale: float) -> int:
-    """Fine integration steps per recorded sample at one t_scale, by the batch loop's rule."""
-    dt_nd = cfg.dt_exp / t_scale
-    return max(1, round(dt_nd / cfg.dt_nd_min))
+    """Fine integration steps per recorded sample at one t_scale: the record clock's stride."""
+    return _clock(cfg, t_scale, 1).stride
 
 
 def recording_geometry(cfg, t_obs_s: float, t_scale: float) -> Geometry:
     """The geometry of a ``t_obs_s``-second recording at ``t_scale``, computed exactly as the training
     batch loop computes a batch's: the length in cell time units over t_scale, the recording step over
-    t_scale, the sample count TRUNCATED from their ratio. No clipping and no correction of that
-    truncation, so the count depends on t_scale's precision: one second holds 999 samples at the Python
-    float 3.73 but 1000 at float32(3.73), the precision training's schedule draws its t_scales in.
-    Handed the same t_scale, this helper and the batch loop agree."""
+    t_scale, the sample count TRUNCATED from their ratio, and the record clock's fine steps and stride.
+    No clipping and no correction of that truncation, so the count depends on t_scale's precision: one
+    second holds 999 samples at the Python float 3.73 but 1000 at float32(3.73), the precision
+    training's schedule draws its t_scales in. Handed the same t_scale, this helper and the batch loop
+    agree."""
     t_cell = t_obs_s * cfg.get_unit_conversion_factor("s")
     t_nd = t_cell / t_scale
     dt_nd = cfg.dt_exp / t_scale
-    subsample = _subsample(cfg, t_scale)
     n_obs = int(t_nd / dt_nd)
-    return Geometry(n_obs=n_obs, n_fine=cfg.steady_idx + n_obs * subsample, subsample=subsample)
+    c = _clock(cfg, t_scale, n_obs)
+    return Geometry(n_obs=n_obs, n_fine=c.n_fine, subsample=c.stride)
 
 
 def training_ceiling_s(cfg, t_scale: float) -> float:

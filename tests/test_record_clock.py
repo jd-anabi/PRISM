@@ -5,6 +5,7 @@ a response equal to its drive, read through the clock and the lock-in, reading 1
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from core import config, forcing
@@ -241,3 +242,184 @@ def test_a_forced_drive_stands_at_its_drawn_phase_at_the_first_frame(monkeypatch
         g2.append(rows[:, [lab.index("G2_cos"), lab.index("G2_sin")]])
     g2 = torch.cat(g2)
     assert float((g2 - g2[0]).abs().max()) <= 1e-3, g2
+
+
+def _master_cfg(t_scale=None, t_obs=200.0):
+    """The master box (it declares a drive: forced mode) with the weakly driven master cell, CPU; optionally the
+    cell moved to another time scale."""
+    from core import cli
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+    if t_scale is not None:
+        cfg.rescale_params["t_scale"] = (float(t_scale), cfg.rescale_params["t_scale"][1])
+    cfg.T_obs = float(t_obs)
+    return cfg
+
+
+class _Recorder:
+    """A stand-in for gen_obs that keeps the clock (or step) each call was handed and answers with the drive's
+    first channel past the transient, the response of an ideal system; a little noise keeps an undriven trace's
+    features finite, and a driven one gets it too unless ``exact``."""
+    def __init__(self, exact=False):
+        self.clocks = []
+        self.exact = exact
+
+    def __call__(self, model, params, t, inits, force, n_segs, steady_idx, *a, dt=None, clock=None, **kw):
+        self.clocks.append(clock if clock is not None else dt)
+        b = params.shape[0]
+        x = force[:, 0:1, steady_idx:].expand(b, 1, -1).permute(1, 0, 2).clone()
+        if self.exact and bool(force.abs().amax() > 0):
+            return x
+        return x + 0.01 * torch.randn_like(x)
+
+
+def test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step():
+    """gen_obs requires its run's clock or its step, and every call of it in the program's code names one: a call
+    that named neither would run on a step read off its grid, the plausible-looking row a wrong clock gives."""
+    import ast
+    from pathlib import Path
+    from tests._fixtures import CODE_ROOTS
+    repo = Path(__file__).resolve().parents[1]
+    calls = []
+    for root in CODE_ROOTS:
+        for path in sorted((repo / root).rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+                    if name == "gen_obs":
+                        named = {k.arg for k in node.keywords}
+                        calls.append((path.relative_to(repo).as_posix(), node.lineno, bool(named & {"clock", "dt"})))
+    assert len(calls) >= 10, calls
+    bare = [(p, n) for p, n, ok in calls if not ok]
+    assert not bare, f"gen_obs called with neither a clock nor a step: {bare}"
+
+
+def test_gen_obs_refuses_a_call_without_a_clock_or_a_step_and_a_stale_geometry():
+    from core.SBI import pipeline
+    c = clock.frame_clock(DT_EXP, 5.0, 10, DT_MIN, 20, config.CHUNK_LEN)
+    args = dict(model="HOPF", params=torch.zeros(1, 4), inits=torch.zeros(1, 2), batch_size=1)
+    with pytest.raises(ValueError, match="clock"):
+        pipeline.gen_obs(t=torch.zeros(c.n_fine), force=torch.zeros(1, 2, c.n_fine), n_segs=1, steady_idx=20,
+                         **args)
+    with pytest.raises(ValueError, match="not both"):
+        pipeline.gen_obs(t=torch.zeros(c.n_fine), force=torch.zeros(1, 2, c.n_fine), n_segs=c.n_segments,
+                         steady_idx=20, dt=0.025, clock=c, **args)
+    with pytest.raises(ValueError, match="its clock has"):
+        pipeline.gen_obs(t=torch.zeros(c.n_fine + 1), force=torch.zeros(1, 2, c.n_fine + 1), n_segs=c.n_segments,
+                         steady_idx=20, clock=c, **args)
+
+
+def test_the_bench_warning_names_the_shortest_time_scale_training_draws():
+    """A bench recording's out-of-distribution warning names the shortest time scale training draws for its length,
+    by the clock's rule: the schedule's filter admits it and refuses a hair below it."""
+    import warnings
+    from core.config import N_ND_MAX
+    from core.SBI import observations
+    for T in (5000.0, 26909.0, 40000.0, 60000.0):
+        lo = clock.shortest_trained_t_scale(DT_EXP, T, DT_MIN, STEADY, N_ND_MAX)
+        fits = clock.training_n_fine(DT_EXP, torch.tensor([lo * (1 + 1e-9), lo * (1 - 1e-5)], dtype=torch.float64),
+                                     torch.tensor([T, T], dtype=torch.float64), DT_MIN, STEADY) <= N_ND_MAX
+        assert fits.tolist() == [True, False], (T, lo)
+    cfg = _master_cfg()
+    si = {k: float(v) for k, (v, _) in cfg.force_params_dict.items()}
+    n = 40000
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            observations.build_experiment_obs(cfg, torch.zeros(n), torch.zeros(n), n / 1000.0, si)
+        except Exception:                                    # the warning comes first; the rest is not this test's
+            pass
+    said = [str(w.message) for w in caught if "out-of-distribution" in str(w.message)]
+    want = clock.shortest_trained_t_scale(cfg.dt_exp, float(n), cfg.dt_nd_min, cfg.steady_idx, N_ND_MAX)
+    assert said and f"t_scale >= {want:.3f}" in said[0], (said, want)
+
+
+def test_a_fisher_points_arms_share_their_stride(monkeypatch):
+    """The Fisher's central difference at a point runs every arm on ONE stride, from the smallest of their time
+    scales, so every arm takes the same steps and the seeds give them the same draws; each arm keeps its own step.
+    At the master cell (3.73 ms) the t_scale arm's -dz reaches 3.48 ms, twelve fine steps per frame, where the
+    point alone needs eleven."""
+    from core.SBI import decorrelate, pipeline
+    rec = _Recorder()
+    monkeypatch.setattr(pipeline, "gen_obs", rec)
+    cfg = _master_cfg(t_obs=300.0)
+    try:
+        decorrelate.build_latent_fisher_rotation(cfg, m=2, n_points=1)
+    except Exception:                                        # an ideal stand-in may not give a usable Fisher
+        pass
+    strides = {c.stride for c in rec.clocks}
+    steps = {round(float(c.step), 12) for c in rec.clocks}
+    assert len(rec.clocks) > 4 and strides == {12}, strides
+    assert len(steps) > 2, steps
+
+
+def test_an_identifiability_points_arms_share_their_stride(monkeypatch):
+    """The identifiability diagnostics' central differences share one stride at a point in the same way: from the
+    t_scale arm's smallest time scale."""
+    from core.diagnostics import identifiability
+    from core.SBI import pipeline
+    cfg = _master_cfg()
+    res = torch.tensor([v for v, _ in cfg.rescale_params.values()])
+    s = identifiability._point_stride(cfg, res, 0.01, 200)
+    lo, hi = cfg.rescale_params["t_scale"][1]
+    ts = float(res[cfg.rescale_idx["t_scale"]])
+    assert s == clock.frame_clock(cfg.dt_exp, ts - 0.01 * (hi - lo), 200, cfg.dt_nd_min, cfg.steady_idx,
+                                  config.CHUNK_LEN).stride
+    rec = _Recorder()
+    monkeypatch.setattr(pipeline, "gen_obs", rec)
+    force = torch.tensor([v for v, _ in cfg.force_params_dict.values()])
+    identifiability._laplace_raw(cfg, cfg.params_tensor[0], res, force, 2, True, 200, s)
+    assert rec.clocks and all(c.stride == s for c in rec.clocks)
+
+
+def test_a_predictive_check_runs_each_draw_at_its_own_time_scale_on_the_frames(monkeypatch):
+    """The predictive check's bin runs every draw on one stride, from the bin's smallest time scale, each at its
+    own step: so each draw is the cell at its own time scale, its drive on the observation's frames. With a
+    response equal to its drive, every draw's forced trace is the same cosine on those frames (scaled by its
+    own x_scale over f_scale), whatever its time scale."""
+    from core.SBI import derived, pipeline, ppc
+    rec = _Recorder(exact=True)
+    monkeypatch.setattr(pipeline, "gen_obs", rec)
+    cfg = _master_cfg()
+    nd = cfg.params_tensor.repeat(4, 1)
+    res = torch.tensor([[v for v, _ in cfg.rescale_params.values()]]).repeat(4, 1)
+    res[:, cfg.rescale_idx["t_scale"]] = torch.tensor([3.0, 7.215, 13.9, 30.0])
+    sres = derived.to_sim_rescale(nd, res, cfg.rescale_idx, *cfg.tier1_args)
+    forcing_gt = torch.tensor([[v for v, _ in cfg.force_params_dict.values()]])
+    x_dim, x_spont, _chi, inv = ppc.simulate_ppc_bins(cfg, cfg.t, cfg.inits_tensor, nd, sres, forcing_gt, 200, 0,
+                                                     torch.float32, torch.device("cpu"))
+    assert rec.clocks and all(c.per_row and c.stride == 14 for c in rec.clocks)
+    # each draw's step is the one it would take alone at the bin's stride: its own frame interval over 14
+    alone = [float(clock.frame_clock(cfg.dt_exp, float(ts), 200, cfg.dt_nd_min, cfg.steady_idx, config.CHUNK_LEN,
+                                     stride=14).step) for ts in sorted(sres[:, cfg.sim_rescale_idx["t_scale"]].tolist())]
+    for c in rec.clocks:
+        assert torch.allclose(c.step.double().flatten().cpu(), torch.tensor(alone, dtype=torch.float64), rtol=1e-12,
+                              atol=0), (c.step, alone)
+    x_dim = x_dim[inv]
+    ridx = cfg.sim_rescale_idx
+    unit = x_dim / (sres[:, ridx["x_scale"]] / sres[:, ridx["f_scale"]]).unsqueeze(1)
+    assert float(unit.abs().amax()) > 1e-2, unit.abs().amax()
+    assert torch.allclose(unit, unit[0:1].expand_as(unit), atol=1e-4), (unit - unit[0:1]).abs().max()
+
+
+def test_the_simulated_observation_is_on_its_clock(store, monkeypatch):
+    """A simulated observation is the cell at its own time scale on the record clock: at 30 ms, two fine steps per
+    frame (the nearest whole number of the old rule, one, would make a cell at 40 ms), its drive's clock at the
+    first frame."""
+    from core import orchestrator
+    from core.SBI import pipeline
+    real = pipeline.gen_obs
+    seen = []
+
+    def wrap(*a, **k):
+        seen.append(k.get("clock"))
+        return real(*a, **k)
+    monkeypatch.setattr(pipeline, "gen_obs", wrap)
+    cfg = _master_cfg(t_scale=30.0)
+    from matplotlib import pyplot as plt
+    orchestrator.generate_observations(cfg, fig_sink=lambda title, fig: plt.close(fig))
+    want = clock.frame_clock(cfg.dt_exp, 30.0, 200, cfg.dt_nd_min, cfg.steady_idx, config.CHUNK_LEN)
+    assert seen and all(c is not None and (c.stride, c.n_fine, c.n_points) == (want.stride, want.n_fine, 200)
+                        for c in seen), seen

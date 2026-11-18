@@ -91,13 +91,15 @@ def build_experiment_obs(
         )
 
     # Out-of-distribution warning: compute the minimum feasible t_scale for this T_obs.
-    # The NN was only trained on batches where n_fine_total <= N_ND_MAX, i.e.
-    #   steady_idx + (T_k / dt_exp) * (t_scale_hi / t_scale_k) <= N_ND_MAX
-    # Solving for t_scale_k given T_k = T_obs:
+    # The NN was only trained on batches whose record clock fits N_ND_MAX fine steps, the transient plus a
+    # whole number of fine steps per frame (core/SBI/clock.py); the clock's own arithmetic gives the
+    # shortest t_scale that admits for T_k = T_obs.
     t_scale_lo_prior, t_scale_hi = cfg.t_scale_bounds
     budget = config.N_ND_MAX - cfg.steady_idx
     if budget > 0:
-        t_scale_min_feasible = (T_obs / cfg.dt_exp) * t_scale_hi / budget
+        from core.SBI import clock as _clock
+        t_scale_min_feasible = _clock.shortest_trained_t_scale(cfg.dt_exp, T_obs, cfg.dt_nd_min, cfg.steady_idx,
+                                                               config.N_ND_MAX)
         if t_scale_min_feasible > t_scale_lo_prior:
             warnings.warn(
                 f"Inference out-of-distribution risk: for T_obs={T_obs_s:.2f}s, the NN was "

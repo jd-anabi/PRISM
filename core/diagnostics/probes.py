@@ -106,28 +106,36 @@ def _simulate(cfg, geom, nd, res_sim, sim_idx, inits, *, amp_dim=None, freq=None
     response in for it. Both pipeline functions are looked up through the module at call time."""
     from core import config, forcing
     from core.Helpers import helpers
-    from core.SBI import pipeline
+    from core.SBI import clock, pipeline
     B = nd.shape[0]
     dtype, device = cfg.hw.dtype, cfg.hw.device
-    t_fine = cfg.t[:geom.n_fine]
+    # the rows' record clock, on the geometry's frames: each row the cell at its own t_scale, its drive's
+    # clock starting at the first frame
+    clk = clock.rows_clock(cfg.dt_exp, res_sim[:, sim_idx["t_scale"]].double().cpu(), geom.n_obs, cfg.dt_nd_min,
+                           cfg.steady_idx, config.CHUNK_LEN)
+    if (clk.stride, clk.n_fine) != (geom.subsample, geom.n_fine):
+        raise ValueError(f"the geometry ({geom}) is not these rows' clock (stride {clk.stride}, {clk.n_fine} "
+                         f"fine steps)")
+    t_fine = clk.grid(dtype, device)
     n_ch = forcing.n_force_channels(cfg.model, _FORCE_IDX, inits.shape[-1])
     if amp_dim is None:
-        force = forcing.zero_force(B, n_ch, t_fine.shape[0], dtype, device)
+        force = forcing.zero_force(B, n_ch, clk.n_fine, dtype, device)
     else:
         fp = torch.zeros((B, 4), dtype=dtype, device=device)
         fp[:, _FORCE_IDX["amp"]] = amp_dim
         fp[:, _FORCE_IDX["freq"]] = freq
         fp[:, _FORCE_IDX["phase"]] = DRIVE_PHASE
-        force = pipeline.build_nondim_sin_force_tensor(fp, t_fine, res_sim, _FORCE_IDX, sim_idx)
+        force = pipeline.build_nondim_sin_force_tensor(fp, None, res_sim, _FORCE_IDX, sim_idx,
+                                                       t_dim=clk.drive_times(dtype, device))
         if force.shape[1] < n_ch:
             padded = torch.zeros((B, n_ch, force.shape[2]), dtype=force.dtype, device=force.device)
             padded[:, :force.shape[1], :] = force
             force = padded
     x = pipeline.gen_obs(model=cfg.model, params=nd, t=t_fine, inits=inits, force=force,
-                         n_segs=max(1, math.ceil(geom.n_fine / config.CHUNK_LEN)),
-                         steady_idx=cfg.steady_idx, state_dep_drift=cfg.state_dep_drift, batch_size=B,
-                         var_idx=0, dtype=dtype, device=device)[0]
-    x = x[:, ::geom.subsample][:, :geom.n_obs]
+                         n_segs=clk.n_segments, steady_idx=clk.n_transient,
+                         state_dep_drift=cfg.state_dep_drift, batch_size=B,
+                         var_idx=0, dtype=dtype, device=device, clock=clk)[0]
+    x = clk.frames(x)
     x_scale = res_sim[:, sim_idx["x_scale"]].unsqueeze(1)
     x_offset = res_sim[:, sim_idx["x_offset"]].unsqueeze(1) if "x_offset" in sim_idx else 0.0
     return helpers.rescale(x, x_scale, x_offset)

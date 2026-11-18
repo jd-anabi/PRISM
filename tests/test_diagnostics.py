@@ -726,7 +726,7 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     lp = store.load_posterior(cfg, w.id)
     calls = []
 
-    def _fake_raw(cfg_, nd, res, force, m, crn, n_obs):
+    def _fake_raw(cfg_, nd, res, force, m, crn, n_obs, stride=None):
         calls.append((int(m), bool(crn), int(n_obs)))
         n_feat = identifiability.feature_sets.n_features(cfg_)
         g = torch.zeros(int(m), 8, dtype=torch.float64)
@@ -1020,7 +1020,7 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     W = ((np.arange(n_feat)[:, None] * 7 + np.arange(n_theta)[None, :] * 3) % 5 + 1).astype(float)
     crns = []
 
-    def _fake_feats(ctx, pvec, rescale_vec, m, crn):
+    def _fake_feats(ctx, pvec, rescale_vec, m, crn, stride=None):
         import torch
         crns.append((int(m), bool(crn)))
         theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
@@ -1107,7 +1107,7 @@ def test_identifiability_jacobian_is_chi_aware(store, monkeypatch):
     n_sp = len(identifiability.feature_sets.summary_keep_idx())
     rng = np.random.default_rng(0)
 
-    def _fake_feats(ctx, pvec, rescale_vec, m, crn):
+    def _fake_feats(ctx, pvec, rescale_vec, m, crn, stride=None):
         import torch
         theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
         base = (np.arange(n_feat, dtype=float) + 1.0) * (1.0 + 0.001 * theta.sum())
@@ -1796,7 +1796,7 @@ def test_the_recording_geometry_is_the_training_batchs_clock():
     cfg = _nad_cfg()
     cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
     pairs = [(1.0, 3.7300000190734863), (5.0, 3.7300000190734863), (26.909, 3.7300000190734863), (2.5, 1.0),
-             (7.3, 40.0)]
+             (7.3, 40.0), (5.0, 30.0)]
     clocks = _batch_loop_clocks(cfg, pairs)
     assert len(clocks) == len(pairs)
     for (t_obs_s, t_scale), c in zip(pairs, clocks):
@@ -2210,9 +2210,9 @@ def test_the_probe_simulator_drives_a_tier1_cell_at_its_derived_force_scale(monk
     seen = []
     real = pipeline.build_nondim_sin_force_tensor
 
-    def _spy(fp, t, rescale, fidx, ridx):
+    def _spy(fp, t, rescale, fidx, ridx, **kw):
         seen.append((rescale.detach().clone(), dict(ridx)))
-        return real(fp, t, rescale, fidx, ridx)
+        return real(fp, t, rescale, fidx, ridx, **kw)
 
     monkeypatch.setattr(pipeline, "build_nondim_sin_force_tensor", _spy)
     res = torch.tensor([[v for v, _ in cfg.rescale_params.values()]], dtype=cfg.hw.dtype)

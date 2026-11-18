@@ -152,6 +152,20 @@ def rows_clock(dt_exp, t_scales, n_points, dt_nd_min, steady_idx, chunk_len) -> 
                       chunk_len=int(chunk_len))
 
 
+def shortest_trained_t_scale(dt_exp, T, dt_nd_min, steady_idx, n_fine_max) -> float:
+    """The shortest time scale the schedule's filter admits for a recording of length ``T``: a frame of r
+    finest steps takes ``ceil((1 - 1e-6) r)`` of them, so ``T / dt_exp`` frames fit within ``n_fine_max``
+    while that stride is at most ``q = floor((n_fine_max - steady_idx) / frames)``, which the time scales at
+    or above ``(1 - 1e-6) dt_exp / (q dt_nd_min)`` meet. A recording too long even at one step per frame
+    (``q < 1``) gets the continuous bound, a time scale above every frame's."""
+    frames = max(1, int(T / dt_exp))
+    budget = int(n_fine_max) - int(steady_idx)
+    q = budget // frames
+    if q < 1:
+        return (frames / budget) * (dt_exp / dt_nd_min)
+    return _BELOW_ONE * (dt_exp / dt_nd_min) / q
+
+
 def training_n_fine(dt_exp, t_scales, Ts, dt_nd_min, steady_idx) -> torch.Tensor:
     """:class:`FrameClock` ``n_fine`` for every (t_scale, T) pair of a schedule, vectorised, in float64 from the
     schedule's own (float32) values: the arithmetic of the batch loop, which reads each pair back as a Python

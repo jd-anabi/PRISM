@@ -358,8 +358,10 @@ def test_a_force_builder_handed_a_temperature_index_raises_before_anything_is_si
     monkeypatch.setattr(pipeline, "gen_obs", lambda *a, **k: pytest.fail("a simulation ran"))
     monkeypatch.setattr(chi, "peak_freq", lambda *a, **k: pytest.fail("the peak search ran before the guard"))
     with pytest.raises(RuntimeError, match=relation):
-        chi_probes.gen_chi_raw("NADROWSKI", torch.zeros(1, 10), res, torch.zeros(1, 64), t,
-                               torch.zeros(1, 3), idx, 1, 0, 1, 64, 1.0, torch.tensor([0.1]), 0.15)
+        from core.SBI import clock
+        chi_probes.gen_chi_raw("NADROWSKI", torch.zeros(1, 10), res, torch.zeros(1, 64), torch.zeros(1, 3), idx,
+                               torch.tensor([0.1]), 0.15,
+                               clock=clock.frame_clock(1.0, 3.73, 64, 0.025, 0, config.CHUNK_LEN))
     hopf = forcing.build_nondim_sin_force_tensor(fp, t, res[:, :2], fidx, {"x_scale": 0, "t_scale": 1})
     assert tuple(hopf.shape) == (1, 1, 16)                  # a Hopf-style index keeps its fallback
 
