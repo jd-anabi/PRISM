@@ -4101,15 +4101,15 @@ def _model_says(model, now, right) -> dict:
 
 
 def test_a_run_takes_the_place_of_the_pages_results_and_gives_it_back(tmp_path, monkeypatch):
-    """While a page's run shows, the run's page stands in the right-hand column in the place of the page's
-    figures, which it holds under its messages; the form stays at the left, in sight and locked. A run
-    that finishes gives the column back, the figures in their place and "How the run went" above them, which opens
-    the run's page again, ended. A run that is stopped or fails keeps its page, ended, until "Back to the form", which
-    puts the figures back in their place; a failure is said on that page, never in a box. A run that only loads a record never takes the column nor the page that
-    shows there: after a finish "How the run went" stays above the figures and opens the finished run's page, and a
-    stopped run's page stays, its sentence and its full text with it, while a load runs and after. A refusal made
-    before anything was spent gives the column back with no link. A run that is over is drawn again from its two
-    files alone, past."""
+    """While a page's run shows, the run's page stands in the right-hand column in the place of the page's figures,
+    which it holds under its messages; the form stays at the left, in sight and locked. A run that finishes gives
+    the column back, the figures in their place and "How the run went" above them, which opens the run's page again,
+    ended. A run that is stopped or fails keeps its page, ended, until "Back to the form", which puts the figures
+    back in their place; a failure is said on that page, never in a box. A run that only loads a record never takes
+    the column nor the page that shows there: after a finish "How the run went" stays above the figures and opens
+    the finished run's page, and a stopped run's page stays, its sentence and its full text with it, while a load
+    runs and after. A refusal made before anything was spent gives the column back with no link. A run that is over
+    is drawn again from its two files alone, past."""
     from core.refusals import Refusal
     from core.gui.run import history
     from tests._fixtures import all_asked, build_run_host, choose, qt_app

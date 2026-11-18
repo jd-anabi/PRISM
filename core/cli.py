@@ -22,7 +22,7 @@ from .refusals import Refusal, missing_values_phrase, require_file
 
 
 class UnitParseError(Refusal):
-    """Raised when a cell/units file names a unit pint can't resolve.
+    """Raised when the units file, or a unit typed in its place, names a unit pint can't resolve.
 
     Previously the parsers printed an error and called exit(), which killed the whole process --
     fatal for a GUI. They now raise this instead; each front end catches it -- the command-line tool

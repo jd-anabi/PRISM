@@ -880,9 +880,10 @@ def _in_view(rail, row):
 
 def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
     """The rail lists the window's six parts in their order, each by its name; a click on a row shows that part's
-    own page, built at its first opening, and ``part`` gives the same page by the same key, so that the parts
-    opened in the rail's order stand in the stack in that order. The six steps are rows of Parameter inference, in
-    sight only while it is open."""
+    own page, built at its first opening and none the error page of a part that could not be built, and ``part``
+    gives the same page by the same key, so that the parts opened in the rail's order stand in the stack in that
+    order. The six steps are rows of Parameter inference, in sight only while it is open."""
+    from core.gui.screens.shell import PartError
     from core.gui.widgets.rail import PartRow, StepRow
     qt_app()
     window = build_window()
@@ -893,6 +894,7 @@ def test_the_rails_places_are_the_parts_in_order_read_off_the_built_window():
     for place in keys.PARTS:
         rail.row(place.key).click()
         page = window.part(place.key)
+        assert not isinstance(page, PartError), (place.key, "the part could not be built")
         assert stack.currentWidget() is page and window.current_place()[0] == place.key, place.key
         steps = [row for row in rail.visible_rows() if isinstance(row, StepRow)]
         assert steps == ([rail.row(step.key) for step in keys.STEPS] if place.key == "inference" else []), place.key
@@ -970,8 +972,8 @@ def test_go_to_shows_the_part_marks_the_rail_and_says_so_before_it_returns():
 def test_go_to_gives_the_page_the_keyboard_and_escape_in_the_rail_gives_it_back():
     """After a move the keyboard is on the page's first setting: the control a page names to start at (Home's
     main button, Help's text, the button of Your own models' list that opens the builder, which has no setting),
-    or else its first control that is not a button that does something, nor a tab bar or a row of page names,
-    nor an area that only shows or scrolls (each step and each page's first setting, the records' kind, the
+    or else its first control that is not a button that does something, nor a tab bar, nor an area that only
+    shows or scrolls (each step and each page's first setting, the records' kind, the
     first appearance). Escape in the rail, and Enter on a row of the rail, give the page the keyboard the same
     way."""
     from PySide6.QtWidgets import QComboBox

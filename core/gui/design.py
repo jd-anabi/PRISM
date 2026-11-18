@@ -315,7 +315,7 @@ def _registry_text_scale():
 SPACE = (4, 8, 12, 16, 20, 24)
 
 # ── Layout sizing ─────────────────────────────────────────────────────────────────────────────────
-FIELD_MIN_W = 96         # a numeric field must show ~8 characters; "0.033333" used to scroll inside
+FIELD_MIN_W = 96          # a numeric field must show ~8 characters; "0.033333" used to scroll inside
                           # a 3-6 character box and could not be read back without clicking into it
 PATH_FIELD_MIN_W = 220    # path fields hold absolute paths, so they need materially more
 HELP_VIEWER_MIN_H = 260   # Help's text: tall enough to be usable, it scrolls itself

@@ -93,6 +93,45 @@ def test_every_master_cell_injects_under_every_mode():
     assert seen == {"spontaneous", "forced", "chi"}, seen
 
 
+# Every cell file shipped for the models PRISM ships, with the bounds file it is meant for: (model, cell, bounds), each
+# path under its folder of Resources. A model's cell with a bounds file of its own name goes with it; the Nadrowski
+# cells of one box go with the folder's master box, the spontaneous one with its own, and the tier-1 cell with the
+# tier-1 box.
+_SHIPPED_CELLS = (
+    ("BP", "bp/cell_1.txt", "bp/cell_1.txt"),
+    ("BP", "bp/cell_2.txt", "bp/cell_2.txt"),
+    ("BP", "bp/cell_3.txt", "bp/cell_3.txt"),
+    ("HOPF", "hopf/cell.txt", "hopf/cell.txt"),
+    ("NADROWSKI", "nadrowski/master_entrained.txt", "nadrowski/master.txt"),
+    ("NADROWSKI", "nadrowski/master_spont.txt", "nadrowski/master_spont.txt"),
+    ("NADROWSKI", "nadrowski/master_spont_tier1.txt", "nadrowski/master_tier1.txt"),
+    ("NADROWSKI", "nadrowski/master_weak.txt", "nadrowski/master.txt"),
+)
+
+
+def test_every_shipped_cell_goes_with_the_bounds_file_it_is_meant_for():
+    """Every cell file of the models PRISM ships is read against the bounds file it is meant for, as the Inference
+    step reads a cell it is handed (``cli.validate_gt_file``), with no complaint; the table holds every such file, so
+    a cell added to one of those folders fails here until it is paired. The tier-1 cell handed the forced master box
+    is refused under ``cell``: that box infers f_scale, which a tier-1 cell does not carry."""
+    shipped = sorted(path.relative_to(CELL_PATH).as_posix() for model in VALID_MODELS[:3]
+                     for path in (CELL_PATH / model.lower()).glob("*.txt"))
+    assert shipped == [cell for _model, cell, _bounds in _SHIPPED_CELLS], shipped
+
+    def configuration(model, bounds):
+        cfg = cli.make_sim_config(model, VALID_LABELS[VALID_MODELS.index(model)], registry.state_dep_drift(model),
+                                  str(BOUNDS_PATH / bounds))
+        cfg.hw = config.cpu_device()
+        return cfg
+
+    for model, cell, bounds in _SHIPPED_CELLS:
+        assert cli.validate_gt_file(configuration(model, bounds), str(CELL_PATH / cell)) == [], (cell, bounds)
+    with pytest.raises(Refusal) as refused:
+        cli.load_and_validate_gt(configuration("NADROWSKI", "nadrowski/master.txt"),
+                                 str(CELL_PATH / "nadrowski" / "master_spont_tier1.txt"))
+    assert refused.value.field == "cell" and "f_scale" in str(refused.value), (refused.value.field, refused.value)
+
+
 def test_chi_probe_band_is_sub_resonance():
     """CHI_FREQ_BOUNDS was retargeted to the band where |chi| is actually reproducible: measured on
     the master cell, everything above ~0.25x Omega_0 has CV 0.2-0.7 at EVERY drive amplitude, and
