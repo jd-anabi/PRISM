@@ -161,8 +161,7 @@ def test_one_phrase_says_the_cell_is_missing_what_the_bounds_file_declares():
 def test_the_two_cell_sites_both_splice_the_one_phrase():
     """The other half of that rule: each of the two sites builds its wording through the phrase and
     does not re-type the sentence beside the call. Asserted on executable source, because what would
-    regress is somebody re-typing the sentence. cli._merge_vals_bounds is a known third wording,
-    left alone on purpose (it carries the cell path), so it is not in this list."""
+    regress is somebody re-typing the sentence."""
     from core import cli, sim_config
     from tests._fixtures import code_only
     for obj in (cli.validate_gt_file, sim_config.SimConfig._fill_checked):

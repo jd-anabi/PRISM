@@ -2,9 +2,9 @@
 Prompt-free configuration builders, shared by PRISM's two front ends.
 
 The interactive prompts this module was named for went with the retired prompt CLI. What is
-left is pure: cell / bounds / units parsing, the unit conversion factors, and the ``make_*_config``
-builders that the GUI (``core/gui``) and the command-line tool (``core/tool``) each call with values
-they obtained their own way. The module keeps the name ``core.cli``.
+left is pure: a cell file checked and its values put in, the units file found, the unit conversion factors,
+and the ``make_*_config`` builders that the GUI (``core/gui``) and the command-line tool (``core/tool``) each
+call with values they obtained their own way. The module keeps the name ``core.cli``.
 """
 from collections import OrderedDict
 from pathlib import Path
@@ -15,7 +15,7 @@ from core import config          # live-read config.CHI_MODE / CHI_N_FREQS (avoi
 from .config import (
     SimConfig, detect_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
-    BOUNDS_PATH, UNITS_PATH,
+    UNITS_PATH,
 )
 from .Helpers import file_manager
 from .refusals import Refusal, missing_values_phrase, require_file
@@ -98,149 +98,11 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
 # DERIVED from config.FORCING_SI_UNITS, the authoritative conversion table, so the two cannot drift.
 INFERENCE_PROMPT_UNITS = config.FORCING_DISPLAY_UNITS
 
-# ── Cell-file parsing ──────────────────────────────────────────────────────────────────────────
-def _merge_vals_bounds(vals: dict, bounds: OrderedDict,
-                       label: str, cell_file: str) -> OrderedDict:
-    """
-    Merge cell VALUES with bounds-file BOUNDS into {name: (val, (lo, hi))}, iterating the bounds
-    dict so param order follows the bounds file (the single source of truth for the set + order).
-
-    Params present in the cell but absent from `bounds` are DROPPED (this keeps bp's rescale/forcing
-    empty -- its bounds file has only the ND section). Every bounds param must have a value in the
-    cell, else a clear error (a None in slot 0 would later crash params_tensor). Bounds are NOT
-    range-checked here -- that enforcement lives in SimConfig.inject_ground_truth (the SBI path).
-    """
-    missing = [name for name in bounds if name not in vals]
-    if missing:
-        raise Refusal(
-            f"Cell file '{cell_file}' is missing value(s) for {label} required by the bounds file: {missing}.",
-            field="cell")
-    merged = OrderedDict()
-    for name, (_, bnds) in bounds.items():
-        merged[name] = (vals[name], bnds)
-    return merged
-
-
-#: Bounds file every cell in a model folder falls back to when it has no same-named sibling.
-#: Named, not guessed: a folder with several cells sharing one box needs a declared default, and
-#: silently picking "the only file present" would break the moment a second one appeared.
-MASTER_BOUNDS_NAME = "master.txt"
-
-
-def resolve_bounds_for_cell(cell_file: str, model: str | None = None) -> Path | None:
-    """Bounds file governing ``cell_file``, or None if neither candidate exists.
-
-    Resolution order:
-      1. the same-named sibling ``Bounds/<model>/<cell>.txt`` -- the original one-box-per-cell
-         convention, so every pre-existing cell resolves exactly as it always did;
-      2. ``Bounds/<model>/master.txt`` -- the shared box, for a model whose cells are variations on
-         one parameter set (the three Nadrowski master cells differ only in their Forcing section,
-         and giving each a byte-identical copy of the same box is what let the old per-cell files
-         drift apart in the first place).
-
-    Returning None rather than raising keeps the LEGACY inline-bounds path reachable: a cell that
-    carries its own bounds has no file in Bounds/ at all, and that is not an error.
-    """
-    p = Path(cell_file)
-    model = (model or p.parent.name).lower()
-    sibling = BOUNDS_PATH / model / p.name
-    if sibling.exists():
-        return sibling
-    master = BOUNDS_PATH / model / MASTER_BOUNDS_NAME
-    return master if master.exists() else None
-
-
-def cell_sources(cell_file: str, model: str | None = None) -> dict:
-    """The ``sources`` block for a cell: its own path, the bounds file that RESOLVES for it, the
-    units file, and the model NAME. Beside :func:`parse_cell`, which keeps its 7-tuple.
-
-    parse_cell resolves both paths and throws them away (``bounds_path`` and ``units_path`` are
-    local to it), so a record made from it had no way to say which box its parameter set came from. The two
-    candidates resolve DIFFERENTLY -- a same-named sibling, else the folder's master.txt -- and only
-    one of them governed the run.
-
-    Both come back None on the LEGACY inline-bounds branch, and the condition is parse_cell's own
-    (``bounds_path is not None and units_path.exists()``): the units file is only read when the
-    decoupled path is taken, so reporting it alone would name a file the run never opened.
-    """
-    p = Path(cell_file)
-    name = (model or p.parent.name)
-    bounds_path = resolve_bounds_for_cell(cell_file, name.lower())
-    units_path = UNITS_PATH / name.lower() / "units.txt"
-    decoupled = bounds_path is not None and units_path.exists()
-    return {"cell": str(cell_file),
-            "bounds": str(bounds_path) if decoupled else None,
-            "units": str(units_path) if decoupled else None,
-            "model": name.upper()}
-
-
-def parse_cell(cell_file: str, model: str | None = None):
-    """
-    Parse a cell file into the 7-tuple a configuration is built from, then run pint unit conversion.
-
-    Cell files hold VALUES only (bounds + units are decoupled) and live in per-model subfolders:
-    Resources/Cells/<model>/<cell>.txt. If a bounds file RESOLVES for the cell (see
-    :func:`resolve_bounds_for_cell`) AND Resources/Units/<model>/units.txt exists, use the DECOUPLED
-    path: the bounds file defines the param set + order, the cell supplies the values, units come
-    from the units file. Otherwise fall back to the legacy parse_model_file (bounds + units read
-    inline from the cell).
-
-    :param cell_file: path to the cell file (Resources/Cells/<model>/<cell>.txt).
-    :param model: model name for resolving the bounds/units files; derived from the cell's parent
-                  folder (e.g. '.../Cells/nadrowski/master_weak.txt' -> 'nadrowski') when None.
-    :return: (inits_dict, params_dict, rescale_params, force_params_dict,
-             units_dict, si_factors, s_to_cell)
-    """
-    p = Path(cell_file)
-    if model is None:
-        model = p.parent.name
-    model = model.lower()
-
-    bounds_path = resolve_bounds_for_cell(cell_file, model)
-    units_path = UNITS_PATH / model / "units.txt"    # Units/<model>/units.txt
-
-    if bounds_path is not None and units_path.exists():
-        # Decoupled path: bounds file = param set + order; cell = values; units file = units.
-        b_params, b_rescale, b_forcing, _ = file_manager.parse_bounds_file(str(bounds_path))
-        inits_dict, v_params, v_rescale, v_forcing = file_manager.parse_values_file(cell_file)
-        params_dict = _merge_vals_bounds(v_params, b_params, "ND parameters", cell_file)
-        rescale_params = _merge_vals_bounds(v_rescale, b_rescale, "rescale parameters", cell_file)
-        force_params_dict = _merge_vals_bounds(v_forcing, b_forcing, "forcing parameters", cell_file)
-        units_dict = file_manager.parse_units_file(str(units_path))
-        si_factors, s_to_cell = units_to_factors(units_dict)
-        return inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, s_to_cell
-
-    # ── Legacy fallback: bounds + units read inline from the cell (models without decoupled files) ──
-    inits_dict, params_dict, rescale_params, force_params_dict, units_dict = file_manager.parse_model_file(cell_file)
-
-    ureg = config.unit_registry()      # shared singleton: building one parses pint's full unit file
-    try:
-        si_factors = [ureg(unit).to_base_units().magnitude for unit in units_dict]
-    except pint.UndefinedUnitError as e:
-        raise UnitParseError(f"{e}. Unrecognized unit in cell file '{cell_file}'.", field="cell")
-
-    time_unit = None
-    for unit_str in units_dict:
-        try:
-            if ureg.Quantity(1, unit_str).check("[time]"):
-                time_unit = unit_str
-                break
-        except pint.UndefinedUnitError:
-            continue
-    if time_unit is None:
-        raise Refusal("Could not detect time unit from cell file. Ensure t_scale has a time unit.",
-                      field="cell")
-
-    s_to_cell = ureg.Quantity(1, "s").to(time_unit).magnitude
-    return inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, s_to_cell
-
-
 # ── Units → conversion factors (standalone helper for the decoupled bounds/units path) ──────
 def units_to_factors(units: tuple) -> tuple[list[float], float]:
     """
-    From a set of unit strings compute (si_factors, s_to_cell). Standalone so `parse_cell` stays
-    byte-for-byte untouched. Also called by ``make_sim_config``, and by the Config tab to refuse a
-    typed unit token it cannot resolve before a run starts.
+    From a set of unit strings compute (si_factors, s_to_cell). Called by ``make_sim_config``, and by the
+    Config tab to refuse a typed unit token it cannot resolve before a run starts.
     """
     ureg = config.unit_registry()      # shared singleton: building one parses pint's full unit file
     try:

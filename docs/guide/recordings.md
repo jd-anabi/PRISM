@@ -1,9 +1,9 @@
 # Bringing recordings
 
-Checked against commit 0ed7262.
+Checked against commit 7180ad5c.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
-files that describe a cell, how a cell is matched to its bounds file, the three observation modes and
+files that describe a cell, which bounds file a cell is checked against, the three observation modes and
 the recordings each needs, how long to record, what chi mode assumes about a cell and how to check
 it, and how to define a model of your own. Read [Getting started](getting-started.md) first. Every
 flag is described in [The command-line tool](command-line.md), and every control of the window in
@@ -208,31 +208,23 @@ setting that has since departed from it. A run's history records the plan, with 
 Commit a plan before a long run: a plan that is saved or edited and not committed makes every record
 the run writes read as made from a changed tree.
 
-## How a cell finds its bounds file
+## Which bounds file a cell is checked against
 
-No run is handed a cell alone any more, but the folders keep the rule by which a cell finds its
-bounds file in the bounds folder of its model (`core.cli.resolve_bounds_for_cell`, called from
-`core.cli.parse_cell`):
-
-1. a bounds file with the cell's own name: `Cells/nadrowski/master_spont.txt` finds
-   `Bounds/nadrowski/master_spont.txt`;
-2. otherwise the folder's `master.txt`: `Cells/nadrowski/master_weak.txt` finds
-   `Bounds/nadrowski/master.txt`.
-
-So several cells can share one box, and a cell that needs a box of its own gets one from a bounds
-file of the same name. When neither exists, `parse_cell` falls back to an older format that carries
-the bounds and units inside the cell file itself.
-
-The inference chain never looks. Every inference, diagnostic and probe command takes `--bounds`
+A cell is checked against the bounds file it is given, and against no other: no run looks one up from
+a cell alone. Every inference, diagnostic and probe command takes `--bounds`
 ([Configuration flags](command-line.md#configuration-flags)), and in the window step 2, Prior,
 chooses it with its Bounds file list ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs)). A
-cell given to `infer --cell`, to `probes` or to step 5, Inference, is checked against that bounds file,
-not against the one it would find.
+cell given to `infer --cell`, to `probes` or to step 5, Inference, is checked against that bounds file
+by `SimConfig.inject_ground_truth` (`core.sim_config`): a cell that lacks a parameter the bounds file
+infers, or puts one outside its box, is refused (field `cell`); values the bounds file does not
+declare are ignored and reported, so one cell serves several bounds files, and several cells can
+share one box. Step 5 reads the cell it is handed against the same rule and says what it finds before
+its run starts.
 
-The tier-1 cell `master_spont_tier1.txt` is for the inference chain, with
-`--bounds Resources/Bounds/nadrowski/master_tier1.txt`. No bounds file carries its name, so the rule
-would find `master.txt` for it, which would refuse it: `master.txt` declares `f_scale`, and a tier-1
-cell has none (`core.cli._merge_vals_bounds`).
+The tier-1 cell `master_spont_tier1.txt` goes with
+`--bounds Resources/Bounds/nadrowski/master_tier1.txt`, whose dimensional section infers `T` in
+`f_scale`'s place. Given `master.txt` instead, it is refused: `master.txt` infers `f_scale`, and a
+tier-1 cell has none ("Cell file is missing rescale parameters the bounds file requires: f_scale.").
 
 ## Observation modes
 
@@ -511,8 +503,9 @@ Full settings…) with Open model builder, or with Edit on a saved model
 5. **Validate** parses the model and runs a short integration; **Save model** writes its files:
    `Resources/Models/<NAME>.json`, a `default.txt` in `Bounds/<name>/` and in `Cells/<name>/`, and
    `Units/<name>/units.txt`, which always declares `nm s`. The bounds file keeps the boxes you set,
-   and gives `x_scale` and `t_scale` boxes from half to twice their values. The cell finds that
-   bounds file by its name ([How a cell finds its bounds file](#how-a-cell-finds-its-bounds-file)).
+   and gives `x_scale` and `t_scale` boxes from half to twice their values. Give that bounds file in
+   step 2, and the cell is checked against it
+   ([Which bounds file a cell is checked against](#which-bounds-file-a-cell-is-checked-against)).
 
 Training, the prior's stability sweep and the Fisher rotation start a user model from the initial
 conditions its definition declares; a simulated observation starts it from its cell file's

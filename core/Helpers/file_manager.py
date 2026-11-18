@@ -126,96 +126,8 @@ BOUNDS_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\)
 # Bounds-only (no value): name [opt_units] [opt_in] (bounds) -- for the decoupled BOUNDS file.
 BOUNDS_ONLY_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*(?:in\s+)?[\[\(](?P<tup>.*?)[\]\)]\s*$')
 
-def parse_model_file(file_name: str) -> tuple:
-    """
-    Parses a model configuration file to extract initialization variables, parameters, rescaling values,
-    forcing parameters, and associated unit types. The function processes a file with sections defined
-    by specific headers, and categorizes the data into corresponding dictionaries or structures.
 
-    :param file_name: The path to the model file to be parsed.
-    :return: A tuple containing extracted model data.
-        - ``init_conditions``: An ordered dictionary of initial conditions mapping variable names to their values.
-        - ``parameters``: An ordered dictionary where each key is a parameter name, and the value is a tuple of
-          its initial value and bounds.
-        - ``forcing_params``: An ordered dictionary of time-dependent forcing parameters.
-        - ``collected_units``: A tuple of unit strings found during processing.
-        If `nd` is True, the tuple includes:
-        - ``init_conditions``: An ordered dictionary of initial conditions.
-        - ``parameters``: Parameter data with values and bounds.
-        - ``rescale_params``: Rescaling data for specific variables.
-        - ``forcing_params``: Forcing parameter data.
-        - ``collected_units``: Unit strings found during processing.
-    :rtype: tuple
-    """
-    # --- Data Structures ---
-    init_conditions = OrderedDict()
-    parameters = OrderedDict()  # Format: {name: (val, (min, max))}
-    rescale_params = OrderedDict()
-    forcing_params = OrderedDict()
-    collected_units = set()
-
-    # --- State/Section Management ---
-    current_section = None
-
-    # split string content into lines (simulating file read)
-    try:
-        with open(file_name, 'r', encoding='utf-8') as file:
-            lines = file.read().strip().split('\n')
-    except FileNotFoundError:
-        raise FileNotFoundError("File not found")
-
-    def process_units(match_obj):
-        if match_obj.group('units'):
-            raw_units = match_obj.group('units').split()
-            for u in raw_units:
-                base_unit = u.split('^')[0]
-                collected_units.add(base_unit)
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue  # skip empty lines
-
-        # --- Section Detection ---
-        if line.startswith("#"):
-            if "Initial Conditions" in line:
-                current_section = "INIT"
-            elif "Parameters" in line and "Forcing" not in line:
-                if line.startswith("# Dimensional"):
-                    current_section = "RESCALE"
-                else:
-                    current_section = "PARAM"
-            elif "Forcing Parameters" in line:
-                current_section = "FORCING"
-            continue
-
-        # 1. Initial Conditions (Using ASSIGNMENT_PATTERN)
-        if current_section == "INIT":
-            match = ASSIGNMENT_PATTERN.search(line)
-            if match:
-                init_conditions[match.group('name')] = float(match.group('val'))
-                process_units(match)
-
-        # 2. Parameters, Forcing, Rescale (Using BOUNDS_PATTERN)
-        elif current_section in ["PARAM", "FORCING", "RESCALE"]:
-            match = BOUNDS_PATTERN.search(line)
-            if match:
-                name = match.group('name')
-                val = float(match.group('val'))
-                bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, match.group('tup')))
-                if current_section == "PARAM":
-                    target_dict = parameters
-                elif current_section == "FORCING":
-                    target_dict = forcing_params
-                else:
-                    target_dict = rescale_params
-                target_dict[name] = (val, bounds)
-                process_units(match)
-
-    return init_conditions, parameters, rescale_params, forcing_params, tuple(collected_units)
-
-
-# --- Decoupled bounds / units / values parsers (additive; parse_model_file is left untouched) ---
+# --- The bounds, units and values parsers ---
 def _read_lines(file_name: str) -> list[str]:
     try:
         with open(file_name, 'r', encoding='utf-8') as file:
@@ -225,7 +137,7 @@ def _read_lines(file_name: str) -> list[str]:
 
 
 def _section_of(header_line: str) -> str | None:
-    """Map a '# ...' header line to a section key, or None. Mirrors parse_model_file's logic + Units."""
+    """Map a '# ...' header line to a section key, or None."""
     if "Initial Conditions" in header_line:
         return "INIT"
     if "Units" in header_line:
@@ -245,8 +157,8 @@ def parse_bounds_file(file_name: str) -> tuple:
     :return: (parameters, rescale_params, forcing_params, collected_units) where each param dict maps
              {name: (None, (lo, hi))} -- the value slot is None until a cell file fills it.
 
-    NOTE on ``collected_units``: inline ``(units)`` annotations are parsed but ALL THREE callers
-    (``cli.parse_cell``, ``cli.make_sim_config``, ``inference_tabs``) discard the
+    NOTE on ``collected_units``: inline ``(units)`` annotations are parsed but BOTH callers
+    (``cli.make_sim_config`` and the Prior step's reading of a bounds file) discard the
     result, and no shipped bounds file carries them -- units are declared centrally (the per-model units
     file, or the Config tab's units control) precisely so one declaration governs every file. It is
     returned for backward compatibility; do not start relying on per-line units here, or a bounds file

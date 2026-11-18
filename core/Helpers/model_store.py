@@ -2,9 +2,8 @@
 
 The source of truth is ``Resources/Models/<NAME>.json`` (schema below). Saving ALSO emits the
 decoupled ``Bounds/<name_lower>/default.txt`` + ``Cells/<name_lower>/default.txt`` +
-``Units/<name_lower>/units.txt`` triple so the whole existing config path (``cli.make_sim_config``,
-``cli.parse_cell``) consumes a user model exactly like a
-built-in -- they resolve those files purely by folder name.
+``Units/<name_lower>/units.txt`` triple so the config path (``cli.make_sim_config``) consumes a user
+model exactly like a built-in: its units file is found by the folder's name.
 
 JSON schema (schema_version 3):
     {

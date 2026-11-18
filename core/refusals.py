@@ -202,10 +202,8 @@ def missing_values_phrase(label: str, missing) -> str:
     A fragment, deliberately: ``cli.validate_gt_file`` returns it as one of its problem strings,
     which the Infer tab joins with "; ", while ``SimConfig._fill_checked`` puts "Cell file is " in
     front and a period after -- so the dry run and the refusal say the same words. ``label`` is used
-    AS GIVEN (the callers pass the plural, "ND parameters") and is never pluralised here. A third
-    wording of the same rule, ``cli._merge_vals_bounds``, is knowingly left alone: it carries the
-    cell path. Here rather than in ``core/cli.py`` because ``core/sim_config.py`` cannot import
-    ``core/cli.py``.
+    AS GIVEN (the callers pass the plural, "ND parameters") and is never pluralised here. Here rather
+    than in ``core/cli.py`` because ``core/sim_config.py`` cannot import ``core/cli.py``.
     """
     return f"missing {label} the bounds file requires: {', '.join(str(n) for n in missing)}"
 

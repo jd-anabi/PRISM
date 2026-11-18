@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit 0ed7262.
+Checked against commit 7180ad5c.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -34,9 +34,9 @@ when it holds nothing but a docstring.
   (`memory_budget_elements`) and the allocator policy; it re-exports `SimConfig`.
 - `sim_config.py`: the `SimConfig` data carrier: the box, the observation mode, the simulator's
   rescale index, the tier-1 helpers and `copy_for_run`.
-- `cli.py`: the configuration builder both front ends share (`make_sim_config`), cell parsing
-  (`parse_cell`) and the bounds file a cell resolves to (`resolve_bounds_for_cell`), which no run
-  calls now that every run is handed its bounds file.
+- `cli.py`: the configuration builder both front ends share (`make_sim_config`), the units file
+  found for a model, the unit conversion factors, and a cell file checked against the configuration in
+  use and its values put in (`validate_gt_file`, `load_and_validate_gt`).
 - `orchestrator.py`: the stages and the compositions that chain them
   ([Stages and compositions](#stages-and-compositions)).
 - `plans.py`: run plans (`read_plan`, `plan_text`, `Plan`, `PlanRefusal`): the reader of the text

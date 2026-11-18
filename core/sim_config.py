@@ -240,8 +240,7 @@ class SimConfig:
         caller can report them: the BOUNDS file is the single source of truth for which parameters are
         inferred, so a cell carrying more than the bounds declare is merely over-specified. That is what
         lets one cell serve several bounds files -- e.g. a forced cell (f_scale + a Forcing section) used
-        with a spontaneous bounds file that declares neither. cli._merge_vals_bounds already drops
-        bounds-absent params exactly this way; being strict only here made the two paths disagree.
+        with a spontaneous bounds file that declares neither.
         """
         missing = sorted(set(cfg_dict) - set(cell_vals))
         if missing:

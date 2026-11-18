@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 0ed7262.
+Checked against commit 7180ad5c.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -355,11 +355,10 @@ What each run checks, and what passing looks like:
 ```
 
 **Why `--bounds` names the master box.** `smoke` always takes `--bounds`, and the choice matters:
-the cell `master_spont.txt` also has a bounds file of its own name, the 12-parameter spontaneous box,
-which the rule by which a cell finds its bounds file would pick
-([How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file)). Named here, that
-box would, in chi mode, report the same mode and the same conditioning width, and drop `f_scale`
-without a word.
+the cell `master_spont.txt` also has a bounds file of its own name, the 12-parameter spontaneous box
+([Which bounds file a cell is checked against](recordings.md#which-bounds-file-a-cell-is-checked-against)).
+Named here, that box would, in chi mode, report the same mode and the same conditioning width, and
+drop `f_scale` without a word.
 
 **The masked-probe criterion.** The training run's `[chi] masked probes` run-total line, the one
 scoped to every committed batch of the simulation cache, must be within ±12 points of 37 %; the

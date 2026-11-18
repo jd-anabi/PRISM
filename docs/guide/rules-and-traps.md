@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 0ed7262.
+Checked against commit 7180ad5c.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -59,17 +59,14 @@ big for Nadrowski and five times for BP.
 
 **The bounds, cell and units files.** The bounds file declares which parameters are inferred, in
 what order and over what box, and so the observation mode; a cell file holds values and initial
-conditions only; the units file declares what the numbers mean and never converts them. A cell's
-model is its folder's name (`core.cli.parse_cell`). `SimConfig.inject_ground_truth`
-(`core.sim_config`) refuses a cell that lacks an inferred parameter the bounds file declares, or puts
-one outside its box (field `cell`), and ignores and reports the values the bounds file does not
-declare, so one cell serves several bounds files. Every inference command is given its bounds file,
-and no run looks one up from a cell alone (`core.cli.resolve_bounds_for_cell` keeps the rule a lookup
-would follow). The formats and
-the lookup are in [Input files](recordings.md#input-files) and
-[How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file). Pinned by
-`tests/test_artifact_consistency.py::test_bounds_resolution_prefers_a_sibling_then_falls_back_to_master`
-and `tests/test_artifact_consistency.py::test_every_master_cell_injects_under_every_mode`.
+conditions only; the units file declares what the numbers mean and never converts them.
+`SimConfig.inject_ground_truth` (`core.sim_config`) refuses a cell that lacks an inferred parameter the
+bounds file declares, or puts one outside its box (field `cell`), and ignores and reports the values
+the bounds file does not declare, so one cell serves several bounds files. Every inference command is
+given its bounds file, and no run looks one up from a cell alone. The formats and the check are in
+[Input files](recordings.md#input-files) and
+[Which bounds file a cell is checked against](recordings.md#which-bounds-file-a-cell-is-checked-against).
+Pinned by `tests/test_artifact_consistency.py::test_every_master_cell_injects_under_every_mode`.
 
 **Everything is non-dimensional.** Drift and noise are written without units. Physics enters only
 through the rescale parameters `x_scale`, `t_scale` and `f_scale`, which are inferred with the rest,
