@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit 0ed7262.
+Checked against commit cfcf9d61.
 
 ## Nondimensionalisation
 
@@ -39,24 +39,89 @@ disagreement is reported, is in [Input files](recordings.md#input-files); how to
 frequencies is in
 [Recording files and drive frequencies](recordings.md#recording-files-and-drive-frequencies).
 
-**The integration step comes from a prior bound.** The solver's finest non-dimensional step is
+**The integration step comes from a prior bound.** The solver's largest non-dimensional step is
 `SimConfig.dt_nd_min`, the camera frame interval divided by the upper bound of `t_scale`'s box:
-1 ms / 40 = 0.025 on the master boxes. Each recorded sample then takes
-(frame interval / t_scale) / dt_nd_min fine steps: 40 for a batch whose `t_scale` is 1, one at the
-top of the box.
+1 ms / 40 = 0.025 on the master boxes. It is the step the prior's stability screen integrates every
+parameter set at, so no simulation of a screened set takes a coarser one: an explicit
+Euler–Maruyama step coarser than the screen's can blow up on a set the prior admitted. This is a
+sampling constraint wearing an integration constraint's clothes. Widening `t_scale`'s box from 40
+to 80 would silently halve every step, double every simulation's cost and change its accuracy, with
+no change to any physics.
 
-- This is a sampling constraint wearing an integration constraint's clothes. Widening `t_scale`'s
-  box from 40 to 80 would silently double every simulation's cost and change its accuracy, with no
-  change to any physics.
-- Nothing has established what step the non-dimensional dynamics actually need.
-- The obvious fix, a step chosen per batch from that batch's own `t_scale`, is wrong. It would make
-  the integration error a deterministic function of `t_scale`, an inferred parameter, so the
-  network could learn to read `t_scale` off a numerical artefact that is present in training and
-  absent from real data.
-- The defensible fix is a convergence study: halve the step until each of the 41 features, taken
-  one at a time and measured in units of its own noise, stops moving. That gives a required step
-  independent of `t_scale`. It has not been done
-  ([Open questions](#open-questions)).
+**The record clock** (`core.SBI.clock`) puts a simulated cell on the camera's frames, as a camera
+records a cell at the bench:
+
+- **The settling.** The cell first runs `steady_idx` steps at exactly `dt_nd_min` (4,000 on the
+  master boxes, 100 model time units), with the drive already on. That stretch is discarded, and the
+  recording starts at its end.
+- **The recorded part.** A frame covers Δ = frame interval / t_scale of the model's time, which is
+  r = Δ / dt_nd_min steps of `dt_nd_min`. The solver takes s steps per frame, the smallest whole
+  number at least r (computed as ceil((1 − 1e-6) r), so that a float32 time scale on a whole r does
+  not step up), each of h = Δ / s. Every kept point is then exactly one frame after the last in the
+  cell's own time, the cell runs at exactly the time scale its row is labelled with, and h lies
+  between half of `dt_nd_min` and all of it: 40 steps per frame at t_scale 1 ms, 11 at the master
+  cells' 3.73 ms (h = 0.0244), 2 at 30 ms (h = 0.0167), one at the top of the box.
+- **The drive's clock** starts at the first kept frame, as a bench drive and its camera do: a chi
+  probe's cosine stands at its top there, and a forced drive at its drawn phase. Through the
+  settling it runs at negative times, so the cell is in its driven steady state when the recording
+  starts.
+- **Before this clock** each frame took the nearest whole number of steps of exactly `dt_nd_min`, so
+  a cell ran at frame interval / (that number × `dt_nd_min`) rather than at its own time scale: at
+  3.64 ms for a row labelled 3.73, at 40 ms for one labelled 30. The time-unit features
+  (`A3_log_fpeak`, `A4_log_acf_decay`, `E1_log_tau_fast`, `E1_log_tau_slow`) were read off the wrong
+  clock; the drive's clock had started at the beginning of the settling, 100 model time units before
+  the first frame, which scrambled the phase every lock-in reads, the probes' and the forced
+  response's; and every stretch of a long simulation after the first ran at a step a little off
+  `dt_nd_min` (up to 0.4 %) and repeated one sample where two stretches met. A simulation set made then is kept but never continued or trained
+  on as one of today's ([The artifact store](architecture.md#the-artifact-store)).
+
+**The step's error, measured.** The recorded step now changes with t_scale, which this page once
+warned against: an integration error that is a function of t_scale, an inferred parameter, is a
+signal the network can learn, present in training and absent from real data. It was measured, before
+the clock was built, by a paired test: nine cells (eight parameter sets from a training set's rows
+and the master tier-1 cell), 64 rows each, 3-s recordings at twelve time scales from 3.73 to 40 ms,
+each simulated at h and at a quarter of h on one Brownian path, each feature's difference in units
+of its spread over a training set. A difference larger than 0.05 of a spread counts as a bias.
+
+- **The chi block does not see the step.** log |χ| moved by at most 0.002 of its spread at every
+  probe and time scale; the phase's sine carried a small, consistent lag, at most 0.016 of its spread
+  pooled over a time scale's probes. One probe, above the box's top, crossed the bound.
+- **The passive features do, on stiff cells.** 71 of the 360 (feature, time scale) pairs carried a
+  bias, of either sign: `F2_corr_omega_A2` up to 0.57 of a spread at 30 ms, `B6_low_freq_frac` −0.28,
+  `C3_env_onset` 0.27, `B7_log_sec_freq_ratio` 0.19, `C4_mode_ratio` 0.17. It is the cells with a
+  stiff gating nonlinearity (high beta) that carry it: up to 3 spreads in the stiffest cell (beta 90),
+  at most a third of one on the master cell. The four anchors `A1_mean` to `A4_log_acf_decay` stayed
+  inside the bound (`A3_log_fpeak` within 0.04). The bias repeated on independent noise, and it lives
+  at h: between a quarter and a sixteenth of h most features moved by less than 0.05 of a spread,
+  `F2_corr_omega_A2` by 0.13 at 30 ms.
+- **The forced response's phase** (`G2_sin`) lagged by 0.06 to 0.18 of its spread at ten of the
+  twelve time scales, by up to a quarter of a radian at the fastest drives on the slowest cells.
+- **A change of stride does not stand out.** Just below and just above a whole r, where s changes by
+  one, the passive features jump by up to about 0.3 of a spread (`C3_env_onset`, `C4_mode_ratio`,
+  `B6_low_freq_frac` and `F2_corr_omega_A2`, at r = 2 and 3). But a 0.6 % change of t_scale at an
+  unchanged stride moves the bias by up to 0.41 of a spread: the error varies unevenly with t_scale,
+  and the jump at a stride change is inside that unevenness, not a step the network could find above
+  it.
+- **The old clock's fixed step carried the same kind of error.** Against a reference at least sixteen
+  times finer than h: 96 of 360 pairs biased at the old fixed step of 0.025, against 78 at the clock's
+  h. The old step's error varied unevenly with t_scale too (by up to 0.28 of a spread across a 0.6 %
+  change of t_scale), and it came with the mislabelled time scale and the scrambled forced phase,
+  which the clock removes (95 of the 132 forced-response pairs biased at the old clock, 22 at the
+  clock's h).
+- **Finer steps buy little, dearly.** At a half and a quarter of h, 57 and 47 of the 360 pairs stay
+  biased, and the largest pooled bias (`F2_corr_omega_A2`) falls from 0.53 of a spread to 0.47 and
+  0.23. A 10,000-batch training set costs 28.7 card hours at h, 38.9 at half of it and 51.5 at a
+  quarter, against 26.8 on the old clock; and since the per-batch cap of 300,000 steps stands, a finer
+  step buys its steps out of the recording length: at half of h the longest recordings training draws
+  below 10 ms about halve, at a quarter they fall to about a quarter, and the area of (t_scale,
+  T_obs) training covers shrinks to 0.86 and 0.69 of the old clock's.
+- **One band converges at none of these steps.** `E2_log_h3` at 3.73 ms reads about a third of a
+  spread off the reference at every step tried, the old one included: one 156-Hz cell, whose third
+  harmonic sits at 0.93 of the frames' Nyquist frequency, carries it.
+
+The owner kept the clock's step as it was designed, h = Δ / s, with these numbers in hand (17
+November 2026): no finer step and no new setting. A step-correcting scheme is the open question
+([Open questions](#open-questions)).
 
 ## Conditioning features
 
@@ -234,6 +299,19 @@ complex χ.
 Each value below was fixed by a measurement on the master cells, whose Ω₀ is about 23 Hz.
 [The chi assumptions, and checking them](recordings.md#the-chi-assumptions-and-checking-them) says
 what the values mean for a recording and how a lab checks them on its own cell.
+
+**Every measurement below was made on the old clock**
+([Nondimensionalisation](#nondimensionalisation)), and the values may in part be its artefact. On it
+the master cells, whose time scale is 3.73 ms, ran at 3.64 ms, eleven steps of `dt_nd_min` to a
+frame, so a probe's response ran 2.6 % off the frequency the lock-in was told. A lock-in of a signal
+2.6 % off its frequency decays on its own as |sinc(π · n · 0.0258)| over n drive cycles: 0.62 at 20
+cycles, 0.23 at 31, and nothing near 39. The wall at about 31 cycles below, whose spread climbs to a
+first failure at 36, is what that mismatch predicts; so is the recovery when the same traces are
+locked in again over a shorter prefix, and so is the phase scatter read as the oscillation's own
+diffusion. That the clock caused them is likely, not established. The band's top edge (0.3), the
+lock-in ceiling (20 cycles), the drive (0.15) and, less so, the cycle floor (2) are therefore
+measured again on the record clock before the next training, and change only if those measurements
+say so. Until then the reasoning below is the old clock's.
 
 **The band, (0.03, 0.3) × Ω₀** (`core.config.CHI_FREQ_BOUNDS`). Every probe sits between 0.03 and
 0.3 times its own row's Ω₀, below resonance. The band was first fixed from a sweep of drive strength
@@ -1174,10 +1252,15 @@ left open, because any change moves the coordinates a trained flow, its eigenval
 drawn from it live in. The honest test of a change is to build the rotation both ways at several
 operating points and compare the eigenbases.
 
-**The step the dynamics need.** The solver's finest non-dimensional step comes from a prior bound,
-not from the dynamics ([Nondimensionalisation](#nondimensionalisation)). The convergence study
-described there would settle it: halve the step until each of the 41 features, in units of its own
-noise, stops moving.
+**The step the dynamics need.** The solver's largest non-dimensional step comes from a prior bound,
+not from the dynamics, and on cells with a stiff gating nonlinearity the recorded step leaves a bias
+of up to about half a spread in several passive features and a lag in the forced response's phase
+([Nondimensionalisation](#nondimensionalisation) has the measurement). Halving the step and halving
+it again shrinks the bias slowly, and under the per-batch cap shortens the recordings training draws.
+A scheme that corrects for the step, a higher-order one or one that integrates the stiff gating term
+exactly, might remove it at little cost; the same paired test, a candidate against a reference
+sixteen times finer on one Brownian path, would show whether it does. The band of `E2_log_h3` near
+the frames' Nyquist frequency needs a far finer step than any tried.
 
 **Three chi measurements left open** ([Chi probe design](#chi-probe-design)):
 
@@ -1186,9 +1269,11 @@ noise, stops moving.
 - the rows under 0.3 Hz, about 16 % of the masking audit's, whose spectra have not been examined;
   looking at them decides whether a prior screen is right for them;
 - the wander of the bundle's response over tens of drive cycles, inferred from re-locking the same
-  traces, whose mechanism is untested; phase diffusion of the free-running oscillation is the
-  candidate, and comparing how fast the undriven oscillation's phase scatter grows with how fast the
-  lock-in wanders, over the same lengths, would test it.
+  traces on the old clock, whose mechanism is untested; the old clock's 2.6 % frequency mismatch is
+  now the likely cause ([Chi probe design](#chi-probe-design)), and phase diffusion of the
+  free-running oscillation the other candidate. The probe checks on the record clock settle the
+  first; comparing how fast the undriven oscillation's phase scatter grows with how fast the lock-in
+  wanders, over the same lengths, would test the second.
 
 **Clarity against the whole band.** [probes drive](command-line.md#probes-drive) counts the undriven
 cell as an oscillation when the power of its spectrum's highest bin above zero frequency, over the

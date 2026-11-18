@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit e904e514.
+Checked against commit cfcf9d61.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -64,6 +64,12 @@ when it holds nothing but a docstring.
 
 - `pipeline.py`: the façade: memory planning, the out-of-memory ladders, `gen_obs`,
   `gen_training_data` and the per-batch probe tally.
+- `clock.py`: the record clock, how a simulated cell is put on a recording's frames: `FrameClock`
+  (the stride, the recorded step, the transient, the segments, the frames and the drive's times),
+  its constructors `frame_clock` and `rows_clock`, the schedule's filter arithmetic
+  (`training_n_fine`), the bench warning's bound (`shortest_trained_t_scale`) and `RECORD_CLOCK`, the
+  name the simulation set's identity carries
+  ([The record clock](#the-record-clock)).
 - `train.py`: the sbi training call (`train_nn`) and its typed plan (`TrainingPlan`).
 - `summaries.py`: `gen_stats`, per-column winsorisation and the count of pathological trajectories.
 - `statistics.py`: the hand-made summary features, their valid flags, `FEATURE_SET_VERSION` and
@@ -115,8 +121,8 @@ when it holds nothing but a docstring.
 
 ### `core/Simulator`, `core/Solvers` and `core/Models`
 
-- `Simulator/simulator.py`: `Simulator`, which integrates a batch segment by segment and picks
-  `euler` or `euler_compiled`, and `SimulationError`.
+- `Simulator/simulator.py`: `Simulator`, which integrates a batch segment by segment, each segment
+  at the step its plan hands it, and picks `euler` or `euler_compiled`, and `SimulationError`.
 - `Simulator/nadrowski_simulator.py`: binds the Nadrowski parameter columns, by position, to
   `NadrowskiModel`.
 - `Simulator/hopf_simulator.py`: the same for `HopfModel`.
@@ -124,7 +130,8 @@ when it holds nothing but a docstring.
   by the number of parameters.
 - `Simulator/user_simulator.py`: the same for a user model.
 - `Solvers/sdeint.py`: the Itô Euler–Maruyama solver: a plain Python loop (`euler`), and a
-  TorchScript step (`euler_compiled`) replayed from CUDA graphs where it can be.
+  TorchScript step (`euler_compiled`) replayed from CUDA graphs where it can be; both take the step
+  from their caller (`step_tensors`).
 - `Models/nadrowski_model.py`: the Nadrowski model's drift and noise, and its TorchScript step
   (`compiled_step`).
 - `Models/hopf_model.py`: the same for the Hopf normal form.
@@ -609,7 +616,8 @@ is how the store is built, in `core/artifacts/`.
   posterior whose amortized flag disagrees with its truncation region. Small tensors are recorded as
   float64 lists; large payloads stay binary beside the manifest, with their sha256 in `payloads`. A
   stage's settings start from `config_from_cfg` and it adds its resolved knobs; a posterior's and an
-  observation's conditioning geometry is `conditioning_block`.
+  observation's conditioning geometry, and the record clock its rows were simulated on, is
+  `conditioning_block`.
 - **Writing.** `ArtifactStore.create` refuses a taken name and returns an `ArtifactWriter`. The writer
   creates the directory on entry and hands out payload and figure paths (`payload`, `figure_path`);
   at the commit it hashes the payloads, writes `log.txt`, then the manifest, last and atomically.
@@ -644,15 +652,22 @@ is how the store is built, in `core/artifacts/`.
   warns, if any lie past the count. `load_rows` refuses two shards whose ranges overlap, naming both
   and the folder to move the stray one into.
 - **The cache's identity** (`core.artifacts.identity.SimulationIdentity`, `FORMAT` =
-  `"training-rows/3"`) names its directory by a 12-character digest of these fields: the format; the
+  `"training-rows/4"`) names its directory by a 12-character digest of these fields: the format; the
   model; the prior's fingerprint; the observation mode; the parameter keys and both boxes; the log-box
   parameters; the rotation switch; the rows per batch and the batch count; the time grid's settings;
   whether the box declares a drive; the summary flags and `feature_set_version`; in chi mode the
   layout, slots, channel width, drive, band and lock-in ceiling; the device type and number type; the
-  truncation region, None when the run is amortized; and `units_sha256`, the units declaration's
-  fingerprint.
+  truncation region, None when the run is amortized; `units_sha256`, the units declaration's
+  fingerprint; and `record_clock`, the clock its rows are simulated on (`core.SBI.clock.RECORD_CLOCK`,
+  `"frame-exact/1"`).
   - Bumping `statistics.FEATURE_SET_VERSION` re-keys every cache: a changed feature definition behind
     an unchanged label would otherwise resume onto rows that meant something else.
+  - The record clock moved the format from `"training-rows/3"` to `"training-rows/4"`. Rows made on
+    the older clock held each cell at a time scale near its own, with its drive's clock started before
+    the first frame ([The record clock](#the-record-clock)), so the same settings now simulate other
+    rows. The format and the clock move together, so a set made before differs in two fields: it is
+    never one setting away, never resumed, and the window's list of saved sets says it was "Made by
+    another version of PRISM" (`core.gui.fields.IDENTITY_ROWS`). It is kept as it is.
   - The prior's fit (`prior_fingerprint`) is part of the identity because a resume under another
     prior would splice rows drawn from two priors into one training set, silently changing the
     proposal the flow trains against.
@@ -692,9 +707,10 @@ is how the store is built, in `core/artifacts/`.
   - `load_posterior`: first `run_guards._assert_chi_config_is_deliberate` (a chi configuration's band
     and drive must be `core/config.py`'s); then the model, the parameter set and its order, both
     boxes and the mode; in chi mode the layout, the slots, the channel width, the band, the lock-in
-    ceiling and the drive (`chi_f0`); the conditioning width; then the trained network's own view of
-    its mode and block width, its rotation against the prior pickled inside it, and the amortization
-    gate.
+    ceiling and the drive (`chi_f0`); the conditioning width; the record clock (a record that names
+    none, made before the clock was recorded, or names another is refused); then the trained network's
+    own view of its mode and block width, its rotation against the prior pickled inside it, and the
+    amortization gate.
   - `load_observation`: the model, the parameter order, the mode, the width, and in chi mode the
     layout and slots; then the payload must hash to the manifest's digest and have the declared width.
   - Recorded but never compared on load:
@@ -703,6 +719,7 @@ is how the store is built, in `core/artifacts/`.
     - an observation's box (the configuration block);
     - an observation's chi drive, band and lock-in ceiling (a posterior's are compared), so a
       narrowing round can be drawn around an observation made at another drive;
+    - an observation's record clock (a posterior's is compared, an observation's is not);
     - a posterior's and an observation's time grid (the configuration block) and units file hash
       (`inputs`); only the simulation cache's identity carries them.
   - Recorded in no record a load compares (only a `probes` diagnostic record carries them):
@@ -937,6 +954,16 @@ stage without freezing, shows its output and stops it.
   chooses `euler_compiled` when the device is CUDA and the model exposes a TorchScript
   `compiled_step` (Nadrowski, Hopf, and a user model whose step could be generated; never BP), and
   the plain Python loop, `euler`, otherwise.
+- **The caller hands the step; the solver never derives one from times.** `Simulator.simulate` takes
+  a plan, `[(a, b, dt), ...]`: segment k takes b − a steps of dt from the state at index a, the
+  segments contiguous over the grid, each at its own constant step (the record clock's plan is the
+  transient at `dt_nd_min`, then the recorded segments at the recorded step;
+  [The record clock](#the-record-clock)). `euler` and `euler_compiled` take the step as an argument,
+  and `step_tensors` makes it and its square root `(B, 1)` tensors of the state's dtype, one value per
+  row, each computed in double and rounded once, so a step given as a float and the same step given as
+  a tensor give the same numbers. Only `Simulator.simulate` handed no plan, as the prior's stability
+  screens call it, still reads a step from the grid: once, from its first interval, and uses it in
+  every segment (`legacy_plan`).
 - **CUDA graphs.** `euler_compiled` captures `SOLVER_GRAPH_CHUNK` (50) Euler steps into a CUDA graph
   and replays it; the last steps that do not fill a chunk run the TorchScript step without a graph,
   and so does the whole of a call shorter than one chunk. `config.SOLVER_CUDA_GRAPHS` turns the
@@ -956,13 +983,16 @@ stage without freezing, shows its output and stops it.
   about 20 minutes of roughly 38 hours. On a four-batch smoke run the Fisher dominates instead, which
   is why it looks like the target.
 - **The graph path's invariants.**
-  - The parameters are static buffers copied in on every call, never captured by reference, which is
-    what lets one capture serve every batch; a captured reference would replay one model's physics
-    for the next batch, silently.
-  - The cache is a module-level dictionary, `_GRAPH_CACHE`, keyed on the step, the batch shape, the
-    drive channels, the chunk, the number type, the device and the time step, and bounded at
-    `SOLVER_GRAPH_CACHE_MAX` (8) because graph memory lives in private pools `empty_cache` cannot
-    reclaim. It is not held on `Solver`, which is built once per segment and must stay patchable
+  - The parameters, and the time step and its square root, are static buffers copied in on every
+    call, never captured by reference, which is what lets one capture serve every batch; a captured
+    reference would replay one model's physics, or one batch's step, for the next batch, silently.
+  - The cache is a module-level dictionary, `_GRAPH_CACHE`, keyed on the compiled step function, the
+    batch shape, the drive channels, the chunk, the number type and the device (`_graph_key`), and
+    bounded at `SOLVER_GRAPH_CACHE_MAX` (8) because graph memory lives in private pools `empty_cache`
+    cannot reclaim. The time step is not in the key, so batches at different time scales, whose
+    recorded steps differ, share one capture per batch width
+    (`test_two_batches_at_different_steps_share_one_capture`, gpu-marked). The cache is not held on
+    `Solver`, which is built once per segment and must stay patchable
     (`test_the_graph_cache_is_not_hung_off_the_solver_class`).
   - The graphed path advances the progress bar and the step counter together, by the chunk, through
     `sdeint._advance`; never call `bar.update` alone. The ungraphed loops count through
@@ -977,12 +1007,13 @@ stage without freezing, shows its output and stops it.
   segment, so resolving `sdeint.Solver` at call time is the seam a test uses to swap the solver out
   (`test_solver_failure_raises_instead_of_killing_the_process`). A solver failure is raised as a
   `SimulationError` chained to its cause.
-- **The segment seam duplicates one sample.** Each segment starts from the previous segment's last
-  state and writes it again as its first sample, so every boundary repeats a sample: a run of k
-  segments advances k − 1 fewer steps than its time grid implies, and the grid and the solution are
-  not exactly co-indexed. This is negligible for the spectral and autocorrelation features at three
-  segments or fewer; a feature that read an instantaneous phase or a finite difference across a seam
-  would see a zero-length step.
+- **The segment seam.** Segment k starts from the state at the previous segment's last index and is
+  handed the drive from that index; it integrates its own steps and writes only its new states. So
+  index g holds the state after g steps in every segment, drive index m serves step m → m+1, and a run
+  cut into segments equals one long run, bit for bit on the CPU with the same draws in the same order
+  (`tests/test_user_sbi.py::test_a_segmented_run_equals_one_long_run_bitwise`). Before the record
+  clock every seam repeated a sample, and every segment after the first took a step read off its own
+  float32 slice of the grid, up to 0.4 % away from the first segment's.
 - **Seeding.** `core.rng.seeded(seed, device)` seeds torch and numpy for a block and restores both
   afterwards; `smoke`, every diagnostic that draws (SBC, the Laplace and Jacobian checks, the probe
   checks) and a seeded calibration run inside it. A run is seeded once and its
@@ -1000,6 +1031,47 @@ stage without freezing, shows its output and stops it.
   differed from the second, and a second equal to the third. What that asks of a bitwise comparison
   is in [Randomness and reproducibility](rules-and-traps.md#randomness-and-reproducibility). The
   TorchScript path runs only on CUDA, so the CPU suite's reproducibility checks are untouched.
+
+## The record clock
+
+`core.SBI.clock` puts a simulated cell on a recording's frames; what it means for the science, and
+what the recorded step costs in accuracy, is in
+[Nondimensionalisation](science.md#nondimensionalisation). Every simulation that makes a recording
+runs on one: training's rows, a simulated observation and its central trajectories, the posterior
+predictive check's bins, the Fisher rotation, the identifiability checks and the probe checks.
+
+- **A `FrameClock`** holds the stride s, the recorded step h (one value, or one per row), the
+  transient (`steady_idx` steps of `dt_nd_min`), the frame count, the frame interval and the longest
+  segment (`CHUNK_LEN`, handed in by the caller). From them it gives `n_fine` (the transient plus s
+  steps per frame), `segments()` (the transient as one segment, then the recorded part in segments of
+  at most `CHUNK_LEN` steps, the solver's plan), `frames(x)` (`x[..., ::s][..., :N]`, since `gen_obs`
+  already drops the transient), `nd_grid()` (the model time of every fine step, for a clock with one
+  step) and `drive_times()`.
+- **The constructors.** `frame_clock(dt_exp, t_scale, n_points, dt_nd_min, steady_idx, chunk_len, *,
+  stride=None)` builds one batch's clock, at a given stride when asked. `rows_clock(dt_exp, t_scales,
+  n_points, dt_nd_min, steady_idx, chunk_len)` gives several rows one stride, from the smallest of
+  their time scales, and each row its own step. A predictive-check bin runs its draws on one. The
+  Fisher rotation's and the identifiability checks' central differences take its stride for a point
+  and all its arms, each arm then on `frame_clock(..., stride=)`, so every arm takes the same number
+  of steps and its seed gives it the same draws. A per-row step travels with its rows through
+  `gen_obs`' split and its out-of-memory halving.
+- **The drive's times** are (j − n_tr) · `dt_nd_min` · t_scale through the transient and
+  (j − n_tr) · `dt_exp` / s after it, plus `t_offset`: zero at the first kept frame, negative before.
+  The drive builders take them as `t_dim=` (`core.forcing.build_nondim_force_tensor` and its sine
+  wrapper); the older path from model time stays for the user-model drive kinds.
+- **`gen_obs` requires a clock (`clock=`) or a step (`dt=`)** and refuses a call with neither, or
+  with both. With a clock, the grid's length, `steady_idx` and the segment count must be the clock's,
+  so a call site handing a stale geometry fails there instead of running on a plausible step.
+  `tests/test_record_clock.py::test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step` scans
+  every call under `core/`.
+- **One arithmetic for the filter and the loop.** The schedule's filter computes every candidate's
+  `n_fine` with `training_n_fine`, in float64 from the schedule's float32 values, exactly as the batch
+  loop's `frame_clock` does; the probe checks' geometry (`core.diagnostics.probe_math`) reads the same
+  clock; and the bench's out-of-distribution warning names the shortest time scale the filter admits
+  for a recording's length (`shortest_trained_t_scale`).
+- **`RECORD_CLOCK`** (`"frame-exact/1"`) is recorded in the simulation set's identity and in a
+  posterior's and an observation's conditioning block ([The artifact store](#the-artifact-store)). A
+  change to what a row holds under this clock takes a new name, and the format with it.
 
 ## Memory planning and out-of-memory recovery
 
@@ -1049,10 +1121,11 @@ module constants of `core.SBI.pipeline`.
   and re-raises anything that is not an out-of-memory error at once, traceback intact. `_is_oom`
   accepts `torch.OutOfMemoryError`, a raw driver `AcceleratorError`, and either wrapped in a
   `SimulationError`.
-  - `_gen_obs_retry`, inside `gen_obs`, halves the simulator batch and re-runs it, down to 256 rows.
+  - `_gen_obs_retry`, inside `gen_obs`, halves the simulator batch and re-runs it, down to 256 rows;
+    a per-row step is halved with its rows.
   - `_rows_with_oom_retry` halves a training batch's rows and re-runs everything for them (the
     spontaneous run, the statistics, every probe). It catches what the simulator-level split cannot
-    see: the drive tensors, the gather indices, the stitched result. The halves share the batch's
+    see: the drive tensors and the stitched result. The halves share the batch's
     (t_scale, T_obs) and its probe set, so together they are the batch that would have been produced,
     apart from how its noise was drawn.
   - `retry_on_oom`, for newer call sites, waits and retries: the Fisher rotation wraps each operating

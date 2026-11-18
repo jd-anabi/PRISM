@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 7180ad5c.
+Checked against commit cfcf9d61.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -93,8 +93,9 @@ and the session guards).
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
     present, the gpu-marked tests run on it inside every fast gate: four in `tests/test_gpu_paths.py`
     (an inference on the card, a training stopped on it and resumed, and a kept training and a kept
-    narrowing round each resumed through the window's own call, all tiny), six in
-    `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`;
+    narrowing round each resumed through the window's own call, all tiny), seven in
+    `tests/test_user_sbi.py` (among them that two batches at different steps share one graph
+    capture) and one in `tests/test_diagnostics.py`;
   - `display`: needs a real screen, and is skipped offscreen. In PowerShell,
     `$env:QT_QPA_PLATFORM = "windows"; python -m pytest -m display; Remove-Item Env:QT_QPA_PLATFORM`
     runs these on the real screen, since the root `conftest.py` only defaults the variable; they
@@ -222,6 +223,9 @@ and the session guards).
     comment policy);
   - `tests/test_artifact_store.py::test_no_literal_resource_paths_outside_config`: no code outside
     `core/config.py` builds a literal `Resources/` or `Artifacts/` path;
+  - `tests/test_record_clock.py::test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step`: every
+    `gen_obs` call under `core/` names the run's record clock or its step
+    ([The record clock](architecture.md#the-record-clock));
   - `tests/test_docs.py`: every relative link in this guide and the root `README.md` resolves, every
     page opens with its commit stamp, and the command-line page names every subcommand and flag, with
     each default as its `--help` states it.
@@ -403,6 +407,19 @@ stage about 20 s longer), and every check held: run 1 141 / 142 / 24 / 58 s, run
 resume exited 0 in 14 s; the diagnostic card's eight commands each exited 0 and wrote one record.
 The gate took 26 minutes and the diagnostic card 7.
 
+It ran again at commit cfcf9d61, on 18 November 2026, the first card run on the record clock
+([The record clock](architecture.md#the-record-clock)), and every check held: run 1 139 / 156 / 25 /
+61 s with 229 of 704 probes masked (32.5 %), run 3 133 / 48 / 13 / 22 s and run 4 136 / 253 / 32 /
+66 s with 198 of 704 masked (28.1 %). The masked-probe counts moved with the rows, run 1's from 230
+and run 4's from 227 (32.2 %), both inside the criterion's band, and the posterior stage ran 14 to
+20 s longer than at the run before. Run 2 exited 0 in 10 s and run 2b exited 1 in 7 s; run 5's drill
+ran 438 s to its cut after pass 3, and its resume exited 0 in 14 s; each prior logged the same
+stability sweep (101779 of 102400) and fill (73939) as above. The diagnostic card's eight commands
+each exited 0 and wrote one record. `probes band` held the band (0.03, 0.3) and the drive 0.15 for
+the master cell, as before; `probes drive` read the cell captured at 0.15 as before, free-running at
+amplitude 0.2 and captured at 1.5 at frequency 0.03164, the configured drive's own-peak ratio 0.032
+(0.027 before). The gate took 26 minutes and the diagnostic card 9.
+
 sbi 0.26 warns when its calibration tests get fewer than 100 datasets, so runs 1, 3 and 4, which
 calibrate on 40, each log `Number of TARP samples should be on the order of 100s to give reliable results.`
 beside the SBC-count warnings; at that size the calibration means nothing anyway
@@ -460,8 +477,8 @@ The last line puts the shell back on the real records root. What each should sho
   which contains 0.15. On the original sixteen-strength grid, which has no point between 0.1 and 0.2,
   capture reads 0.2; [Chi probe design](science.md#chi-probe-design) has both readings.
 - `probes mask` over `smoke_prior`: masked probes within ±12 points of 37 %, the cycle floor the
-  only cause (38.8 % on the last card run, 1 October 2026; 35.1 % on 29 September, over a prior of
-  the older construction).
+  only cause (35.1 %, 753 of 2,144, on the record clock, 18 November 2026; 38.8 % on the old clock,
+  1 October 2026; 35.1 % on 29 September, over a prior of the older construction).
 
 Then delete the scratch folder, as the recipe says.
 
@@ -478,6 +495,12 @@ Then delete the scratch folder, as the recipe says.
   bitwise repeat on the CPU only; the suites' reproducibility checks run on the CPU (same link).
 - **Calibration at small sizes.** SBC at smoke or test sizes has no power: a pass or a FAIL there says
   only that the code ran ([Reading calibration honestly](science.md#reading-calibration-honestly)).
+- **The step's accuracy.** `tests/test_record_clock.py` pins the record clock's arithmetic: the
+  stride and the recorded step at every time scale, the transient at the certified step, the drive's
+  origin at the first frame, a probe and a forced drive read at their known phase, the schedule's
+  filter and the batch loop agreeing. No suite measures how far the Euler step's own error moves a
+  feature; that was measured once, by hand, and is stated in
+  [Nondimensionalisation](science.md#nondimensionalisation).
 - **The window on a screen.** Offscreen tests cannot see layout, painting or a native dialog. Window
   features are checked by hand on a real screen, and the display-marked tests run only with
   `QT_QPA_PLATFORM=windows`.

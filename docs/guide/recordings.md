@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit 7180ad5c.
+Checked against commit cfcf9d61.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, which bounds file a cell is checked against, the three observation modes and
@@ -242,7 +242,9 @@ prints `inputs.bounds` and `config.mode`.
 
 - **Forced mode.** Keep the drive inside the bounds file's Forcing box: training drew its drives
   from that box, and nothing checks a recording's drive against it. The box is written in the
-  cell's units; `master.txt`'s spans 0 to 6 pN and 2.26 to 226 Hz.
+  cell's units; `master.txt`'s spans 0 to 6 pN and 2.26 to 226 Hz. The phase you give is the
+  drive's phase at the driven recording's first sample
+  ([Recording files and drive frequencies](#recording-files-and-drive-frequencies)).
 - **Chi mode.** A Forcing section, if the bounds file has one, is ignored: the probes sit at the
   frequencies you drove at. χ is the response divided by the drive: the lock-in divides by the
   amplitude you give, so give the amplitude actually applied. Training drove every probe at the
@@ -250,7 +252,9 @@ prints `inputs.bounds` and `config.mode`.
   its scatter, change with the amplitude: drive as near that amplitude, in newtons for this cell, as
   you can ([The chi assumptions, and checking them](#the-chi-assumptions-and-checking-them) gives
   it). A much stronger drive can also capture the bundle, which then abandons its own rhythm and
-  follows the drive, so that χ measures the drive rather than the bundle.
+  follows the drive, so that χ measures the drive rather than the bundle. Start each driven
+  recording with the drive at the top of its cycle
+  ([Recording files and drive frequencies](#recording-files-and-drive-frequencies)).
 
 In the window, step 1's "Kind of observation" list is the chi switch ("Frequency response" is chi
 mode) and step 2's Bounds file list chooses the bounds file. Step 5, Inference, has two modes, "A
@@ -290,6 +294,22 @@ python -m core infer --chi --bounds Resources/Bounds/nadrowski/master.txt --post
   (`core.config.DT_EXP_S`, the camera frame interval the network was trained on). Nothing reads a
   rate from the file: resample a recording made at another rate first, or every frequency and time
   in it is misread.
+- **A recording is read as if its samples are exactly 1 ms apart.** Training simulates every cell
+  on exact frames, and PRISM does not yet read a recording at its camera's own measured interval. A
+  camera whose interval is off by 1 % reads a 20-cycle driven response at about 0.94 of its size (the
+  lock-in's own decay at a frequency 1 % off, |sinc(π · 20 · 0.01)|) and moves every feature measured
+  in time units by log 1.01. Know your camera's real frame interval before you trust a reading.
+- **Every driven recording starts with the drive at a known point of its cycle**, because the
+  lock-in counts time from the recording's first sample, as training does:
+  - a frequency-response probe starts with the drive at the top of a cosine: at its first sample the
+    drive is at its largest, F0 · cos(2π · f · t) with t = 0 there;
+  - a forced-mode recording's drive is amp · sin(2π · freq · t + phase) + offset with t = 0 at its
+    first sample, so the phase you give is the drive's phase at that sample.
+
+  A recording that starts elsewhere in the cycle reads every phase off by the drive's phase at its
+  first sample (each probe's cos and sin channels; the forced response's phase features), and a
+  probe's |χ| a little too unless it holds a whole number of cycles, and nothing warns of it.
+  Starting the camera on the drive's own trigger is the simplest way to meet it.
 - **Length.** T_obs (`--t-obs`, or the Recording length box, in s) is the recording's length in seconds. The
   passive recording should hold T_obs times 1,000 samples, and a warning says so when it is more than
   one sample off. In forced mode the driven recording must be exactly as long as the passive one,
@@ -382,7 +402,9 @@ under the 7.4 s every t_scale allows.
 ## The chi assumptions, and checking them
 
 Chi mode rests on four settings in `core/config.py`, chosen by measurements on the master cells
-([Chi probe design](science.md#chi-probe-design) has the measurements):
+([Chi probe design](science.md#chi-probe-design) has the measurements). Those measurements were made
+on the simulator's old clock, which ran the master cells 2.6 % fast, and are made again on the
+record clock before the next training; the values below stand until then:
 
 | setting | value | what it means for a recording |
 |---|---|---|
