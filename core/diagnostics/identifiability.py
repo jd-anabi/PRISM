@@ -252,16 +252,18 @@ def _refuse_bad_arm_settings(m, rel, min_valid) -> None:
 
 
 def _point_stride(cfg, rescale_vec, rel, n_obs) -> int:
-    """The stride a point and its finite-difference arms share: from the smallest of the time scales they
-    simulate, the t_scale arm's -d among them (core.SBI.clock.rows_clock). Every arm then takes the same
+    """The stride a point and its finite-difference arms share: from the smallest of the positive time scales
+    they simulate, the t_scale arm's -d among them (core.SBI.clock.rows_clock). Every arm then takes the same
     number of steps, so the fixed seeds give every arm the same draws -- the common random numbers a
-    central difference rests on -- while each keeps its own step."""
+    central difference rests on -- while each keeps its own step. An arm at or below zero is no time scale:
+    it is left out of the stride, comes back non-finite, and its difference falls back to one side, as it
+    would on its own."""
     from core.config import CHUNK_LEN
     from core.SBI import clock
     t_scale = float(rescale_vec[cfg.rescale_idx["t_scale"]])
     lo, hi = cfg.rescale_params["t_scale"][1]
     d = max(rel * (hi - lo), 1e-5 * abs(t_scale))
-    arms = [max(t_scale - d, 1e-6 * t_scale), t_scale, t_scale + d]
+    arms = [a for a in (t_scale - d, t_scale, t_scale + d) if a > 0]
     return clock.rows_clock(cfg.dt_exp, arms, n_obs, cfg.dt_nd_min, cfg.steady_idx, CHUNK_LEN).stride
 
 

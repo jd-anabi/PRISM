@@ -374,6 +374,28 @@ def test_an_identifiability_points_arms_share_their_stride(monkeypatch):
     assert rec.clocks and all(c.stride == s for c in rec.clocks)
 
 
+def test_an_identifiability_points_stride_leaves_out_an_arm_at_or_below_zero():
+    """A t_scale arm at or below zero is no time scale: the shared stride comes from the point and its plus arm, so
+    that arm alone goes non-finite and falls back to one side, as it would on its own, and the point is not asked
+    for tens of millions of fine steps per frame."""
+    from core.diagnostics import identifiability
+    cfg = _master_cfg()
+    res = torch.tensor([v for v, _ in cfg.rescale_params.values()])
+    ts = float(res[cfg.rescale_idx["t_scale"]])
+    lo, hi = cfg.rescale_params["t_scale"][1]
+    rel = 0.1
+    assert ts - rel * (hi - lo) < 0 < ts
+    point = clock.frame_clock(cfg.dt_exp, ts, 200, cfg.dt_nd_min, cfg.steady_idx, config.CHUNK_LEN).stride
+    s = identifiability._point_stride(cfg, res, rel, 200)
+    assert s == point == 11
+    minus = res.clone()
+    minus[cfg.rescale_idx["t_scale"]] = ts - rel * (hi - lo)
+    force = torch.tensor([v for v, _ in cfg.force_params_dict.values()])
+    with np.errstate(all="ignore"):
+        _feats, xf, xs = identifiability._laplace_raw(cfg, cfg.params_tensor[0], minus, force, 2, True, 20, s)
+    assert not bool(torch.isfinite(xf).all()) and not bool(torch.isfinite(xs).all())
+
+
 def test_a_predictive_check_runs_each_draw_at_its_own_time_scale_on_the_frames(monkeypatch):
     """The predictive check's bin runs every draw on one stride, from the bin's smallest time scale, each at its
     own step: so each draw is the cell at its own time scale, its drive on the observation's frames. With a
