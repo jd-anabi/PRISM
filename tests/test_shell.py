@@ -10226,6 +10226,25 @@ def test_the_past_view_of_a_reopened_kept_round_offers_its_resume(store, tmp_pat
     assert resumed == [kept], "the past view's Resume did not reach the round's own resume"
 
 
+def test_a_kept_rounds_offer_resumes_from_its_record_while_this_launch_still_offers_its_run(monkeypatch):
+    """A kept narrowing round's offer is resumed from its record by Parameter inference's resume of a round, though
+    the run that kept it is one this launch still offers on its page: the press never takes that run's own continue
+    or resume, which are a training's."""
+    from core.gui.run.controller import RunController
+    from core.gui.screens.inference_screen import InferenceScreen
+    qt_app()
+    window = build_window()
+    offer = SimpleNamespace(kind="round", run="20261003T030211-narrowing-round", kept="20261003T090000",
+                            step="narrowing")
+    pressed = []
+    monkeypatch.setattr(RunController, "offered", lambda held, run: run == offer.run)
+    monkeypatch.setattr(RunController, "continue_run", lambda held, run: pressed.append(("continue", run)))
+    monkeypatch.setattr(RunController, "resume_training", lambda held, run: pressed.append(("resume", run)))
+    monkeypatch.setattr(InferenceScreen, "resume_round", lambda screen, ident: pressed.append(("round", ident)))
+    window.offer_pressed(offer)
+    assert pressed == [("round", offer.kept)], pressed
+
+
 @pytest.mark.parametrize("gone", ["the posterior it narrows", "its prior", "its observation"])
 def test_a_kept_round_whose_records_are_gone_is_offered_nowhere_and_says_why(gone, store, tmp_path, monkeypatch):
     """A kept narrowing round whose posterior it narrows, whose prior or whose observation is no longer in Records,

@@ -638,17 +638,18 @@ class MainWindow(QMainWindow):
 
     def offer_pressed(self, offer, where: str = "training") -> None:
         """An offer taken, from Home's button (``where`` "home") or a past view's, which stands on the offer's own step.
-        For a run of this launch whose page still offers it, that page opened and its own button pressed. Else
-        "Continue from batch N" or "Fit again" fills the forms from the run's history and continues it, what stops it
-        said under its step's heading and, pressed on a past view of the Training step, on that view, and "Resume"
-        resumes the kept training on its own record, each through Parameter inference, which opens at the offer's step:
-        Training, or the Narrowing round for a round's. A past view says only what its own press set: what an earlier
-        press left there goes. Nothing while a run is live, or for no offer."""
+        For a run of this launch whose page still offers it, that page opened and its own button pressed, but for a kept
+        narrowing round, which is resumed from its record whoever holds its run. Else "Continue from batch N" or "Fit
+        again" fills the forms from the run's history and continues it, what stops it said under its step's heading
+        and, pressed on a past view of the Training step, on that view, and "Resume" resumes the kept training on its
+        own record, each through Parameter inference, which opens at the offer's step: Training, or the Narrowing round
+        for a round's. A past view says only what its own press set: what an earlier press left there goes. Nothing
+        while a run is live, or for no offer."""
         if controller().is_live() or offer is None or getattr(offer, "kind", None) not in ("continue", "fit_again",
                                                                                           "resume", "round"):
             return
         held = controller()
-        if getattr(offer, "run", None) and held.offered(offer.run):
+        if getattr(offer, "run", None) and offer.kind != "round" and held.offered(offer.run):
             # A training of this launch whose page still holds its own call: its page opened and its own button pressed,
             # the exact call into the session as it stands, with nothing applied, loaded or asked again.
             self._open_run(offer.run)
