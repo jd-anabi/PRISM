@@ -562,6 +562,46 @@ def test_a_tier1_record_carries_the_constraint_and_the_assumed_parameters(store)
     assert "tier1" not in plain and "assumed_params" not in plain
 
 
+def test_a_tier1_box_whose_units_name_no_force_is_refused_before_the_sweep(store, monkeypatch):
+    """A tier-1 box's force scale is derived from its temperature with Boltzmann's constant in the cell's units, so
+    units that name no force unit, or no length unit, cannot give it. Such a build is refused under the units before
+    the stability sweep: it failed only at the prior's write, after the whole sweep, with a bare error. Nothing is
+    swept or written. The box's own units, which name both, pass, and so does a box that declares a force scale."""
+    from core.refusals import Refusal
+
+    class _Reached(RuntimeError):
+        """Raised by the sweep's stand-in: the build got past every refusal."""
+
+    swept = []
+
+    def sweep(*a, **k):
+        swept.append(1)
+        raise _Reached
+
+    monkeypatch.setattr(pipeline, "gen_prior", sweep)
+    labels = config.VALID_LABELS[config.VALID_MODELS.index("NADROWSKI")]
+    before = len(store.list("prior"))
+    for units in (("nm", "ms"), ("ms", "pN")):
+        cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"), str(TIER1_BOX),
+                                  units_override=units, chi_mode=True, hw=config.cpu_device())
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_prior(cfg, None, True, store=store, fig_sink=_close)
+        assert e.value.field == "units", e.value.field
+        assert str(e.value) == ("The units must name a force unit and a length unit, such as pN and nm, for a bounds "
+                                "file that declares the temperature T in place of the force scale, which is derived "
+                                f"from it with Boltzmann's constant in those units; got '{' '.join(units)}'."), (
+            str(e.value))
+    assert swept == [] and len(store.list("prior")) == before
+    with pytest.raises(_Reached):
+        orchestrator.build_prior(tier1_cfg(), None, True, store=store, fig_sink=_close)
+    master = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                                 str(config.BOUNDS_PATH / "nadrowski" / "master.txt"), units_override=("nm", "ms"),
+                                 chi_mode=True, hw=config.cpu_device())
+    with pytest.raises(_Reached):
+        orchestrator.build_prior(master, None, True, store=store, fig_sink=_close)
+    assert swept == [1, 1] and len(store.list("prior")) == before
+
+
 def test_a_simulated_tier1_observation_records_the_force_scale_it_ran_at(store, monkeypatch):
     """A simulated observation on the tier-1 box records the force scale it was really simulated at: the
     one the relation derives from its truth, which is also the one every drive it built was divided by."""

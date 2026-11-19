@@ -183,11 +183,13 @@ def make_cfg(args):
     model = model_for(args)
     spec = registry.get(model)
     if spec is None or (spec.is_user_model and not registry.is_sbi_user_model(model)):
-        raise ValueError(
+        # A refusal, answered by --model: the ladder then names the flag, as it does for every refusal, where a
+        # bare error printed its class and the line it was raised at.
+        raise Refusal(
             f"'{model}' is not a model this command can run: it is neither a built-in "
             f"{list(VALID_MODELS)[:3]} nor a registered user model eligible for inference (one saved "
             f"in Resources/Models/, with spontaneous dynamics and at least one ND parameter). Pass "
-            f"--model, or point --bounds at Bounds/<model>/.")
+            f"--model, or point --bounds at Bounds/<model>/.", field="model")
     labels = (VALID_LABELS[VALID_MODELS.index(model)] if model in VALID_MODELS
               else registry.get(model).labels)
     if args.device == "cuda":

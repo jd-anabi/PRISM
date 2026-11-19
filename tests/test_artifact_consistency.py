@@ -173,6 +173,44 @@ def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
                                model=model, param_keys=keys)
 
 
+def test_the_bounds_files_reader_refuses_a_line_it_cannot_read_naming_it(tmp_path):
+    """A line of a parameter section that is not a parameter with its two limits is refused by the bounds file's
+    reader, under the bounds file, naming the line by its number and its words, and so before any configuration is
+    built on the file: it was skipped, or taken as a parameter with no limits, without a word, so a typo could drop a
+    parameter or leave one with no box. Read as it stands (``strict=False``, how a page shows a broken file to be
+    mended) the file reads as before. Headers, blank lines, square brackets, a unit after a name, spaces, CRLF and
+    lines under a header that names no section are read as before, strictly too."""
+    from core.refusals import Refusal
+    master = (BOUNDS_PATH / "nadrowski" / "master.txt").read_bytes().decode("utf-8").replace("\r\n", "\n")
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    shipped = file_manager.parse_bounds_file(str(BOUNDS_PATH / "nadrowski" / "master.txt"))
+    for line, lenient_k in (("k in (a, b)", (None, ())), ("k in (0.01, )", (None, (0.01,))),
+                            ("k in (1, 2, 3)", (None, (1.0, 2.0, 3.0))), ("k 0.01 5", None), ("k = 0.5", None),
+                            ("k in (0.01, 5) # a remark", None), ("k: (0.01, 5)", None)):
+        path = tmp_path / "broken.txt"
+        path.write_bytes(("\n\n" + master.replace("k in (0.01, 5)", line)).encode("utf-8"))
+        for read in (lambda: file_manager.parse_bounds_file(str(path)),
+                     lambda: cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                                                 str(path))):
+            with pytest.raises(Refusal) as e:
+                read()
+            assert e.value.field == "bounds", (line, e.value.field)
+            said = (f"The bounds file 'broken.txt' cannot be read at line 4: {line!r} is not a parameter with its "
+                    f"two limits, written as 'name in (lower, upper)'.")
+            assert str(e.value) == said, str(e.value)
+        params, rescale, forcing, _ = file_manager.parse_bounds_file(str(path), strict=False)
+        assert params.get("k") == lenient_k and (rescale, forcing) == shipped[1:3], (line, params.get("k"))
+        assert [name for name in params if name != "k"] == [name for name in shipped[0] if name != "k"]
+    for text in (master.replace("\n", "\r\n"), master.replace("k in (0.01, 5)", "k in [0.01, 5]"),
+                 master.replace("k in (0.01, 5)", "k (nm) in (0.01, 5)"),
+                 master.replace("k in (0.01, 5)", "\t k in (0.01,5)  "),
+                 "\n\n" + master + "\n# Notes\nwritten freely, under a header that names no section\n\n"):
+        path = tmp_path / "fine.txt"
+        path.write_bytes(text.encode("utf-8"))
+        assert file_manager.parse_bounds_file(str(path))[:3] == shipped[:3], text
+        assert file_manager.parse_bounds_file(str(path), strict=False)[:3] == shipped[:3], text
+
+
 def test_a_prior_the_posterior_was_not_trained_with_is_refused():
     """SBC draws theta* from the TRAINING prior. Run against a different one it is not a calibration
     measurement of that posterior at all. The posterior carries its own training prior, so this needs

@@ -8,6 +8,8 @@ from typing import Callable
 import numpy as np
 import torch
 
+from core.refusals import Refusal
+
 
 def _discard(tmp: Path) -> None:
     """Remove a temp file a failed write left; a failure to remove it is not worth the caller's error."""
@@ -153,10 +155,27 @@ def _section_of(header_line: str) -> str | None:
     return None
 
 
-def parse_bounds_file(file_name: str) -> tuple:
+def _numbered_lines(file_name: str) -> list[tuple[int, str]]:
+    """Every line of the file with its number, counted from 1 as an editor counts them: the lines
+    ``_read_lines`` gives, and the blank ones before the first that it leaves out."""
+    try:
+        with open(file_name, 'r', encoding='utf-8') as file:
+            return list(enumerate(file.read().split('\n'), start=1))
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {file_name}")
+
+
+def parse_bounds_file(file_name: str, *, strict: bool = True) -> tuple:
     """
     Parse a BOUNDS-only file: parameter bounds for the ND / Dimensional / Forcing sections, no values,
     no initial conditions. Lines look like ``name (units) in (lo, hi)`` (units and ``in`` optional).
+
+    ``strict`` (the default) refuses, naming it by its number and its words, a line of one of the three
+    parameter sections that is not a parameter with its two limits: a line of another shape, or one whose
+    brackets hold other than two numbers. Such a line was skipped, or taken as a parameter with no limits,
+    without a word, so a typo could drop a parameter or leave one with no box. ``strict=False`` reads the
+    file as it stands, such a line skipped or kept as written, for a page that shows a broken file so that
+    it can be mended. A ``#`` line, a blank line and a line outside the three sections are read as before.
 
     :return: (parameters, rescale_params, forcing_params, collected_units) where each param dict maps
              {name: (None, (lo, hi))} -- the value slot is None until a cell file fills it.
@@ -172,7 +191,7 @@ def parse_bounds_file(file_name: str) -> tuple:
     collected_units = set()
     targets = {"PARAM": parameters, "RESCALE": rescale_params, "FORCING": forcing_params}
     current_section = None
-    for line in _read_lines(file_name):
+    for number, line in _numbered_lines(file_name):
         line = line.strip()
         if not line:
             continue
@@ -181,8 +200,12 @@ def parse_bounds_file(file_name: str) -> tuple:
             continue
         if current_section in targets:
             match = BOUNDS_ONLY_PATTERN.search(line)
+            bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, match.group('tup'))) if match else None
+            if strict and (bounds is None or len(bounds) != 2):
+                raise Refusal(f"The bounds file {Path(file_name).name!r} cannot be read at line {number}: {line!r} "
+                              f"is not a parameter with its two limits, written as 'name in (lower, upper)'.",
+                              field="bounds")
             if match:
-                bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, match.group('tup')))
                 targets[current_section][match.group('name')] = (None, bounds)
                 if match.group('units'):
                     for u in match.group('units').split():

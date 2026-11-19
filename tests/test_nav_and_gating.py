@@ -1943,6 +1943,24 @@ def test_a_malformed_bounds_file_is_refused_beside_the_list(line, said, tmp_path
     assert _line_of(page, "bounds") == ("err", said), "a file written since it was read was not read again"
 
 
+def test_a_bounds_line_the_reader_cannot_read_is_refused_beside_the_list_in_the_readers_words(tmp_path, store):
+    """A line of a parameter section that holds no parameter with its limits is refused by the bounds file's reader,
+    naming the line, and the page says that refusal under the list, as an "Error." that greys the build: the file was
+    used as though the line were not there, a parameter short. A line that holds a parameter with limits no rule
+    allows is said in the page's own words before the configuration is built (the test above)."""
+    screen, page = _prior_step()
+    master = (Path(page.bounds_picker.base_path) / "master.txt").read_text(encoding="utf-8")
+    (tmp_path / "broken.txt").write_text(master.replace("k in (0.01, 5)", "k 0.01 5"), encoding="utf-8")
+    page.bounds_picker.repoint(tmp_path, "broken.txt")
+    page.read_facts()
+    said = ("The bounds file 'broken.txt' cannot be read at line 2: 'k 0.01 5' is not a parameter with its two "
+            "limits, written as 'name in (lower, upper)'.")
+    assert _line_of(page, "bounds") == ("err", said)
+    assert not page.foot.main_button.isEnabled()
+    assert page.foot.reason.text() == "Cannot start: the bounds file cannot be read."
+    assert any(row.sentence.plain_text() == f"Error. {said}" for row in page.foot.facts.rows())
+
+
 def _line_of(page, key) -> tuple:
     """What the line under the row ``key`` says: its marker and its words, or two empty strings."""
     line = page.form.rows[key].line

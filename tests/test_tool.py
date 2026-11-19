@@ -714,6 +714,25 @@ def test_near_miss_is_refused_before_simulation(tool_run, capsys):
     assert {s.id for s in store.list("posterior")} == posts_before
 
 
+def test_an_unsupported_model_is_a_refusal_naming_the_model_flag(tool_env, tmp_path, capsys):
+    """A bounds file whose folder names no model this command can run, given no --model, is refused as every
+    refusal is: its sentence and the flag that answers it, in place of a bare error with the place it was raised.
+    Nothing is built or written."""
+    bounds, cell, root = tool_env
+    stray = tmp_path / "not_a_model" / "box.txt"
+    stray.parent.mkdir()
+    stray.write_text(Path(bounds).read_text(encoding="utf-8"), encoding="utf-8")
+    before = sorted(p.relative_to(root).as_posix() for p in Path(root).rglob("*"))
+    capsys.readouterr()
+    assert main(["prior", "--bounds", str(stray)]) == 1
+    err = capsys.readouterr().err
+    refused = [ln for ln in err.splitlines() if ln.startswith("prism prior: refused:")]
+    assert len(refused) == 1 and refused[0].endswith(" (--model)"), err
+    assert refused[0].startswith("prism prior: refused: 'NOT_A_MODEL' is not a model this command can run: "), refused
+    assert "ValueError" not in err and "raised at" not in err, err
+    assert sorted(p.relative_to(root).as_posix() for p in Path(root).rglob("*")) == before
+
+
 def test_train_resume_fit_continues_a_kept_training_and_names_the_flag_of_what_differs(tool_run, monkeypatch,
                                                                                          capsys):
     """A training stopped by Ctrl-C while its flow trains is kept, and the interrupt's advice names

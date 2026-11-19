@@ -829,6 +829,9 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
         "min_cluster_size", PRIOR_CLUSTER_MIN_SIZE if min_cluster_size is None else min_cluster_size, 2)
     min_samples_r = require_at_least(
         "min_samples", PRIOR_CLUSTER_MIN_SAMPLES if min_samples is None else min_samples, 1)
+    # Before the sweep, not at the record's write after it: the prior's record and every simulation on a tier-1
+    # box read Boltzmann's constant in the cell's units.
+    _refuse_a_tier1_box_whose_units_name_no_force(cfg)
     # AFTER every knob rule above (and the name check and chi guard before them): a refused build must
     # not announce a construction it never performs.
     log.info("Constructing the prior from scratch.")
@@ -874,6 +877,22 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
             "stability": {"accepted_sets": None, "iterations": n_iter},
         }
     return store.load_prior(cfg, w.id)
+
+
+def _refuse_a_tier1_box_whose_units_name_no_force(cfg: SimConfig) -> None:
+    """Refuse, under the units, a box that declares the temperature in place of the force scale when its units
+    cannot give Boltzmann's constant in the cell's units (``SimConfig.k_b_cell``), which needs a force unit and a
+    length unit: the force scale is derived from the temperature with it. Every other box passes untouched."""
+    if not derived.uses_derived_f_scale(cfg.rescale_idx):
+        return
+    try:
+        cfg.k_b_cell
+    except ValueError:
+        units = " ".join(str(unit) for unit in cfg.units_dict)
+        raise Refusal(f"The units must name a force unit and a length unit, such as pN and nm, for a bounds file that "
+                      f"declares the temperature {derived.TEMPERATURE_PARAM} in place of the force scale, which is "
+                      f"derived from it with Boltzmann's constant in those units; got '{units}'.",
+                      field="units") from None
 
 
 def build_rescale_prior(cfg: SimConfig) -> Distribution:

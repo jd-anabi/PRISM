@@ -21,6 +21,7 @@ model step 1 applies next has it selected by name in that model's folder.
 import math
 from datetime import datetime
 from pathlib import Path, PurePath, PurePosixPath
+from types import SimpleNamespace
 
 from PySide6.QtWidgets import QCheckBox, QPushButton, QWidget
 
@@ -629,6 +630,13 @@ class PriorPanel(StepPage):
         if key == self._candidate_key:
             return
         self._candidate, self._candidate_key, self._candidate_error = None, key, ""
+        if "bounds_path" in source:
+            # The file's limits held to the page's own rule first, the file read as it stands: a parameter with limits
+            # no rule allows is said in the page's words, and the builder's reader refuses a line it cannot read.
+            trouble = self._file_trouble(source["bounds_path"])
+            if trouble:
+                self._candidate_error = FILE_UNUSABLE.format(trouble)
+                return
         try:
             candidate = draft.make_config(**source)
         except Refusal as refused:
@@ -643,10 +651,22 @@ class PriorPanel(StepPage):
         else:
             self._candidate = candidate
 
+    @classmethod
+    def _file_trouble(cls, path) -> str:
+        """What is wrong with the limits the bounds file at ``path`` gives, read as it stands, by the rule the limits
+        typed by hand are held to; "" for none, and for a file this reading cannot read, whose trouble the builder
+        says."""
+        try:
+            params, rescale, forcing, _ = file_manager.parse_bounds_file(path, strict=False)
+        except Exception:                    # noqa: BLE001 -- the builder says what is wrong with such a file
+            return ""
+        return cls._limits_trouble(SimpleNamespace(params_dict=params, rescale_params=rescale,
+                                                   force_params_dict=forcing))
+
     @staticmethod
     def _limits_trouble(cfg) -> str:
-        """What is wrong with the limits a bounds file gave a configuration, by the rule the limits typed by hand are
-        held to: the builder takes a line it cannot read as a parameter with no limits. "" for none."""
+        """What is wrong with the limits a bounds file gives a configuration, by the rule the limits typed by hand are
+        held to. "" for none."""
         try:
             limits = [(name, *two_limits(bounds)) for section in ("params_dict", "rescale_params", "force_params_dict")
                       for name, (_value, bounds) in (getattr(cfg, section, None) or {}).items()]
@@ -796,12 +816,14 @@ class PriorPanel(StepPage):
         self.typed_note.setVisible(on)
 
     def _load_the_grid(self) -> None:
-        """Fill the limits typed by hand from the file selected; a file that cannot be read leaves them as they were."""
+        """Fill the limits typed by hand from the file selected, read as it stands, so that a broken one can be mended
+        here (a line its reader refuses is left out, or kept blank); a file that cannot be read leaves them as they
+        were."""
         path = self.bounds_picker.selected_path()
         if not path:
             return
         try:
-            params, rescale, forcing, _ = file_manager.parse_bounds_file(path)
+            params, rescale, forcing, _ = file_manager.parse_bounds_file(path, strict=False)
             self.bounds_grid.load(params, rescale, forcing)
         except Exception:                    # noqa: BLE001 -- the file's trouble is said beside the list
             return
