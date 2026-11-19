@@ -22,7 +22,7 @@ from ..widgets.rail import Rail
 
 # What is said of an error that holds no word of its own: the whole sentence for one with no message, and before a
 # message that holds no word outside its quotations.
-NO_MESSAGE = "Something went wrong that PRISM did not expect."
+UNEXPECTED_ERROR_TEXT = "Something went wrong that PRISM did not expect."
 _QUOTATION = re.compile(r"'[^']*'|\"[^\"]*\"")                   # in either mark
 _ORDINARY = re.compile(r"[^\W\d_]+(?:['-][^\W\d_]+)*")          # letters, an apostrophe or a hyphen between two
 
@@ -33,14 +33,14 @@ def as_sentence(message: str) -> str:
     apostrophe or a hyphen between two of them counted in ("can't", "non-finite"), that starts with a small one; any
     other start is kept as it was raised, so that a name in code, a path, a number or a quotation is shown as it is.
     A message that holds no word outside its quotations -- a missing key's name, as one is raised -- follows the
-    general sentence, ``NO_MESSAGE`` with a colon for its stop. A full stop at its end when it ends without a mark
+    general sentence, ``UNEXPECTED_ERROR_TEXT`` with a colon for its stop. A full stop at its end when it ends without a mark
     that ends a sentence; nothing else of it changes. An empty message stays empty. The last-resort question writes
     its sentence with this too."""
     text = message.rstrip()
     if not text:
         return ""
     if not any(letter.isalpha() for letter in _QUOTATION.sub("", text)):
-        text = f"{NO_MESSAGE[:-1]}: {text}"
+        text = f"{UNEXPECTED_ERROR_TEXT[:-1]}: {text}"
     first = text.split(" ", 1)[0].rstrip(",;:")
     if _ORDINARY.fullmatch(first) and first[0].islower():
         text = text[0].upper() + text[1:]

@@ -34,7 +34,7 @@ FIT_AGAIN_BUTTON = "Fit again on the saved simulations"
 UNNAMED = "Unnamed unfinished training"
 #: The sentences of a kept training.
 READ_BACK_TEXT = "Resuming first reads the simulation set back, about four minutes at full size."
-FINISHED_TEXT = "Its fit is finished; resuming writes the posterior without training again."
+FIT_FINISHED_TEXT = "Its fit is finished; resuming writes the posterior without training again."
 GONE_PRIOR = "a prior no longer in Records"
 GONE_OBSERVATION = "an observation no longer in Records"
 GONE_POSTERIOR = "a posterior no longer in Records"
@@ -188,7 +188,7 @@ def resume_sentence(kept, prior_label: "str | None" = None, *, around: "str | No
     elif isinstance(simulation, str) and simulation:
         said.append(f"It trains on the simulation set {simulation} and {prior}.")
     if resumable:
-        said.append(FINISHED_TEXT if state == "finished" else READ_BACK_TEXT)
+        said.append(FIT_FINISHED_TEXT if state == "finished" else READ_BACK_TEXT)
     return " ".join(said)
 
 

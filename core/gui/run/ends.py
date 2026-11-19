@@ -16,7 +16,7 @@ from ..check_readings import KEEPS_NOTHING
 from ..texts import date_text, duration_text, is_size, number_text
 from .model import OUTCOMES, RunStatus, _gib
 from .questions import TRAINING_WORDS, what_a_stop_keeps
-from .retry import NO_MESSAGE, OUT_OF_MEMORY, WAITING_LINE, WAITING_TITLE
+from .retry import NO_ERROR_MESSAGE, OUT_OF_MEMORY, WAITING_LINE, WAITING_TITLE
 
 #: Said after the sentence of a run that finished with a stop asked of it too late to stop anything; the run's text
 #: says it too, as the run ends.
@@ -261,7 +261,7 @@ def _cause(record: dict) -> str:
     said = said[0].strip() if said else ""
     if said.endswith(".") and not said.endswith(".."):
         said = said[:-1]
-    return said or NO_MESSAGE
+    return said or NO_ERROR_MESSAGE
 
 
 def _last_heard_at(record: dict, word: str) -> str:

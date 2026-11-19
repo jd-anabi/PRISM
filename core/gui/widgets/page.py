@@ -14,27 +14,27 @@ from ..reported import reported
 # A word this long, a path most often, cannot wrap, and a label cuts it at its edge with no sign: it may break
 # after a backslash, a slash, an underscore or a full stop that has more of the word after it.
 _LONG_WORD = re.compile(r"\S{40,}")
-_BREAK_AFTER = re.compile(r"(?<=[\\/_.])(?=\S)")
-_BREAK = chr(0x200B)                 # a place where a line may break, of no width: the zero-width space
+BREAK_AFTER = re.compile(r"(?<=[\\/_.])(?=\S)")
+BREAK = chr(0x200B)                 # a place where a line may break, of no width: the zero-width space
 
 
 def _breakable(words: str) -> str:
     """``words`` with a place to break after each backslash, slash, underscore and full stop inside a word of
     40 characters or more that has more of the word after it. A shorter word is left as it is."""
-    return _LONG_WORD.sub(lambda word: _BREAK_AFTER.sub(_BREAK, word.group()), words)
+    return _LONG_WORD.sub(lambda word: BREAK_AFTER.sub(BREAK, word.group()), words)
 
 
 #: A word this long in a narrow place, a record's name, may break: no origin column at the window's least width, and no
 #: question's line, is narrower.
 _LONG_RUN = re.compile(r"\S{17,}")
-_PIECE = re.compile(rf"[^\s{_BREAK}]{{16}}(?=[^\s{_BREAK}])")
+_PIECE = re.compile(rf"[^\s{BREAK}]{{16}}(?=[^\s{BREAK}])")
 
 
 def _may_wrap(words: str) -> str:
     """``words`` with places to break inside a long word: after a slash, an underscore or a full stop, and in what is still
     too long between them."""
     def broken(word) -> str:
-        return _PIECE.sub(lambda piece: piece.group() + _BREAK, _BREAK_AFTER.sub(_BREAK, word.group()))
+        return _PIECE.sub(lambda piece: piece.group() + BREAK, BREAK_AFTER.sub(BREAK, word.group()))
 
     return _LONG_RUN.sub(broken, words)
 

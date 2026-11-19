@@ -601,14 +601,14 @@ def test_a_value_that_is_only_shown_is_no_setting_of_the_fold():
 def test_a_long_origin_wraps_and_stays_on_the_page(name, key, tmp_path):
     """No record's name is too long for its row: the origin takes the lines it needs, a word with no place to break among
     them, at the window's least size, and its words are all still there."""
-    from core.gui.widgets.page import _BREAK
+    from core.gui.widgets.page import BREAK
     window, page, _clock = _a_page(tmp_path, size=(900, 600))
     row = page.form.rows[key]
     row.set_origin("from record " + name)
     _settle()
     port = page.scroller.viewport()
     assert _edge_of(row.origin, port).right() < port.width() and page.scroller.widget().width() <= port.width()
-    assert row.origin.text().replace(_BREAK, "") == "from record " + name
+    assert row.origin.text().replace(BREAK, "") == "from record " + name
     assert row.origin.height() > row.origin.fontMetrics().height() * 1.5, "it stood on one line, so this says nothing"
     row.set_origin("usual")
     assert row.origin.text() == "usual"

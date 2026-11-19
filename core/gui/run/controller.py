@@ -575,7 +575,7 @@ class RunController(QObject):
         """A stop asked of a run that has ended, on the window's thread: its page says so."""
         view = None if self._run is None else self._run.view
         if _alive(view):
-            view.say(questions.FINISHED_TEXT)
+            view.say(questions.ALREADY_FINISHED_TEXT)
 
     def _cannot_stop(self) -> None:
         """A stop asked of a training saving its posterior, on the window's thread: its page says it came too late."""

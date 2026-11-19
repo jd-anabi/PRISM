@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QSizePoli
 
 from .. import design, fonts, paint
 from ..reported import reported
-from .page import _BREAK, _BREAK_AFTER
+from .page import BREAK, BREAK_AFTER
 from .ruled import Ruled
 
 
@@ -116,7 +116,7 @@ def _wrapped(text: str, font, width: float, height: int):
     it, and anywhere else where it is still too wide, so that it is drawn whole; words that fit break only
     between them. The words as handed in are not changed."""
     metrics = QFontMetricsF(font)
-    laid = " ".join(_BREAK_AFTER.sub(_BREAK, word) if metrics.horizontalAdvance(word) > width else word
+    laid = " ".join(BREAK_AFTER.sub(BREAK, word) if metrics.horizontalAdvance(word) > width else word
                     for word in text.split(" "))
     layout = QTextLayout(laid, font)
     option = QTextOption()

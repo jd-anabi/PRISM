@@ -21,7 +21,7 @@ IN_FLIGHT_TEXT = ("Cancelled. There may be a failure that was still in flight --
                   "here from one the run had already recovered from. Its traceback follows, in case it helps.")
 
 # How a run ended, in the run's text file: the window's own words, written before the worker says anything.
-FINISHED_TEXT = "The run finished."
+RUN_FINISHED_TEXT = "The run finished."
 STOPPED_TEXT = "The run stopped: a stop was asked for."
 # A failure: its kind always, then its message; its traceback goes under it.
 FAILED_TEXT = "The run failed: {}"
@@ -259,7 +259,7 @@ class Worker(QRunnable):
                 if text is not None:
                     if too_late:
                         text.line(CANCEL_TOO_LATE_TEXT, "warning")
-                    text.outcome(FINISHED_TEXT, "window")
+                    text.outcome(RUN_FINISHED_TEXT, "window")
                     ended = True
                 if too_late:
                     self.signals.log.emit(CANCEL_TOO_LATE_TEXT, "warning")

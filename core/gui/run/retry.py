@@ -65,7 +65,7 @@ RESUME_TEXT = "Resume the training"
 RESUME_WORDS = "Resume"
 #: The cause, when the graphics card ran out of memory; and the error's message, when it gives none.
 OUT_OF_MEMORY = "the graphics card ran out of memory"
-NO_MESSAGE = "the error gave no message"
+NO_ERROR_MESSAGE = "the error gave no message"
 #: The page of a training whose fit finished but whose posterior could not be written: with the training kept, and
 #: with none kept (its fit was not saved as it went).
 SAVING_KEPT_TEXT = ("The fit finished but its record could not be written. The training is kept with its fit "
@@ -74,13 +74,13 @@ SAVING_LOST_TEXT = "The fit finished but its record could not be written; the tr
 
 
 def message(exc) -> str:
-    """The error's own message, whole, as the page quotes it; ``NO_MESSAGE`` when it gives none or its message
+    """The error's own message, whole, as the page quotes it; ``NO_ERROR_MESSAGE`` when it gives none or its message
     cannot be had."""
     try:
         said = str(exc).strip()
     except Exception:                         # noqa: BLE001 -- an error whose message cannot be had is said so
         said = ""
-    return said or NO_MESSAGE
+    return said or NO_ERROR_MESSAGE
 
 
 def is_device_failure(exc) -> bool:

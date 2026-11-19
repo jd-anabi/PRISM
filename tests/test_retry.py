@@ -2023,4 +2023,4 @@ def test_an_error_whose_message_cannot_be_had_still_ends_its_run(tmp_path):
     stand_in.fail(_Unsaid())
     _ended(app, held)
     assert (held.status.outcome, view.failure.isVisibleTo(view), view.failure_message.text()) == (
-        "failed", True, retry.NO_MESSAGE), "the run's end was held up, or its page does not say its failure"
+        "failed", True, retry.NO_ERROR_MESSAGE), "the run's end was held up, or its page does not say its failure"
