@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit cfcf9d61.
+Checked against commit 23c5aa70.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -907,9 +907,9 @@ stage without freezing, shows its output and stops it.
     measuring the run. It stays enabled, unlike the segment bar `config.QUIET_SEGMENT_BAR` silences,
     because the cooperative stop and the run's silence warning both depend on its writes.
 - **Stopping** is cooperative, through a `streams.CancelToken`.
-  - Its checkpoints are `_SignalStream.write` and `_PumpLogHandler.emit`: every print, tqdm redraw
-    and `core` record of the run passes through one of them, sbi's per-epoch print and the training
-    stage's record of each epoch included.
+  - Its checkpoints are `_SignalStream.write`, `_SignalStream.record` and `_PumpLogHandler.emit`:
+    every print, tqdm redraw, library record and `core` record of the run passes through one of them,
+    sbi's per-epoch print and the training stage's record of each epoch included.
   - The raise is `WorkerCancelled`, which derives from `BaseException`, so it passes every
     `except Exception` in the pipeline and in sbi; `Worker.run` catches it by name.
   - Latency is about a second almost everywhere, and longer only where a run writes nothing for a
