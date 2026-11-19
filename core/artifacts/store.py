@@ -270,7 +270,11 @@ def _rmtree_retry(path, retries: int = 3, backoff_s: float = 0.1) -> None:
 
 
 def _unlink_retry(path, retries: int = 3, backoff_s: float = 0.1) -> None:
-    """``os.unlink`` with ``_rmtree_retry``'s patience; a file already gone is taken as removed."""
+    """``os.unlink`` with ``_rmtree_retry``'s patience; a file already gone is taken as removed. At least one
+    try: with none nothing would be removed and nothing said, so fewer is refused with a ValueError before
+    anything is touched."""
+    if retries < 1:
+        raise ValueError(f"retries is the number of tries at the removal and must be at least 1; got {retries!r}")
     for attempt in range(retries):
         try:
             os.unlink(path)

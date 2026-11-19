@@ -5605,6 +5605,63 @@ def test_a_kept_trainings_removal_holds_its_lock_so_no_resume_begins_while_it_ru
     assert not running(where)
 
 
+def test_the_stores_patient_unlink_refuses_fewer_than_one_try_and_tries_again_when_a_file_is_held(
+        tmp_path, monkeypatch):
+    """The removal of one file, which takes a kept training's record out from under its lock, tries the removal
+    ``retries`` times. Asked for no try at all it would remove nothing and say nothing, so fewer than one try is refused
+    at the call, before anything is touched. A file another program holds for a moment (a virus scanner, an Explorer
+    preview) is tried again, and goes."""
+    held = tmp_path / "manifest.json"
+    held.write_bytes(b"{}")
+    for retries in (0, -1):
+        with pytest.raises(ValueError, match="retries"):
+            st._unlink_retry(held, retries=retries)
+    assert held.read_bytes() == b"{}"
+    tries, real_unlink = [], os.unlink
+
+    def held_for_a_moment(path, *args, **kwargs):
+        tries.append(Path(path))
+        if len(tries) == 1:
+            raise PermissionError(13, "The process cannot access the file because another process is using it",
+                                  str(path))
+        return real_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "unlink", held_for_a_moment)
+        st._unlink_retry(held)
+    assert tries == [held, held] and not held.exists()
+
+
+def test_a_kept_trainings_removal_that_fails_past_its_manifest_leaves_a_leftover_and_no_kept_training(
+        store, monkeypatch):
+    """A kept training's removal takes its record out first, its manifest, under the training's lock, and then the
+    rest of its folder. When the rest will not go (another program holds a file of it, on every try), the removal is
+    refused in the store's words, naming what failed; the record is gone all the same, so no list of kept trainings
+    names it and no resume can begin on it, and the store lists the folder as it lists any folder with no record, a
+    leftover for a sweep to clear."""
+    from core.SBI import fit_state
+    from tests._fixtures import build_fit_record
+    fid = build_fit_record(store)
+    where = store.path("fit", fid)
+    (where / "state.pt").write_bytes(b"a pass another program holds")
+
+    def held(path, *args, **kwargs):
+        raise PermissionError(13, "The process cannot access the file because another process is using it",
+                              str(Path(path) / "state.pt"))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(st.shutil, "rmtree", held)
+        with pytest.raises(st.StoreError) as refused:
+            store.delete("fit", fid)
+    assert refused.value.field == "artifact"
+    assert str(refused.value).startswith(f"could not remove fit {fid} at {where}: PermissionError: "), refused.value
+    assert where.is_dir() and not (where / "manifest.json").exists() and (where / "state.pt").exists()
+    assert [kept.id for kept in fit_state.kept_fits(store)] == []
+    row, = store.list("fit")
+    assert (row.complete, row.reason, row.dir_name, row.path) == (False, st.NO_MANIFEST_REASON, where.name, where)
+    assert not fit_state.running(where)
+
+
 def test_write_fit_manifest_keeps_who_began_the_training_and_replaces_its_body(store):
     """A kept training's manifest is written again at every pass, and by every process that resumes it:
     the later writes replace the body and keep who began it -- its id, name and when, its note, the

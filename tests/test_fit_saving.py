@@ -399,6 +399,36 @@ def test_the_libraries_name_their_versions_and_a_digest_of_sbis_trainer_files(tm
     assert trainer_files_digest(_copy_trainer_files(tmp_path / "windows", crlf=True)) == installed
 
 
+def test_the_libraries_are_kept_at_load_and_read_at_first_use_when_they_cannot_be_read_then(monkeypatch):
+    """The libraries are kept as the code's digests are, when the module that trains the network finishes loading
+    (``remember_loaded_code``): their first reading stands for the rest of the process, so a library reinstalled
+    afterwards (its files on disk now another version) moves nothing a fit records, and remembering again keeps the
+    first reading. Libraries that cannot be read then (a file of sbi's trainer another program holds for a moment) fail
+    nothing there: they are read at their first use instead, which says why if they still cannot be. Each leg reads
+    into a store of its own, so the process's reading is as it was when the test ends."""
+    first = fit_state.libraries()
+    real = fit_state.libraries
+    monkeypatch.setattr(fit_state, "_LOADED_LIBRARIES", {})
+    fit_state.remember_loaded_code(())
+    assert fit_state._LOADED_LIBRARIES == first, "the libraries were not kept when the code was remembered"
+    monkeypatch.setattr(fit_state, "libraries", lambda: {**real(), "sbi": "0.27.0"})
+    assert fit_state.loaded_libraries() == first, "a library reinstalled after load moved what a fit records"
+    fit_state.remember_loaded_code(())
+    assert fit_state.loaded_libraries() == first, "remembering again replaced the first reading"
+
+    def held():
+        raise PermissionError(13, "The process cannot access the file because another process is using it")
+
+    monkeypatch.setattr(fit_state, "_LOADED_LIBRARIES", {})
+    monkeypatch.setattr(fit_state, "libraries", held)
+    fit_state.remember_loaded_code(())
+    assert fit_state._LOADED_LIBRARIES == {}
+    with pytest.raises(PermissionError):
+        fit_state.loaded_libraries()
+    monkeypatch.setattr(fit_state, "libraries", real)
+    assert fit_state.loaded_libraries() == first
+
+
 def test_the_constants_are_read_as_the_configuration_stands(monkeypatch):
     """The constants are read when the identity is made, not when the module was imported, and kept
     in a form the record's text can carry."""
@@ -974,6 +1004,8 @@ def test_a_training_records_the_libraries_its_process_loaded_not_ones_installed_
     the Training step asks for and the next training name it as one to resume."""
     from core import orchestrator
     r = tiny_run
+    monkeypatch.setattr(fit_state, "_LOADED_LIBRARIES", {})   # this test's reading; the process's put back at its end
+    fit_state.remember_loaded_code(())
     loaded = fit_state.libraries()
     real = fit_state.libraries
     monkeypatch.setattr(fit_state, "libraries", lambda: {**real(), "sbi": "0.27.0"})
@@ -1206,8 +1238,9 @@ def test_a_log_that_cannot_be_written_leaves_each_pass_saved_and_is_warned_once(
                                                                                 caplog):
     """The kept training's log is the record's account of the processes that trained it, never what keeps a pass: a
     log that cannot be written (another program holds the file) leaves each pass saved whole, its state, its record and
-    its line, and is warned of once, not at every pass. The training goes on, and a stop after its third pass keeps it
-    at that pass, saying as it stops that the log could not be written then either."""
+    its line, and is warned of once, not at every pass, and never inside the save's deferred-cancel section, where a
+    stop asked for in the window would be taken between two renames. The training goes on, and a stop after its third
+    pass keeps it at that pass, saying as it stops that the log could not be written then either."""
     r = tiny_run
     real = fit_state.FitSession._write_log
     held = "[Errno 13] The process cannot access the file because another process is using it"
@@ -1220,8 +1253,9 @@ def test_a_log_that_cannot_be_written_leaves_each_pass_saved_and_is_warned_once(
     monkeypatch.setattr(fit_state.FitSession, "_write_log", held_by_another_program)
     _stop_after(monkeypatch, 3, KeyboardInterrupt())
     caplog.set_level(logging.INFO, logger="core")
-    with pytest.raises(KeyboardInterrupt) as stopped:
+    with _SaidInsideASave() as inside, pytest.raises(KeyboardInterrupt) as stopped:
         _train(r, 7, 2, name="fit_log_held")
+    assert inside.said == [], f"said while a pass was being saved: {inside.said}"
     row, = _new_fits(r, fits_left)
     body = r.store.get("fit", row.id).body
     assert (row.fit_passes, stopped.value.kept_fit.passes, load_state(row.path)["passes"]) == (3, 3, 3)
@@ -1235,10 +1269,12 @@ def test_a_log_that_cannot_be_written_leaves_each_pass_saved_and_is_warned_once(
     assert not any("the last save failed" in s for s in said), said
 
 
-def test_the_kept_trainings_log_is_written_whole_or_not_at_all(store, tmp_path):
+def test_the_kept_trainings_log_is_written_whole_or_not_at_all(store, tmp_path, monkeypatch):
     """The log is written as every other file of a kept training is, to a file beside it that then replaces it, so a
-    write that fails partway (here a record no encoding can write, as a file's name read from another system can be)
-    leaves the log as it stood, never torn or emptied, and no file beside it."""
+    write that fails leaves the log as it stood, never torn or emptied, and no file beside it: one that fails before a
+    file is opened (a record no encoding can write, as a file's name read from another system can be), and one that
+    fails once the new log is written beside the old, at the rename that would replace it (another program holds the
+    log, on every try)."""
     session = fit_state.FitSession(store, identity={}, region=None, posterior_name="", note="", cfg=None, config={},
                                    parents={}, fingerprints={})
     session.path = tmp_path
@@ -1250,8 +1286,19 @@ def test_the_kept_trainings_log_is_written_whole_or_not_at_all(store, tmp_path):
         session.log_before = "12:00:00 info a record no encoding can write \ud800\n"
         with pytest.raises(UnicodeEncodeError):
             session._write_log()
-    assert (tmp_path / "log.txt").read_bytes() == whole, "a write that failed tore the log or emptied it"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["log.txt"]
+        assert (tmp_path / "log.txt").read_bytes() == whole, "a write that failed tore the log or emptied it"
+
+        def held(src, dst):
+            raise PermissionError(13, "The process cannot access the file because another process is using it",
+                                  str(dst))
+
+        session.log_before = "12:00:00 info the first process, and a second one since\n"
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "replace", held)
+            with pytest.raises(PermissionError):
+                session._write_log()
+    assert (tmp_path / "log.txt").read_bytes() == whole, "a write that failed at its rename changed the log"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["log.txt"], "a write that failed left a file beside the log"
 
 
 def test_without_a_kept_simulation_set_nothing_is_saved_and_the_run_says_so(tiny_run, fits_left, monkeypatch):

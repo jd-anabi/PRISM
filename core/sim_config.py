@@ -48,9 +48,8 @@ class SimConfig:
     # si_factors was removed here: built by iterating units_dict while the units file was still read
     # through a set, it had a non-deterministic order, so it could never be safely indexed, and nothing
     # ever read it. units_dict keeps the file's order now, which still says nothing of which unit is
-    # which. Unit conversions go
-    # through get_unit_conversion_factor / freq_si_to_cell / the *_unit properties, which match by
-    # DIMENSION rather than position.
+    # which. Unit conversions go through get_unit_conversion_factor / freq_si_to_cell / the *_unit
+    # properties, which match by DIMENSION rather than position.
 
     # Multi-frequency susceptibility mode: replace the single-frequency forced conditioning with a
     # K-frequency chi(omega) curve (see config.CHI_MODE). Threads like has_forcing; set at build time
