@@ -25,8 +25,9 @@ of an auto-created root left empty by a failure, and the Ctrl-C advice -- so dec
 would have changed all three for a root this family does not want. Those three behaviours are keyed
 on ``temp_store_root``, a property only ``smoke``'s parser sets (``set_defaults(temp_store_root=True)``),
 never on the flag's presence; the ``probes`` checks print their own ``interrupt_note``, which ``main``
-checks first. The absence here is now what it says on the
-face of it -- this family wants one root, the environment's.
+checks first, and so does every mode here (``ARTIFACTS_INTERRUPT_NOTE``): the advice ``main`` gives
+otherwise is a training cache's, which this family keeps none of. The absence here is now what it says
+on the face of it -- this family wants one root, the environment's.
 
 (No line numbers into ``core/tool/__init__.py`` on purpose: the four this paragraph used to carry
 went stale as that file changed.)
@@ -86,6 +87,12 @@ LOG_TAIL_BYTES = 1 << 20
 # bare id gives an operator no way to tell that one from a child that named it.
 _FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and its rows are "
                           "meaningless without it")
+
+# What a Ctrl-C in any mode of this family prints after "interrupted: ", in place of the training cache's
+# advice ``main`` gives a subcommand that sets none: a mode keeps no batches, so nothing resumes it, and a
+# listing shows what an interrupted ``rm``, ``note`` or ``sweep`` had done by then.
+ARTIFACTS_INTERRUPT_NOTE = ("an artifacts command keeps no batches and nothing resumes it; "
+                            "`python -m core artifacts list` shows the store as the command left it.")
 
 # The kinds line is built from KINDS, so it lists them in that order however the tuple changes, and
 # it is wrapped to the 79 columns every epilog keeps to.
@@ -238,7 +245,8 @@ def _show(args, store) -> int:
 
 def _leftover_hint(store, kind: str, ref: str) -> str:
     """``""`` ordinarily, or a suffix naming ``sweep`` when ``ref`` is exactly the ``dir_name`` of
-    one of ``kind``'s own incomplete directories.
+    one of ``kind``'s own directories with no manifest at all, the only ones ``sweep`` removes: one
+    whose manifest does not parse, or declares another kind, is kept by ``sweep``, so it gets no hint.
 
     ``note`` and ``rm`` resolve through ``_find``, which never returns a manifest-less entry, so a
     ref copied straight off ``list``'s own "incomplete ..." row cannot resolve there -- and the
@@ -252,11 +260,12 @@ def _leftover_hint(store, kind: str, ref: str) -> str:
     It opens with a FULL STOP because it is appended to a refusal that has already ended a sentence
     -- and one that ends with this very ref, so without the break the operator read
     ``...named or id'd 'x' 'x' is one of the leftovers...``."""
+    from core.artifacts.store import NO_MANIFEST_REASON
     try:
         rows = store.list(kind)
     except Exception:                              # noqa: BLE001 -- the hint is a courtesy, not a check
         return ""
-    if any(not s.complete and s.dir_name == ref for s in rows):
+    if any(not s.complete and s.dir_name == ref and s.reason == NO_MANIFEST_REASON for s in rows):
         return (f". {ref!r} is one of the leftovers `sweep` removes, not an artifact with a note or "
                 f"a delete of its own; run `python -m core artifacts sweep {kind}` to clear it.")
     return ""
@@ -542,13 +551,13 @@ def register(subparsers) -> dict:
     text = "one line per artifact of a kind, or, with no kind, of all eight under headings"
     ls = modes.add_parser("list", help=text, description=text)
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
-    ls.set_defaults(handler=_list)
+    ls.set_defaults(handler=_list, interrupt_note=ARTIFACTS_INTERRUPT_NOTE)
 
     text = "one artifact's manifest and the records of the run that wrote it"
     show = modes.add_parser("show", help=text, description=text)
     show.add_argument("kind", metavar="<kind>", help=_KIND)
     show.add_argument("ref", metavar="<ref>", help=_REF)
-    show.set_defaults(handler=_show)
+    show.set_defaults(handler=_show, interrupt_note=ARTIFACTS_INTERRUPT_NOTE)
 
     text = "set or clear one artifact's note"
     note = modes.add_parser("note", help=text, description=text)
@@ -557,14 +566,14 @@ def register(subparsers) -> dict:
     note.add_argument("--note", required=True, metavar="TEXT",
                       help=f"one line, at most {NOTE_MAX_CHARS} characters; '' clears it. A note "
                            f"with a newline, or a longer one, is refused rather than trimmed to fit")
-    note.set_defaults(handler=_note)
+    note.set_defaults(handler=_note, interrupt_note=ARTIFACTS_INTERRUPT_NOTE)
 
     text = ("delete one artifact; there is no --force, so one that anything depends on is refused "
             "until its children are deleted")
     rm = modes.add_parser("rm", help=text, description=text)
     rm.add_argument("kind", metavar="<kind>", help=_KIND)
     rm.add_argument("ref", metavar="<ref>", help=_REF)
-    rm.set_defaults(handler=_rm)
+    rm.set_defaults(handler=_rm, interrupt_note=ARTIFACTS_INTERRUPT_NOTE)
 
     text = ("remove every directory with no manifest at all, every loose file beside the records, "
             "and (with no kind) the legacy directory an older build left beside the kind "
@@ -576,7 +585,7 @@ def register(subparsers) -> dict:
                        help="actually remove them. Without it this is a DRY RUN: it prints exactly "
                             "what it would remove and removes nothing, which is the confirmation "
                             "the window asks for in a dialog")
-    sweep.set_defaults(handler=_sweep)
+    sweep.set_defaults(handler=_sweep, interrupt_note=ARTIFACTS_INTERRUPT_NOTE)
 
     text = "the lineage report: this artifact, then its parents, oldest last"
     summary = modes.add_parser("summary", help=text, description=text)
@@ -584,5 +593,5 @@ def register(subparsers) -> dict:
     summary.add_argument("ref", metavar="<ref>", help=_REF)
     summary.add_argument("--out", default=None, metavar="PATH",
                          help="write the report here instead of to stdout")
-    summary.set_defaults(handler=_summary)
+    summary.set_defaults(handler=_summary, interrupt_note=ARTIFACTS_INTERRUPT_NOTE)
     return {"artifacts": p}

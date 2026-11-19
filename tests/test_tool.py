@@ -3056,6 +3056,58 @@ def test_note_and_rm_on_a_leftover_name_sweep_as_the_next_step(browse_store, cap
     assert "sweep" not in err, err
 
 
+def test_a_leftover_named_whose_manifest_sweep_keeps_gets_no_sweep_hint(browse_store, capsys):
+    """``sweep`` removes only a directory with no manifest at all: one whose manifest does not parse, or declares
+    another kind, is reported as kept and left where it is. So ``note`` and ``rm`` on such a directory's name end at
+    the store's own refusal, and never name ``sweep`` as what removes it; the directory and its manifest are left as
+    they were."""
+    root, ids = browse_store
+    for leftover in ids["bad"][1:]:                 # the manifest that does not parse, and the one of another kind
+        folder = root / "priors" / leftover
+        before = {p.name: p.read_bytes() for p in folder.iterdir()}
+        for argv in (["artifacts", "note", "prior", leftover, "--note", "x"], ["artifacts", "rm", "prior", leftover]):
+            capsys.readouterr()
+            assert main(argv) == 1, argv
+            err = capsys.readouterr().err
+            lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+            assert len(lines) == 1, err
+            assert "sweep" not in lines[0] and "one of the leftovers" not in lines[0], lines[0]
+        assert {p.name: p.read_bytes() for p in folder.iterdir()} == before, leftover
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior"]) == 0
+    out = capsys.readouterr().out
+    assert all(f"kept prior {leftover}" in out for leftover in ids["bad"][1:]), out
+
+
+def test_an_artifacts_command_interrupted_prints_its_own_note_and_no_resume_advice(browse_store, monkeypatch, capsys):
+    """A Ctrl-C in an ``artifacts`` command prints the family's own sentence: the family keeps no batches and nothing
+    resumes it, so the training cache's advice (``--resume require``, ``--resume-fit``) is not said. Every mode's
+    parser sets it, as each probe check's does."""
+    from core.tool import browse
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    root, ids = browse_store
+    said = []
+    for name, argv in (("_list", ["artifacts", "list"]), ("_rm", ["artifacts", "rm", "prior", ids["prior"]])):
+        with monkeypatch.context() as patch:
+            patch.setattr(browse, name, interrupted)
+            capsys.readouterr()
+            assert main(argv) == 130, argv
+        err = capsys.readouterr().err
+        assert err.startswith("prism artifacts: interrupted: "), err
+        assert "--resume" not in err and "[checkpoint]" not in err, err
+        said.append(err)
+    assert said == [f"prism artifacts: interrupted: {browse.ARTIFACTS_INTERRUPT_NOTE}\n"] * 2, said
+    assert ids["prior"] in {p.name.rpartition("__")[2] for p in (root / "priors").iterdir()}
+    p = build_parser().subcommands["artifacts"]
+    modes, = [a for a in p._actions if isinstance(a, argparse._SubParsersAction)]
+    assert sorted(modes.choices) == ["list", "note", "rm", "show", "summary", "sweep"]
+    for mode in modes.choices.values():
+        assert mode.get_default("interrupt_note") == browse.ARTIFACTS_INTERRUPT_NOTE
+
+
 def test_the_shows_two_honest_gaps_are_word_for_word_the_browsers_own_constants(browse_store, capsys):
     """The comment above ``_show``'s ``print`` claims its two "no log" sentences are the browser's
     OWN CONSTANTS, word for word -- and that claim drifted once already (a stale copy was fixed

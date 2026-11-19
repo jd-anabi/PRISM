@@ -2133,7 +2133,8 @@ def test_a_training_whose_later_saves_failed_resumes_from_its_last_good_pass(tin
 
 def test_a_kept_narrowing_round_resumes_in_its_own_region(tiny_run, kept_once, fits_left, monkeypatch):
     """A narrowing round kept when it stopped resumes in the region it was trained in, read from its
-    record and never drawn again, so a number of directions given with the resume is refused; the
+    record and never drawn again, so a number of directions or a level given with the resume is refused,
+    under the setting given, the one to leave out, before the region is drawn or a row read; the
     resumed round trains on the same simulation set, around the same observation and from the same
     parent, and its posterior records the kept region. A round asked to resume a kept training that is
     no round's, or around another observation, is refused before a single row is read."""
@@ -2147,10 +2148,18 @@ def test_a_kept_narrowing_round_resumes_in_its_own_region(tiny_run, kept_once, f
                                      name="fit_resumed_round", fig_sink=r.sink, store=r.store, **_TRAINING)
     row, = _new_fits(r, fits_left)
     kept = r.store.get("fit", row.id)
-    with pytest.raises(Refusal) as refused:
-        orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, resume_fit=row.id, n_directions=1,
-                                 fig_sink=r.sink, store=r.store)
-    assert refused.value.field == "resume_fit" and "the region it was trained in" in str(refused.value)
+    before, spent = _bytes(row.path), []
+    with monkeypatch.context() as patch:
+        patch.setattr(orchestrator, "build_truncation_region", lambda *a, **k: spent.append("region"))
+        patch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("rows"))
+        for given, field in (({"n_directions": 1}, "n_directions"), ({"level": 0.99}, "hpd_level"),
+                             ({"n_directions": 1, "level": 0.99}, "n_directions")):
+            with pytest.raises(Refusal) as refused:
+                orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, resume_fit=row.id, fig_sink=r.sink,
+                                         store=r.store, **given)
+            assert refused.value.field == field, (given, refused.value.field)
+            assert "the region it was trained in" in str(refused.value), str(refused.value)
+    assert spent == [] and _bytes(row.path) == before and not running(row.path)
     with pytest.raises(Refusal) as refused:
         orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, resume_fit=kept_once.id, fig_sink=r.sink,
                                  store=r.store)
@@ -2561,6 +2570,24 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
     note = stopped.value.kept_fit
     assert (note.passes, note.resumed, note.saved_here, note.processes) == (1, False, True, 1), note
     assert r.store.get("fit", note.id).body["region"] is not None
+
+
+def test_the_training_stages_handlers_rebind_none_of_its_parameters():
+    """The handlers that hang the kept training's note on a stop or a failure give the note a name of its own. Bound
+    to the stage's ``note``, the record's note text, a line added after it in a handler would read the kept training's
+    note where it meant the record's, with nothing to say so."""
+    from core import orchestrator
+    tree = ast.parse(inspect.getsource(inspect.unwrap(orchestrator.build_posterior)).lstrip())
+    stage = tree.body[0]
+    parameters = {a.arg for a in (*stage.args.args, *stage.args.kwonlyargs)}
+    assert {"note", "name", "prior"} <= parameters
+    handlers = [node for node in ast.walk(stage) if isinstance(node, ast.ExceptHandler)]
+    assert len(handlers) >= 2, "the stage's handlers were not found"
+    bound = sorted({target.id for handler in handlers for node in ast.walk(handler)
+                    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                    for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                    if isinstance(target, ast.Name) and target.id in parameters})
+    assert bound == [], f"a handler of build_posterior binds its parameter(s) {bound}"
 
 
 def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_left, monkeypatch):

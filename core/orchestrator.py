@@ -1868,9 +1868,9 @@ def build_posterior(
             # Not a resume: a new training meeting a cache that does not match fails as it always has.
             if session is not None:
                 session.stopped(e)
-                note = session.kept_note()
-                if note is not None:
-                    e.kept_fit = note
+                kept_note = session.kept_note()
+                if kept_note is not None:
+                    e.kept_fit = kept_note
             raise
         # A RESUME THAT CANNOT CONTINUE. Found once the rows were read back -- the simulation set no
         # longer matches its own record, or the split, the network or its standardisers rebuilt from
@@ -1886,9 +1886,9 @@ def build_posterior(
             # (a ``raise ... from`` would hand on another exception, without it): whoever catches it -- the
             # window, to ask whether to keep the training and to offer to resume it -- has its id and its
             # passes, which otherwise only the run's lines and the store's listing say.
-            note = session.kept_note()
-            if note is not None:
-                e.kept_fit = note
+            kept_note = session.kept_note()
+            if kept_note is not None:
+                e.kept_fit = kept_note
         raise
     if session is not None:
         session.done(loaded.name or loaded.id)
@@ -3053,8 +3053,10 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
         # A kept round's region is the one its rows were drawn in: read from the record, never redrawn.
         kept = fit_state.kept_fit(store, resume_fit)
         if n_directions is not None or level is not None:
+            # Under the setting given, which is the one to leave out: the kept training is named already.
             raise Refusal("A kept narrowing round resumes in the region it was trained in; the number of "
-                          "directions and the HPD level are not given again.", field="resume_fit")
+                          "directions and the HPD level are not given again.",
+                          field="n_directions" if n_directions is not None else "hpd_level")
         if kept.region is None:
             raise Refusal(f"The kept training {kept.id} is not a narrowing round's.", field="resume_fit")
     # region_from_posterior CLAMPS both ends silently (max(1, min(n, p))). Clamping a 0 up to 1 hides a

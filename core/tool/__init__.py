@@ -163,10 +163,10 @@ def main(argv=None) -> int:
         with use_store(ArtifactStore(root)) as store, console_handlers():
             rc = int(args.handler(args, store) or 0)
     except KeyboardInterrupt:
-        # The probe checks (core/tool/probes.py) set their own `interrupt_note` through set_defaults
-        # -- they keep no cache and take no --resume, so the generic advice below (written for a
-        # checkpointed training cache) would be flatly wrong for them. Every other subcommand leaves interrupt_note unset, so getattr's default
-        # keeps their message as is.
+        # The probe checks (core/tool/probes.py) and the artifacts family (core/tool/browse.py) set their
+        # own `interrupt_note` through set_defaults -- they keep no cache and take no --resume, so the
+        # generic advice below (written for a checkpointed training cache) would be flatly wrong for them.
+        # Every other subcommand leaves interrupt_note unset, so getattr's default keeps their message as is.
         note = getattr(args, "interrupt_note", None)
         if note is not None:
             print(f"prism {args.cmd}: interrupted: {note}", file=sys.stderr)
