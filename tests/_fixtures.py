@@ -988,7 +988,7 @@ ABLATION_DEAD = "constant in training (structurally dead)"
 _NAMES = ("k", "lam", "f_max", "tau", "tau_c", "s")           # parameters of the Nadrowski box, in its order
 #: The configured chi settings a probe check judged, as its record states them.
 _CONFIGURED = {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12, "chi_min_cycles": 2.0,
-               "chi_max_cycles": 20.0, "probe_count": 6}
+               "chi_max_cycles": 64.0, "probe_count": 6}
 
 
 def _band_point(length, multiplier, drive, *, noisy=False, captured=False):
@@ -1001,7 +1001,7 @@ def _band_point(length, multiplier, drive, *, noisy=False, captured=False):
     return {"length_s": length, "multiplier": multiplier, "drive": drive, "n_valid": 24, "nyquist_masked": 0,
             "harmonic": False, "sup": sup, "full": {**measure, "verdict": verdict},
             "capped": {**measure, "verdict": verdict},
-            "caps": [{"cap": 20.0, **{key: measure[key] for key in ("cv", "phase", "snr", "cycles")},
+            "caps": [{"cap": 64.0, **{key: measure[key] for key in ("cv", "phase", "snr", "cycles")},
                       "verdict": "noisy" if noisy else "pass"}]}
 
 

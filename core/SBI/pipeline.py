@@ -1427,8 +1427,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     :param chi_max_cycles: lock-in duration CEILING in drive cycles; None reads
                            ``config.CHI_MAX_CYCLES``. Bounds the ``duration_frac`` draw below --
                            without it the draw is a FRACTION of the recording, which does not bound
-                           cycles at all, so a long recording walks its probes past the ~31-cycle
-                           reproducibility wall (see config.CHI_MAX_CYCLES for the measurement).
+                           cycles at all, so a long recording's probes would be locked in over more
+                           cycles than the ceiling allows (see config.CHI_MAX_CYCLES for the
+                           measurement that sets it).
     :param nd_idx: ND parameter name -> column. Required only when the box declares ``T`` instead
                    of ``f_scale`` (tier-1 physical consistency, core/SBI/derived.py); ignored
                    otherwise, so every pre-tier-1 caller is unaffected.

@@ -885,7 +885,7 @@ def test_lock_in_duration_is_capped_at_chi_max_cycles():
     assert abs(float(chi_mod.peak_freq(x_spont, cfg.dt_exp)[0]) - f0_cell) < 0.5 / (N_points * cfg.dt_exp), \
         "the synthetic passive trace must pin Omega_0, or the band below is not what it says"
     # Probe at the band's TOP edge: in band by construction, and the most cycles available in band,
-    # so the ceiling binds hard (200 cycles at full length against a 20-cycle cap).
+    # so the ceiling binds hard (200 cycles at full length, far above the ceiling).
     f_abs = float(cfg.chi_freq_bounds[1]) * f0_cell
     assert f_abs < 0.9 * (0.5 / cfg.dt_exp), "the test probe must stay under Nyquist"
 

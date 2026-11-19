@@ -123,7 +123,7 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("chi_f0_si", "the physical chi drive amplitude, in newtons", None),
     Field("chi_n_freqs", "the number of chi probe frequencies", "6"),                  # CHI_N_FREQS
     Field("chi_k_pad", "the number of chi probe slots", "12"),                         # CHI_K_PAD
-    Field("chi_max_cycles", "the chi lock-in ceiling, in cycles", "20.0"),             # CHI_MAX_CYCLES
+    Field("chi_max_cycles", "the chi lock-in ceiling, in cycles", "64.0"),             # CHI_MAX_CYCLES
     Field("chi_f0", "the chi drive amplitude (fixed by measurement)", None),
     Field("chi_freq_bounds", "the chi frequency band (fixed by measurement)", None),
     Field("device", "the compute device", "auto"),                                     # --device

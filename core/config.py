@@ -527,15 +527,8 @@ CHI_MIN_CYCLES = 2.0   # a probe is MASKED (never moved, never dropped) below th
                        # larger floor because measurement refuses one: at T=5s, mult=0.03 the probe has
                        # 3.39 cycles and the BEST |chi| CV in the sweep (0.024), so a floor of 8 would
                        # delete the best probe in the experiment.
-CHI_MAX_CYCLES = 20.0  # CEILING on the drive cycles a probe is locked in over. The counterpart to
-                       # CHI_MIN_CYCLES above, and the less obvious of the two: every instinct about
-                       # integration says a longer lock-in is a better one, and above ~30 cycles on
-                       # this model it is not. Measured 2026-08-06: at
-                       # FIXED theta, |chi| CV runs 0.03 -> 0.63 and driven/undriven SNR 26 -> 2.3 as
-                       # the window grows past the wall, and re-locking the SAME trace over a shorter
-                       # prefix reverses it completely. A stationary noise-limited estimator cannot do
-                       # that, so the response is non-stationary on the scale of tens of drive cycles
-                       # and the lock-in accumulates that wander instead of averaging it away.
+CHI_MAX_CYCLES = 64.0  # CEILING on the drive cycles a probe is locked in over. The counterpart to
+                       # CHI_MIN_CYCLES above.
                        # This is NOT a filter: no probe is masked or dropped by it. It shortens the
                        # SEGMENT the lock-in runs over, which is a property of the measurement, so
                        # every path applies it: training, the Fisher rotation, the PPC and the
@@ -544,18 +537,25 @@ CHI_MAX_CYCLES = 20.0  # CEILING on the drive cycles a probe is locked in over. 
                        # cfg.chi_max_cycles drive cycles (the run's lock-in ceiling, this value by
                        # default). Applying it in one caller would make the network condition on a
                        # different observable than it was trained on, which is silent.
-                       # WHY 20. scripts/chi_f0_sweep.py at 7433ced^ brackets the wall by re-locking the same
-                       # traces over every prefix length (M=48, in-band probes only so frequency
-                       # effects cannot confound it). Worst |chi| CV by cap:
-                       #   8 -> 0.042   12 -> 0.039   16 -> 0.047   20 -> 0.062
-                       #   24 -> 0.086  28 -> 0.123   32 -> 0.198   36 -> 0.456  (first failure)
-                       # A steady climb, not a cliff, so there is no "correct" value -- only a
-                       # trade-off. 20 sits in the flat part with ~3x margin to the 0.2 CV screen and
-                       # 10x above CHI_MIN_CYCLES, and it is the value the re-lock rescue measurement
-                       # already validated end-to-end on every failing point. 12-16 reproduce slightly better;
-                       # they were not chosen because NOTHING here measures the other side of the
-                       # trade -- a shorter lock-in is also less frequency-selective, and no
-                       # experiment in this repo has yet priced that.
+                       # WHY 64. `python -m core probes band` with a grid of ceilings (48 runs, the
+                       # band's probes, its five lengths up to the training ceiling, on the master cell
+                       # and its tier-1 twin) re-locks the same traces at every ceiling: on the record
+                       # clock every longer lock-in reads cleaner, up to the whole of the longest
+                       # recording (180 drive cycles at the band's top). Worst |chi| CV over the points
+                       # a ceiling shortens, and the worst driven/undriven:
+                       #   8 -> 0.062, 12    20 -> 0.041, 20    36 -> 0.029, 29    64 -> 0.023, 39
+                       #   128 -> 0.017, 50
+                       # (On the simulator's older clock, which ran a cell a few per cent off its own
+                       # time scale, the CV climbed past about 30 cycles, to 0.456 at 36, and the ceiling
+                       # was 20, below that climb: the climb was that clock's frequency mismatch, which a
+                       # long lock-in reads as decay.) What a long read costs is frequency selectivity: a
+                       # response whose frequency is off by a fraction e reads at |sinc(pi n e)| of its
+                       # size over n cycles, and on a bench recording e is how far the camera's frame
+                       # interval is from the one assumed (1 % off reads 0.45 at 64 cycles, 0.94 at 20;
+                       # 0.1 % off reads 0.993 at 64). So a long read needs the frame interval to be
+                       # exact: a bench recording is to be read at its camera's own measured frame
+                       # interval before any inference on it. 64 rather than more because the gain
+                       # flattens (CV 0.023 at 64, 0.017 at 128) while that cost keeps growing with n.
                        # It is frozen into the artifact for the same reason the band is: a posterior
                        # trained at one ceiling and evaluated at another sees different logcyc values
                        # for the same recording. The manifest carries it and the load path checks it.

@@ -45,7 +45,7 @@ CONFIG = {"model": "NADROWSKI", "param_keys": ["k", "lam", "f_max", "x_scale", "
           "rescale_highs": [100.0, 40.0, 310.0]}
 #: The settings of the frequency response a probe check's record states, as the engine writes them.
 CONFIGURED = {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12, "chi_min_cycles": 2.0,
-              "chi_max_cycles": 20.0, "probe_count": 6}
+              "chi_max_cycles": 64.0, "probe_count": 6}
 
 
 def _at(day, hour=12, minute=0):

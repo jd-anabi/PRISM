@@ -1935,10 +1935,10 @@ def test_probes_band_judges_the_configured_band_and_drive_on_a_cell_of_known_res
     d = probe_band(_probe_cfg(), lengths=[1.0, 2.0], multipliers=[0.05, 0.3, 0.6], repeats=4, name="band1")
     s, r = d.settings, d.results
     assert (d.diagnostic, d.variant, d.manifest.parents) == ("probes", "band", {})
-    assert s["drives"] == [0.15] and s["cycle_caps"] == [20.0] and s["phase_max"] is None
+    assert s["drives"] == [0.15] and s["cycle_caps"] == [64.0] and s["phase_max"] is None
     assert s["drive_phase"] == pytest.approx(math.pi / 2)
     assert s["configured"] == {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12,
-                               "chi_min_cycles": 2.0, "chi_max_cycles": 20.0, "probe_count": 6}
+                               "chi_min_cycles": 2.0, "chi_max_cycles": 64.0, "probe_count": 6}
     assert r["band_holds"] is True and r["drive_holds"] is True
     assert [(f["multiplier"], f["in_band"], f["harmonic"], f["passes_capped"]) for f in r["frequencies"]] == [
         (0.05, True, False, True), (0.3, True, True, True), (0.6, False, False, True)]
@@ -2086,8 +2086,8 @@ def test_probes_band_brackets_the_wall_only_when_caps_are_given(store, monkeypat
     assert probe_band(_probe_cfg(), name="nowall", **kw).results["wall"] is None
     d = probe_band(_probe_cfg(), cycle_caps=[8, 12], name="wall", **kw)
     wall = d.results["wall"]
-    assert d.settings["cycle_caps"] == [8.0, 12.0, 20.0]
-    assert [c["cap"] for c in wall["caps"]] == [8.0, 12.0, 20.0]
+    assert d.settings["cycle_caps"] == [8.0, 12.0, 64.0]
+    assert [c["cap"] for c in wall["caps"]] == [8.0, 12.0, 64.0]
     assert [c["n_truncated"] for c in wall["caps"]] == [1, 1, 0]
     assert all(c["n_fail"] == 0 for c in wall["caps"] if c["n_truncated"]), wall["caps"]
     assert "above 12" in wall["reading"], wall["reading"]
@@ -2264,7 +2264,7 @@ _MASK_ROWS = {"full": (0.02, (0.1, 0.2, 0.3), 3), "short": (0.004, (0.15, 0.2, 0
 def _mask_record(tag, lo, hi, kinds=("full", "short", "slow", "packer"), *, k_pad=12):
     """Rows lo..hi of a batch whose rows are ``kinds``, built as the training generator builds them: each
     probe driven at its row's peak times its multiplier, locked in over its duration fraction of the
-    recording under the 20-cycle ceiling, and masked when not finite, at 0.9 x Nyquist or below 2 cycles.
+    recording under a 20-cycle ceiling, and masked when not finite, at 0.9 x Nyquist or below 2 cycles.
     The default batch masks 5 of its 12 probes: 3 too slow, 1 shortened, 1 at the packer."""
     from core.SBI.chi_probes import ProbeRecord
     rows = [_MASK_ROWS[k] for k in kinds][lo:hi]
@@ -2702,7 +2702,7 @@ def test_probes_drive_measures_the_configured_chi_drive_explicitly_on_its_defaul
     assert (s["t_obs_s"], s["repeats"], s["detune"], s["free_min"], s["captured_max"], s["peak_window"],
             s["clarity_min"], s["seed"]) == (5.0, 2, 1.4, 0.7, 0.1, 0.02, 3.0, 0)
     assert s["configured"] == {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12,
-                               "chi_min_cycles": 2.0, "chi_max_cycles": 20.0, "probe_count": 6}
+                               "chi_min_cycles": 2.0, "chi_max_cycles": 64.0, "probe_count": 6}
     assert (r["strongest_free_running"]["strength"], r["weakest_captured"]["strength"]) == (0.75, 1.0)
 
 

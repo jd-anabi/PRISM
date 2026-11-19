@@ -261,11 +261,13 @@ def resolvable_multipliers(mults: torch.Tensor, f_peak: torch.Tensor, T_obs: flo
     into good ones. A row too slow even for the band's top edge (``lo_row >= hi``) is left at ``hi``
     and will still be masked; that is the honest outcome, not a failure of this function.
 
-    ONLY the floor is a placement bound. ``max_cycles`` is deliberately NOT one, and the reason is
-    arithmetic: the band's dynamic range (``hi/lo`` = 10 at the configured band) is exactly the cycle
-    window's (``CHI_MAX_CYCLES/CHI_MIN_CYCLES`` = 10), so requiring a row to satisfy both leaves it a
-    single feasible multiplier for all but one value of ``Omega_0 * T`` -- every probe on one
-    frequency, resolving perfectly and measuring no SHAPE at all. Tried, and reverted for that reason.
+    ONLY the floor is a placement bound. ``max_cycles`` is deliberately NOT one. When it was tried, at
+    a ceiling of 20 cycles, the reason was arithmetic: the band's dynamic range (``hi/lo`` = 10 at the
+    configured band) was exactly the cycle window's (``CHI_MAX_CYCLES/CHI_MIN_CYCLES``, then 10), so
+    requiring a row to satisfy both left it a single feasible multiplier for all but one value of
+    ``Omega_0 * T`` -- every probe on one frequency, resolving perfectly and measuring no SHAPE at
+    all. It was reverted for that reason; at today's wider window the band would be cut less, but the
+    asymmetry below decides it whatever the window.
     The asymmetry that decides it: falling under the floor MASKS a probe outright, while exceeding the
     ceiling only makes it noisier, and gen_chi_raw's duration ceiling still truncates it afterwards.
     A hard bound belongs on the failure that loses the probe, not on the one that degrades it.

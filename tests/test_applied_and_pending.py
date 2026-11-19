@@ -124,7 +124,7 @@ def test_a_changed_choice_reads_changed_not_applied_and_names_what_is_in_use():
     ("model", lambda page: _pick(page.model_combo, "HOPF"), "Nadrowski"),
     ("chi_n_freqs", lambda page: page.form.rows["chi_n_freqs"].widget.setText("5"), "6"),
     ("chi_k_pad", lambda page: page.form.rows["chi_k_pad"].widget.setText("11"), "12"),
-    ("chi_max_cycles", lambda page: page.form.rows["chi_max_cycles"].widget.setText("12.5"), "20 drive cycles"),
+    ("chi_max_cycles", lambda page: page.form.rows["chi_max_cycles"].widget.setText("12.5"), "64 drive cycles"),
     ("units", lambda page: _pick(page.units_choice, "typed"), "kHz ms nm pN, from the model's file"),
 ], ids=["model", "driven recordings", "slots", "lock-in limit", "units"])
 def test_each_row_names_what_is_in_use_in_its_own_words(key, change, words):

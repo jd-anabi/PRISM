@@ -191,9 +191,9 @@ def test_a_line_under_a_misspelt_heading_is_still_judged(tmp_path):
                  f"{_what('chi_k_pad')} must be at most 24; got 30 (default 12).", id="too many slots"),
     pytest.param(f"{OPTIONS}chi_max_cycles = 2\n", 3, "chi_max_cycles",
                  f"{_what('chi_max_cycles')} must be greater than 2, the floor below which a probe is masked; "
-                 "got 2 (default 20).", id="a ceiling that does not clear the floor"),
+                 "got 2 (default 64).", id="a ceiling that does not clear the floor"),
     pytest.param(f"{OPTIONS}chi_max_cycles = 1e999\n", 3, "chi_max_cycles",
-                 f"{_what('chi_max_cycles')} must be a finite number; got inf (default 20.0).",
+                 f"{_what('chi_max_cycles')} must be a finite number; got inf (default 64.0).",
                  id="a ceiling past what a float holds"),
     pytest.param(f"{OPTIONS}chi_n_freqs = 14\n", 3, "chi_n_freqs",
                  f"{_what('chi_n_freqs')} must be at most the number of slots, 12 (the built-in); got 14.",

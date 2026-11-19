@@ -126,12 +126,13 @@ HELP = {
               "bundle runs free -- the measurement record is the comment beside it in config.py). "
               "Shown read-only: it is baked into every trained posterior's encoder, so a different "
               "value means editing config.py deliberately, for every future run, and retraining.",
-    "chi_max_cycles": "Longest lock-in, in drive cycles, used for any one probe. A longer lock-in is "
-                      "NOT a better one here: past roughly 30 cycles χ stops being reproducible at "
-                      "fixed parameters, and the extra recording adds noise rather than signal. "
-                      "Recordings longer than this are truncated, not rejected — the leading part is "
-                      "exactly what the network was trained on. Frozen into any posterior trained "
-                      "with it, so changing it means retraining.",
+    "chi_max_cycles": "Longest lock-in, in drive cycles, used for any one probe. A longer lock-in reads "
+                      "χ more reproducibly, but it is also more selective in frequency: a recording "
+                      "whose frame interval is off by 1 % reads about 0.45 of its |χ| over 64 cycles, "
+                      "so a long lock-in needs the camera's frame interval to be exact. Recordings "
+                      "longer than this are truncated, not rejected — the leading part is exactly what "
+                      "the network was trained on. Frozen into any posterior trained with it, so "
+                      "changing it means retraining.",
     "chi_range": "The K probe frequencies are placed log-spaced across this band, as MULTIPLES of each "
                  "observation's own measured spontaneous peak Ω₀ — so the probes track the resonance "
                  "wherever t_scale puts it, instead of sitting at fixed absolute frequencies. The band "
