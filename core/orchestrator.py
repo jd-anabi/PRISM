@@ -303,12 +303,18 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
 
 @public_entry
 def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: str = "", note: str = "",
-                                 fig_sink=None, store=None, if_name_taken: str = "refuse") -> LoadedObservation:
-    """A bench recording set -> the observation artifact. Every file is checked and hashed BEFORE any
-    compute (a blank or missing recording is a Refusal naming that recording's field here, not a
-    traceback inside a worker), then the mode's builder runs -- refusing a bad drive before any lock-in
-    -- and the artifact records the recordings, the drive and the context. ``if_name_taken`` is
-    ``generate_observations``'s."""
+                                 fig_sink=None, store=None, if_name_taken: str = "refuse",
+                                 drawn_around: str | None = None) -> LoadedObservation:
+    """A bench recording set -> the observation artifact. Every file is checked, then every file hashed,
+    BEFORE any compute (a blank or missing recording is a Refusal naming that recording's field here, not a
+    traceback inside a worker, and before any other recording is read), then the mode's builder runs --
+    refusing a bad drive before any lock-in -- and the artifact records the recordings, the drive and the
+    context. ``if_name_taken`` is ``generate_observations``'s.
+
+    ``drawn_around`` is the digest of the observation a narrowed posterior was drawn around, which
+    ``experimental_inference`` hands on when the inference it makes this observation for refuses any other:
+    recordings that build another observation are refused then, once they are built and before anything is
+    written, under ``accept_other_observation`` and in the inference's own words. None refuses nothing."""
     store = resolve_store(store)
     store.assert_name_free("observation", name)      # with the file checks, before any compute
     check_if_name_taken(if_name_taken)
@@ -317,7 +323,8 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
     # one driven recording, or a chi probe's recording (picked in the probe table).
     role_field = {"spont": "recording_spont",
                   "forced": "recording_probe" if cfg.observation_mode == "chi" else "recording_forced"}
-    refs = []
+    # Every recording is checked before the first is hashed: a second one missing was found only after the first
+    # had been read whole.
     for p, role, f in named:
         # "is blank" for an empty path, "was not found" for a path with no file behind it: the same rule
         # and the same sentence the Inference step runs at the press.
@@ -331,6 +338,8 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
             raise Refusal(f"chi mode: forced recording {p!r} has no drive frequency; every driven "
                           f"chi recording must state the frequency (Hz) it was driven at",
                           field="recording_probe")
+    refs = []
+    for p, role, f in named:
         r = _file_ref(p)
         r.update({"role": role, "freq_Hz": None if f is None else float(f)})
         refs.append(r)
@@ -349,6 +358,14 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
                                                           rec.forcing_params_si or {})
     else:
         obs_stats, obs_data, t_dim = build_experiment_obs_spontaneous(cfg, X_spont, rec.T_obs_s)
+    if drawn_around is not None:
+        # The narrowed posterior's rule, once the recordings are built and before they are written: the inference
+        # would refuse this observation only after its record was made.
+        from .artifacts.manifest import tensor_digest
+        built = tensor_digest(obs_stats)
+        if built != drawn_around:
+            raise Refusal(_another_observation_text(drawn_around, built) + _ANOTHER_OBSERVATION_FIX,
+                          field="accept_other_observation")
     # The context _write_observation records is THIS recording's, not what the session's cfg last held:
     # the length of the trace that is plotted and eye-tested (the passive trace for spontaneous and chi,
     # the forced one for forced), which a simulated observation before it would otherwise have left.
@@ -371,6 +388,22 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
     return _write_observation(store, cfg, name, note, fig_sink, obs_stats, obs_data, t_dim,
                               title="Observed trace", source=source, forcing_vals=forcing_vals,
                               if_name_taken=if_name_taken)
+
+
+def _another_observation_text(want: str, got: str) -> str:
+    """What a posterior narrowed around the observation of digest ``want`` says of an observation of digest ``got``:
+    the one sentence of the inference's refusal of it, of the observation stage's when it is made for that
+    inference, and of the inference's warning when the other observation is accepted."""
+    return (f"[tsnpe] this posterior is NOT AMORTIZED. TSNPE trained it on a prior restricted to a "
+            f"region drawn around the observation with digest {want}; the observation supplied has digest "
+            f"{got}. Near that observation (the same cell re-simulated with new noise, say) it is "
+            f"valid; anywhere else the flow has never seen a training row and extrapolates confidently rather "
+            f"than returning the prior.")
+
+
+#: What the refusal of another observation adds to ``_another_observation_text``: the way past it.
+_ANOTHER_OBSERVATION_FIX = (" Use the recorded observation or an amortized posterior. To run anyway, "
+                            "pass Accept(other_observation=True); the inference will record it.")
 
 
 def _write_observation(store, cfg, name, note, fig_sink, x_obs, obs_data, t_dim, *, title, source, forcing_vals,
@@ -2654,15 +2687,9 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
     # noise is the legitimate case).
     _want, used = post.x_obs_digest, False
     if _want is not None and observation.digest != _want:
-        _msg = (f"[tsnpe] this posterior is NOT AMORTIZED. TSNPE trained it on a prior restricted to a "
-                f"region drawn around the observation with digest {_want}; the observation supplied has digest "
-                f"{observation.digest}. Near that observation (the same cell re-simulated with new noise, say) it is "
-                f"valid; anywhere else the flow has never seen a training row and extrapolates confidently rather "
-                f"than returning the prior.")
+        _msg = _another_observation_text(_want, observation.digest)
         if not accept.other_observation:
-            raise Refusal(_msg + " Use the recorded observation or an amortized posterior. To run anyway, "
-                          "pass Accept(other_observation=True); the inference will record it.",
-                          field="accept_other_observation")
+            raise Refusal(_msg + _ANOTHER_OBSERVATION_FIX, field="accept_other_observation")
         # Said ONCE, as the warning, with the sentence the operator reads in the pane.
         # A PreflightWarning for the same reason as build_posterior's GROUND TRUTH judgement: the same
         # posterior on the same foreign observation twice in one session must be told twice.
@@ -2919,6 +2946,19 @@ def _refuse_a_taken_observation_name(store, name: str) -> None:
         raise Refusal(str(exc), field="observation_name") from None
 
 
+@contextlib.contextmanager
+def _under_the_observations_name():
+    """The observation stage an inference composes, its refusal of a bad or taken name said under the observation's
+    own name: the store refuses at the observation's write a name another record took while the observation was
+    made, under the name's field, and a front end must point at the observation's name, not the inference's."""
+    try:
+        yield
+    except Refusal as exc:
+        if exc.field != "name":
+            raise
+        raise Refusal(str(exc), field="observation_name") from None
+
+
 @public_entry
 def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: float, *,
                         cell=None, gt_values=None, prior: "LoadedPrior | None" = None,
@@ -3012,7 +3052,8 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     # The choice for a taken name is the observation's alone, handed on only when it is given, so the
     # observation stage's own default stays the one place it is written down.
     taken = {} if if_name_taken == "refuse" else {"if_name_taken": if_name_taken}
-    obs = generate_observations(cfg, name=observation_name, fig_sink=fig_sink, store=store, **taken)
+    with _under_the_observations_name():
+        obs = generate_observations(cfg, name=observation_name, fig_sink=fig_sink, store=store, **taken)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
                               **({"n_samples": n_samples} if n_samples is not None else {}))
@@ -3034,10 +3075,11 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     loop and the drive by the builder, so ``rec`` is forwarded unchecked. A recording carries no truth,
     so there is nothing to compare against the training distribution. And rebuilding the same
     recordings reproduces a region's digest, which is the LEGITIMATE match -- so the non-amortized
-    refusal stays in infer_and_visualize, where it can tell that case apart from a foreign observation.
-    Nothing is lost by waiting: building an experimental observation costs no simulation.
+    rule is judged on what the recordings build: by the observation stage, once they are built and
+    before their observation is written (its ``drawn_around``), and again by infer_and_visualize.
     ``if_name_taken`` is the observation's, as in ``simulated_inference``.
     """
+    from .artifacts import Accept
     store = resolve_store(store)
     # The pre-spend block, in the simulated path's order: the numeric knobs, then the two names.
     _refuse_no_samples(n_samples)
@@ -3049,7 +3091,14 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     if _outside:
         _preflight_warn(_outside)
     taken = {} if if_name_taken == "refuse" else {"if_name_taken": if_name_taken}
-    obs = build_experiment_observation(cfg, rec, name=observation_name, fig_sink=fig_sink, store=store, **taken)
+    # A narrowed posterior refuses any observation but the one its region was drawn around, unless told to accept
+    # another: handed on only then, so that every other call reaches the observation stage as it always did.
+    _want = posterior.posterior.x_obs_digest
+    if _want is not None and not (accept or Accept()).other_observation:
+        taken["drawn_around"] = _want
+    with _under_the_observations_name():
+        obs = build_experiment_observation(cfg, rec, name=observation_name, fig_sink=fig_sink, store=store,
+                                           **taken)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
                               **({"n_samples": n_samples} if n_samples is not None else {}))

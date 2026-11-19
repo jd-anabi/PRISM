@@ -23,7 +23,8 @@ import torch
 from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.Helpers import file_manager
-from core.refusals import Refusal, require_at_least
+from core.refusals import Refusal, refuse, require_at_least
+from core.rng import SEED_MAX
 from core.runs import public_entry
 
 from .rng import seeded
@@ -122,6 +123,13 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     repeats = require_at_least("repeats", repeats, 1)
     n_cal = require_at_least("n_cal", n_cal, 1)
     nps = require_at_least("num_posterior_samples", num_posterior_samples, 1)
+    # Repeat r is seeded with the seed plus r: a seed within the repeats of the largest the generators accept
+    # passed the first repeat and failed at a later one, the record opened. The last repeat's seed is held to that
+    # largest here; a negative seed, which the generators take, runs as it did.
+    if int(seed) + repeats - 1 > SEED_MAX:
+        refuse("seed", f"The random seed must be at most {SEED_MAX - repeats + 1} with {repeats} repeats, since "
+                       f"repeat r is seeded with the seed plus r and the largest seed the random number generator "
+                       f"accepts is {SEED_MAX}; got {seed}.")
     if chi_k_fixed is not None and not cfg.chi_mode:
         raise Refusal(
             f"The fixed chi probe count only means something in chi(omega) mode; this config is "

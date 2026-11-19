@@ -469,6 +469,45 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
         "a refused sbc_repeats call wrote a diagnostic of its own (only the name taken above should exist)"
 
 
+def test_a_repeated_calibrations_last_seed_past_the_largest_is_refused_at_the_entry(tiny_run, monkeypatch):
+    """Repeat r is seeded with the seed plus r, so a seed within the repeats of the largest the random number
+    generator accepts passed the first repeat and failed at a later one, its record opened. It is refused at the
+    entry, under the seed, naming the largest seed these repeats allow, before the calibration's prior is built or
+    anything simulated or written. A seed whose last repeat is the largest passes, and so does a negative one, which
+    the generators take, as before."""
+    import pytest
+    from core import orchestrator
+    from core.diagnostics import sbc_repeats
+    from core.rng import SEED_MAX
+    r = tiny_run
+    before = len(r.store.list("diagnostic"))
+
+    class _Reached(RuntimeError):
+        """Raised by the calibration prior's stand-in: the entry let the seed through."""
+
+    drawn, calibrated = [], []
+
+    def reached(*a, **k):
+        calibrated.append(1)
+        raise _Reached
+
+    monkeypatch.setattr(orchestrator.analysis, "gen_cal_data", lambda **k: drawn.append(1))
+    monkeypatch.setattr(orchestrator, "_calibration_prior", reached)
+    for seed, repeats in ((SEED_MAX - 1, 3), (SEED_MAX, 2)):
+        with pytest.raises(Refusal) as e:
+            sbc_repeats(r.cfg, r.posterior, r.prior, repeats=repeats, n_cal=8, seed=seed, fig_sink=r.sink)
+        assert e.value.field == "seed", e.value.field
+        assert str(e.value) == (f"The random seed must be at most {SEED_MAX - repeats + 1} with {repeats} repeats, "
+                                f"since repeat r is seeded with the seed plus r and the largest seed the random number "
+                                f"generator accepts is {SEED_MAX}; got {seed}. (default none: one is drawn and "
+                                f"recorded)"), str(e.value)
+    assert calibrated == [] and drawn == [] and len(r.store.list("diagnostic")) == before
+    for seed, repeats in ((SEED_MAX - 2, 3), (-3, 2), (0, 1)):
+        with pytest.raises(_Reached):
+            sbc_repeats(r.cfg, r.posterior, r.prior, repeats=repeats, n_cal=8, seed=seed, fig_sink=r.sink)
+    assert calibrated == [1, 1, 1] and drawn == [] and len(r.store.list("diagnostic")) == before
+
+
 @pytest.mark.parametrize("n_pooled, nps, want", [
     (20000, 1000, 91),    # cap 100; 91 divides 1001, every bin holds 11 ranks
     (20000, 500, None),   # cap 50; 501 = 3 x 167 has no divisor in [25, 50]: the cap, never 3

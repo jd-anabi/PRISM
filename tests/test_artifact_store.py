@@ -1864,6 +1864,32 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
     assert not isinstance(e.value, FileNotFoundError)
 
 
+def test_a_recording_missing_is_refused_before_any_recording_is_hashed(store, tmp_path, monkeypatch):
+    """Every recording is checked before any is read: a driven recording that is missing is refused under its role's
+    field before the passive one, which is there, is hashed, in forced mode and in chi mode alike, where the missing
+    one came to light only after the first had been hashed. Nothing is built or written."""
+    import numpy as np
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    spont = tmp_path / "spont.npy"
+    np.save(spont, np.zeros(50, dtype=np.float32))
+    gone = str(tmp_path / "gone.npy")
+    hashed = []
+    monkeypatch.setattr(orchestrator, "_file_ref", lambda path: hashed.append(str(path)) or {})
+    forced_cfg = _forced_cfg()
+    si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in forced_cfg.force_params_dict}
+    for cfg, rec, field in (
+            (forced_cfg, RecordingSet(spont=str(spont), forced=((gone, None),), T_obs_s=1.0, forcing_params_si=si),
+             "recording_forced"),
+            (_nad_cfg(chi_mode=True), RecordingSet(spont=str(spont), forced=((str(spont), 12.5), (gone, 25.0)),
+                                                   T_obs_s=1.0, F0_si=1.0), "recording_probe")):
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close, store=store)
+        assert e.value.field == field and "gone.npy" in str(e.value), (field, str(e.value))
+    assert hashed == [], f"a recording was hashed before the missing one was refused: {hashed}"
+    assert store.list("observation") == []
+
+
 def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, tmp_path, monkeypatch):
     """Every driven chi recording states the frequency (Hz) it was driven at.
 
@@ -3707,6 +3733,94 @@ def test_an_inferences_observation_is_saved_under_the_name_given(path, store, mo
     assert [s.id for s in store.list("observation")] == [obs.id]
     assert made_on == [obs], "the inference was not made on the observation the composition wrote"
     assert (inf.name, inf.note, inf.parents["observation"]) == ("cell_a_obs", "the inference's note", obs.id)
+
+
+def _zero_features(c, x_spont, t_obs_s):
+    """A spontaneous observation's features, all zeros, in the shapes the builder returns."""
+    from core.SBI.statistics import SUMMARY_WIDTH
+    c.set_observation_context(t_obs_s * c.get_unit_conversion_factor("s"), {})
+    return (torch.zeros(1, SUMMARY_WIDTH + 1, dtype=torch.float64), torch.zeros(1, 50, dtype=c.hw.dtype),
+            torch.zeros(1, 50, dtype=c.hw.dtype))
+
+
+def test_recordings_for_another_observation_of_a_narrowed_posterior_are_refused_before_it_is_written(
+        store, monkeypatch, tmp_path):
+    """A posterior narrowed around one observation refuses an inference on recordings that build another, unless told
+    to accept it. Refused once the recordings are built and before their observation is written, under the consent
+    that answers it, in the inference's own words: the observation was written first and the inference refused
+    after, so the refused call left a record behind. The recordings the region was drawn around build its digest and
+    pass, and so do others accepted; the inference judges each again."""
+    import numpy as np
+    from core import orchestrator
+    from core.artifacts import Accept
+    from core.artifacts.manifest import tensor_digest
+    from core.SBI.observations import RecordingSet
+    monkeypatch.setattr(orchestrator, "build_experiment_obs_spontaneous", _zero_features)
+    inferred = []
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: inferred.append(k) or "INF")
+    spont = tmp_path / "spont.npy"
+    np.save(spont, np.zeros(50, dtype=np.float32))
+    rec = RecordingSet(spont=str(spont), T_obs_s=1.0)
+    built = tensor_digest(_zero_features(_spont_cfg(), None, 1.0)[0])
+    with pytest.raises(Refusal) as e:
+        orchestrator.experimental_inference(_spont_cfg(), _sim_post(x_obs_digest="d" * 16), rec, fig_sink=_close,
+                                            store=store, observation_name="refused_obs")
+    assert e.value.field == "accept_other_observation", e.value.field
+    assert f"digest {'d' * 16}; the observation supplied has digest {built}." in str(e.value), str(e.value)
+    assert str(e.value).endswith("pass Accept(other_observation=True); the inference will record it."), str(e.value)
+    assert store.list("observation") == [] and inferred == []
+    own, _ = orchestrator.experimental_inference(_spont_cfg(), _sim_post(x_obs_digest=built), rec, fig_sink=_close,
+                                                 store=store)
+    other, _ = orchestrator.experimental_inference(_spont_cfg(), _sim_post(x_obs_digest="d" * 16), rec,
+                                                   accept=Accept(other_observation=True), fig_sink=_close, store=store)
+    assert own.digest == other.digest == built and len(store.list("observation")) == 2 and len(inferred) == 2
+    assert inferred[1]["accept"] == Accept(other_observation=True)
+
+
+def _observation_body() -> dict:
+    """An observation record's body at its smallest."""
+    return {"mode": "spontaneous", "conditioning": {"width": 50, "forcing_dim": 1}, "x_obs_digest": "0" * 16,
+            "T_obs_cell": 4.5, "n_obs": None, "forcing_vals": {}, "chi_obs_freqs": None,
+            "source": {"kind": "bench"}}
+
+
+@pytest.mark.parametrize("path", ["a simulated cell", "recordings"])
+def test_an_observations_name_taken_during_the_run_is_refused_under_the_observations_own_name(
+        path, store, monkeypatch):
+    """A name another record takes while the observation is made is refused by the store at the observation's write,
+    under the name's field; the composition says it under the observation's own name, the one a front end points at
+    and not the inference's, and makes no inference."""
+    from core import cli, orchestrator
+    from core.config import CELL_PATH
+    from core.SBI.observations import RecordingSet
+    inferred = []
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: inferred.append(1) or "INF")
+    monkeypatch.setattr(cli, "load_and_validate_gt", lambda c, p: [])
+
+    def taken_meanwhile(c, *rest, **k):
+        with k["store"].create("observation", None, name=k["name"]) as w:      # another run takes the name
+            w.body = _observation_body()
+        with k["store"].create("observation", c, name=k["name"]) as w:         # this run's write
+            w.body = _observation_body()
+        raise AssertionError("the name taken was not refused")
+
+    stage = "generate_observations" if path == "a simulated cell" else "build_experiment_observation"
+    monkeypatch.setattr(orchestrator, stage, taken_meanwhile)
+    if path == "a simulated cell":
+        def call():
+            return orchestrator.simulated_inference(_nad_cfg(), _sim_post(), 1.0, store=store,
+                                                    cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"),
+                                                    observation_name="cell_obs")
+    else:
+        def call():
+            return orchestrator.experimental_inference(_nad_cfg(), _sim_post(),
+                                                       RecordingSet(spont="x.npy", T_obs_s=1.0), store=store,
+                                                       observation_name="cell_obs")
+    with pytest.raises(Refusal) as e:
+        call()
+    assert e.value.field == "observation_name" and "cell_obs" in str(e.value), (e.value.field, str(e.value))
+    assert inferred == [] and [s.name for s in store.list("observation")] == ["cell_obs"]
+    assert store.list("inference") == []
 
 
 def test_a_taken_observation_name_is_refused_before_the_cell_is_read(store, monkeypatch):
