@@ -1,6 +1,6 @@
 # Getting started
 
-Checked against commit 0ed7262.
+Checked against commit b80b0065.
 
 This page takes you from a fresh installation to a first run in each front end, and shows where
 PRISM keeps what it reads and what it writes.
@@ -405,7 +405,8 @@ command-line run, is guarded only by the sweeps' recency check: a directory or f
 last five minutes is refused rather than removed (`core.artifacts.store.RECENT_WRITE_SECONDS`),
 because an ordinary record's manifest is written last and a run in flight looks like a leftover
 until then. A kept training is the exception: one that a running process holds, in this window or
-any other process, cannot be deleted (`core.SBI.fit_state.running`).
+any other process, cannot be deleted. Its removal takes the training's own lock and holds it while the
+record goes, so a resume cannot begin on it meanwhile (`core.SBI.fit_state.FitLock`).
 
 **On the command line**, the `artifacts` family does the same against the `PRISM_ARTIFACTS` root:
 
