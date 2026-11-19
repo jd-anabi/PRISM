@@ -675,6 +675,29 @@ def test_the_run_buffer_tees_python_warnings_and_calls_the_previous_hook():
     assert len(log2.lines) == 1 and "PreflightWarning" in log2.lines[0]
 
 
+def test_a_run_logs_detach_with_no_attach_before_it_leaves_the_warnings_hook_as_it_was():
+    """``detach`` puts back the hook ``attach`` found. One with no ``attach`` before it found nothing, so it puts
+    nothing back and leaves the process-wide hook as it is, and so does a second ``detach`` after one pair: setting the
+    hook to nothing, or to one it held before, would leave every later warning of the process nowhere to go, or going
+    to a hook that was replaced since."""
+    import warnings
+
+    from core import runs
+
+    with warnings.catch_warnings():                   # restores showwarning on exit, whatever this test does
+        warnings.showwarning = mine = (lambda *a, **k: None)
+        runs.RunLog().detach()
+        assert warnings.showwarning is mine, "a detach with no attach before it changed the hook"
+        log = runs.RunLog()
+        log.attach()
+        assert warnings.showwarning is not mine
+        log.detach()
+        assert warnings.showwarning is mine
+        warnings.showwarning = since = (lambda *a, **k: None)
+        log.detach()
+        assert warnings.showwarning is since, "a second detach put back a hook it no longer holds"
+
+
 def test_the_run_buffer_is_per_thread_in_fact_not_only_in_name():
     """RunLog documented itself as per-thread, but its handler sits on the PROCESS-WIDE ``core``
     logger and its tee replaces the PROCESS-WIDE ``warnings.showwarning`` -- so a record or a warning

@@ -109,16 +109,22 @@ class RunLog:
         self._handler = _RunLogHandler(self)
         self._prev_showwarning = None
         self._owner_thread: "int | None" = None
+        self._attached = False                 # the tee is installed: attach ran and detach has not
 
     def attach(self) -> None:
         self._owner_thread = threading.get_ident()
         LOGGER.addHandler(self._handler)
         self._prev_showwarning = warnings.showwarning
         warnings.showwarning = self._showwarning
+        self._attached = True
 
     def detach(self) -> None:
+        """Remove the handler and put back the hook ``attach`` found. With no ``attach`` before it, or a second
+        time, there is no hook to put back, and the process's hook is left as it is."""
         LOGGER.removeHandler(self._handler)
-        warnings.showwarning = self._prev_showwarning
+        if self._attached:
+            warnings.showwarning = self._prev_showwarning
+            self._attached = False
 
     def _showwarning(self, message, category, filename, lineno, file=None, line=None):
         """The tee: record the warning ON THE OWNER THREAD ONLY, then hand it to whatever hook was
