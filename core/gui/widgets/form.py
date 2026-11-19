@@ -324,8 +324,8 @@ class Row:
 
     def at_usual(self) -> bool:
         """Whether the field reads as its built-in value: as it reads, never as it is typed, so that "1e-3" is 0.001 and
-        a box that reads as nothing is not a number's usual value. A blank box and a tick that stands for nothing both read
-        None, so a ticked field's tick is compared first."""
+        a box that reads as nothing is not a number's usual value. A blank box and a tick that stands for nothing both
+        read None, so a ticked field's tick is compared first."""
         widget = self.widget
         if isinstance(widget, TickedField) and widget.is_ticked() != (self._usual == widget.stands_for):
             return False
@@ -354,10 +354,10 @@ class Row:
     def set_line(self, kind: str, sentence: str) -> None:
         """Say ``sentence`` under the field with the marker of ``kind``; an empty one says nothing. In error the field
         is outlined too, and a number field says the sentence as its tool tip. What the field says of itself, a comma's
-        sentence, stands while the field holds it: it is no page's to take away. Nor is a refusal's sentence, while it stops
-        the start: a page says its lines as it draws, at every edit, and its line comes at the first drawing after the field
-        is edited. Once the facts have been read again a line with words takes its place, and an empty one still leaves
-        it."""
+        sentence, stands while the field holds it: it is no page's to take away. Nor is a refusal's sentence, while it
+        stops the start: a page says its lines as it draws, at every edit, and its line comes at the first drawing after
+        the field is edited. Once the facts have been read again a line with words takes its place, and an empty one
+        still leaves it."""
         if self._marked and (self._blocks or not sentence):
             return
         self._marked = False
@@ -380,9 +380,10 @@ class Row:
         self._say(kind, sentence)
 
     def mark(self, sentence: str, blocks: str = "") -> None:
-        """A refusal of this row: its sentence under the field, stopping the start, until the field is edited; beside the
-        main button ``blocks``, the words for a refusal that is no refused start ("" for one that is). A refusal with
-        words of its own is the field's, not what a box under it holds, so no box the row hears is outlined with it."""
+        """A refusal of this row: its sentence under the field, stopping the start, until the field is edited; beside
+        the main button ``blocks``, the words for a refusal that is no refused start ("" for one that is). A refusal
+        with words of its own is the field's, not what a box under it holds, so no box the row hears is outlined with
+        it."""
         self._set_line("err", sentence, heard=not blocks)
         self._marked = self._blocks = True
         self._why = blocks
@@ -425,7 +426,8 @@ class Row:
         return self._shown and self.line.kind == "err"
 
     def reading(self) -> "str | None":
-        """What is wrong with the number the field holds, in a sentence, or None; a row off the page holds nothing wrong."""
+        """What is wrong with the number the field holds, in a sentence, or None; a row off the page holds nothing
+        wrong."""
         number = None if self.widget is None else _number_of(self.widget)
         if number is None or not self._shown or (isinstance(self.widget, TickedField) and self.widget.is_ticked()):
             return None
@@ -486,10 +488,10 @@ class Row:
             self._on_mark()
 
     def stand_in(self, grid: QGridLayout, at: int, *, wide: bool = False) -> None:
-        """Take the row ``at`` of ``grid``: the label and its badge in the first column, and in the second the field with
-        its unit and origin, the line under them. A value that is only shown is a sentence, with no column of its own,
-        and its origin stands after it. A ``wide`` row, a table of rows, stands under its label across both columns,
-        since beside the label column a row of the table has no room at the window's least width."""
+        """Take the row ``at`` of ``grid``: the label and its badge in the first column, and in the second the field
+        with its unit and origin, the line under them. A value that is only shown is a sentence, with no column of its
+        own, and its origin stands after it. A ``wide`` row, a table of rows, stands under its label across both
+        columns, since beside the label column a row of the table has no room at the window's least width."""
         if wide:
             left = QHBoxLayout()
             left.setContentsMargins(0, 0, 0, 0)
@@ -551,7 +553,8 @@ class Row:
 
 
 class Fold(Ruled):
-    """The rarely changed settings: a button, the line of their values while it is shut, and the rows while it is open."""
+    """The rarely changed settings: a button, the line of their values while it is shut, and the rows while it is
+    open."""
 
     def __init__(self) -> None:
         above, between, below = design.GAP["fold"]
@@ -1019,7 +1022,8 @@ class NameAndNote(QWidget):
 
 class Form(QWidget):
     """The form of a page: "Main settings" with the fold under them, and beside them, while the page is wide enough, the
-    block for this run. ``rows`` holds main, folded and block rows alike, by field key. ``edited`` says a field changed."""
+    block for this run. ``rows`` holds main, folded and block rows alike, by field key. ``edited`` says a field
+    changed."""
 
     edited = Signal()
     joined = Signal()                        # a row joined the form
@@ -1197,8 +1201,8 @@ class Form(QWidget):
                 *(stop for row in self._side_rows for stop in row.stops())]
 
     def refusals(self) -> tuple:
-        """The refusals that stop the start, in the order the page reads: each its sentence and the words beside the main
-        button for it, "" for a refused start's."""
+        """The refusals that stop the start, in the order the page reads: each its sentence and the words beside the
+        main button for it, "" for a refused start's."""
         return tuple((row.refused(), row.refused_why()) for row in self._in_order() if row.refused())
 
     def ease(self) -> None:

@@ -55,9 +55,9 @@ from ...run import ends, history, questions
 from ...run.controller import controller
 from ...run.model import TYPED_EPOCHS_TEXT, RunSpec
 from ...run.view import WrappedWords
-from ...step_facts import (CANCEL, CONTINUING, FIT_RULES, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS, START_WORDS,
-                           Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words, load_facts,
-                           narrowed_question, new_set_question, new_training_question, of_this_model,
+from ...step_facts import (CANCEL, CONTINUING, FIT_RULES, LOAD_POSTERIOR_WORDS, NO_POSTERIOR_TEXT, NO_PRIOR_WORDS,
+                           START_WORDS, Fact, SelectionRow, budget_words, held_value, how_long_words, kept_words,
+                           load_facts, narrowed_question, new_set_question, new_training_question, of_this_model,
                            fit_row_problem, posterior_in_use, saved_posterior_words, set_words, stopped_words,
                            training_facts, uses_words)
 from ...widgets.artifact_picker import StorePicker
@@ -84,8 +84,8 @@ RESUME_CHOICES = (("Continue the saved simulation set if there is one", "auto"),
 NETWORK_TEXT = "Width and depth open at {} and {} each time PRISM starts. A plan can set them."
 LIMIT_TEXT = "A limit of N lets the fit run N + 1 epochs."
 LIMIT_KEPT_TEXT = "A fit that reaches the limit keeps the network of its last epoch, which may not be its best."
-EXPECTED_TEXT = ("Used only to say when the fit should end. It never limits the fit. Left blank, PRISM takes the epochs "
-                 "of the last finished training of this kind in Records.")
+EXPECTED_TEXT = ("Used only to say when the fit should end. It never limits the fit. Left blank, PRISM takes the "
+                 "epochs of the last finished training of this kind in Records.")
 NO_EARLIER_TEXT = "No earlier training of this kind: the run's page will say only when the fit cannot end before."
 NEVER_TEXT = ("No simulation set is kept or continued. A stop or a failure during simulation loses every simulation; a "
               "stop or a failure during the fit loses the fit, which cannot be tried again without simulating again; "
@@ -134,8 +134,8 @@ _PLACE = ("inference", "training")
 
 
 def _quietly(read, *args, **kwargs):
-    """What ``read`` answers, or None when it raises: a history written by hand may hold what no reading foresaw, and the
-    page's reading never raises."""
+    """What ``read`` answers, or None when it raises: a history written by hand may hold what no reading foresaw, and
+    the page's reading never raises."""
     try:
         return read(*args, **kwargs)
     except Exception:                        # noqa: BLE001 -- what cannot be read says nothing
@@ -199,7 +199,8 @@ class PosteriorPanel(StepPage):
         self._resuming = None                # the kept training a Resume is starting, until its run is dispatched
         self._last_resumed = None            # the id of the kept training this page's last Resume started
         self._kept_rows: list = []           # the list's rows as drawn: (offer, its widgets)
-        self._said_on_row: dict = {}         # a refusal said on a kept training's row, by its id, until the next reading
+        self._said_on_row: dict = {}         # a refusal said on a kept training's row, by its id, until the next
+                                             # reading
         self.switch_button = QPushButton()
         self.switch_button.clicked.connect(self._switch)
         self.head.add_action(self.switch_button)
@@ -218,8 +219,8 @@ class PosteriorPanel(StepPage):
                  help_text=HELP["num_runs"])
         form.add("run_size_cap", TickedField(IntField(config.TRAINING_RUN_SIZE, grouped=True), "Automatic", 0),
                  usual=config.TRAINING_RUN_SIZE, help_text=HELP["run_size"])
-        form.add("hidden_features", IntField(config.NSF_HIDDEN_FEATURES, grouped=True), usual=config.NSF_HIDDEN_FEATURES,
-                 help_text=HELP["flow_hidden"])
+        form.add("hidden_features", IntField(config.NSF_HIDDEN_FEATURES, grouped=True),
+                 usual=config.NSF_HIDDEN_FEATURES, help_text=HELP["flow_hidden"])
         form.add("num_transforms", IntField(config.NSF_NUM_TRANSFORMS, grouped=True), usual=config.NSF_NUM_TRANSFORMS,
                  help_text=HELP["flow_transforms"])
         form.add_sentence(NETWORK_TEXT.format(config.NSF_HIDDEN_FEATURES, config.NSF_NUM_TRANSFORMS),
@@ -314,9 +315,9 @@ class PosteriorPanel(StepPage):
 
     # ── what a page answers ──
     def main_words(self) -> str:
-        """"Load this posterior"; or, with "Only continue" and the saved set of these settings unfinished, "Continue from
-        batch N" at the batches the reading found, and with it whole "Fit again on the saved simulations"; else "Start
-        training"."""
+        """"Load this posterior"; or, with "Only continue" and the saved set of these settings unfinished, "Continue
+        from batch N" at the batches the reading found, and with it whole "Fit again on the saved simulations"; else
+        "Start training"."""
         if self.view == "load":
             return LOAD_POSTERIOR_WORDS
         reading = self._standing_reading()
@@ -386,8 +387,8 @@ class PosteriorPanel(StepPage):
         return found
 
     def _row_problem(self, key: str, minimum) -> "tuple[str, str] | None":
-        """The rule the row ``key`` breaks now, as ``problems`` gives it, by the facts' one table of a fit's rules; None for
-        none. A blank expected epochs is a choice."""
+        """The rule the row ``key`` breaks now, as ``problems`` gives it, by the facts' one table of a fit's rules; None
+        for none. A blank expected epochs is a choice."""
         row = self.form.rows[key]
         if key in _BLANK_CHOSEN and not row.widget.text().strip():
             return None
@@ -489,9 +490,9 @@ class PosteriorPanel(StepPage):
     def read_disk(self) -> None:
         """What the run history and the kept trainings offer, and what the checks need, each read by the screen; the run
         history (the last run on this computer and the last that measured its batches); and, while a prior is held and
-        the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this size, and
-        the epochs the last finished training of this kind ran: only then has it looked for one. The reading after the
-        typing stops reads neither what is offered nor what the checks need: typing makes no record."""
+        the budget passes its rules, the saved simulation sets at this budget, the run history's paces for this size,
+        and the epochs the last finished training of this kind ran: only then has it looked for one. The reading after
+        the typing stops reads neither what is offered nor what the checks need: typing makes no record."""
         if not self._lists_wait and self._screen is not None and hasattr(self._screen, "read_offers"):
             self._said_on_row = {}
             self._screen.read_offers()
@@ -537,7 +538,8 @@ class PosteriorPanel(StepPage):
                                            size={"network": network, "simulations": num_runs * width})
         try:
             spec = self.run_spec(orchestrator.build_posterior, cfg, prior, None, True, **self._stage_values())
-        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its kind has no last training
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its kind has no last
+                                             # training
             return
         # The last finished training's alone: the epochs typed are the form's, read at each drawing.
         self._expected = controller().expected_epochs(replace(spec, expected_epochs=None))
@@ -670,8 +672,8 @@ class PosteriorPanel(StepPage):
 
     def resume(self, kept, name: str = "") -> bool:
         """Start the kept training ``kept`` again, on its own record: the configuration and the prior the session holds,
-        put in use from that record, and the call naming the kept training (and the name asked for, when its record holds
-        none). True when its run was started."""
+        put in use from that record, and the call naming the kept training (and the name asked for, when its record
+        holds none). True when its run was started."""
         cfg, prior = self._held()
         if prior is None or controller().is_live():
             return False
@@ -871,8 +873,8 @@ class PosteriorPanel(StepPage):
 
     # ── the press ──
     def _read_knobs(self) -> dict:
-        """The settings the stage is handed, read through the rules: the first broken is refused, and nothing changes. The
-        epoch limit only when one is typed, and the rotation's three only when they are read."""
+        """The settings the stage is handed, read through the rules: the first broken is refused, and nothing changes.
+        The epoch limit only when one is typed, and the rotation's three only when they are read."""
         for key, (_line, said) in self.problems().items():
             raise Refusal(said, field=key)
         rows = self.form.rows
@@ -1045,7 +1047,8 @@ class PosteriorPanel(StepPage):
         record's, or the one the Resume asked for), and one row for each setting of the fit it was kept with."""
         record = getattr(kept, "config", None) or {}
         cfg, prior = self._held()
-        rows = [{"step": "training", "name": key, "label": self.form.rows[key].label_text(), "value": _plain(record[key]),
+        rows = [{"step": "training", "name": key, "label": self.form.rows[key].label_text(),
+                 "value": _plain(record[key]),
                  "origin": "kept training", "plan": None, "usual": _plain(self.form.rows[key].usual())}
                 for key, _ in _RULES if key in record]
         options = {name: _plain(record.get(name)) for name in ("chi_mode", "chi_k_pad", "chi_max_cycles",

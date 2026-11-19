@@ -1,4 +1,5 @@
-"""The devices every page is built from: the sentence set in the book face, the heading, the page with a middle that scrolls, and two columns that become one."""
+"""The devices every page is built from: the sentence set in the book face, the heading, the page with a middle that
+scrolls, and two columns that become one."""
 import html
 import math
 import re
@@ -31,8 +32,8 @@ _PIECE = re.compile(rf"[^\s{BREAK}]{{16}}(?=[^\s{BREAK}])")
 
 
 def _may_wrap(words: str) -> str:
-    """``words`` with places to break inside a long word: after a slash, an underscore or a full stop, and in what is still
-    too long between them."""
+    """``words`` with places to break inside a long word: after a slash, an underscore or a full stop, and in what is
+    still too long between them."""
     def broken(word) -> str:
         return _PIECE.sub(lambda piece: piece.group() + BREAK, BREAK_AFTER.sub(BREAK, word.group()))
 
@@ -46,7 +47,8 @@ def _ring_room() -> int:
 
 
 def bold_weight(family: str) -> int:
-    """The weight to ask for bold in a face: 600 in the lettering face, whose two files end there, 700 in a book face."""
+    """The weight to ask for bold in a face: 600 in the lettering face, whose two files end there, 700 in a book
+    face."""
     return 600 if family == design.LETTERING else 700
 
 
@@ -221,8 +223,8 @@ class Scroller(QScrollArea):
         self.setFocusPolicy(Qt.TabFocus if scrolls else Qt.NoFocus)
 
     def bring_into_view(self, part: QWidget) -> None:
-        """Scroll until the whole of ``part``, inside the body, stands in the viewport with its focus ring; the toolkit's
-        own asks a text box where its caret stands. One too high for the viewport shows its top."""
+        """Scroll until the whole of ``part``, inside the body, stands in the viewport with its focus ring; the
+        toolkit's own asks a text box where its caret stands. One too high for the viewport shows its top."""
         room = _ring_room()
         top = part.mapTo(self.body, QPoint(0, 0)).y() + self.body.y() - room
         bottom = top + part.height() + 2 * room

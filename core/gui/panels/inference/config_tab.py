@@ -15,10 +15,10 @@ were last applied, as choices; nothing else is read from the settings file, and 
 Plans stand under "Model", since a plan belongs to a model: the list of the model's plans, read again each time it
 opens and at the page's readings; what the plan shown holds, or why it cannot be used; and the three presses. Choosing
 in the list changes nothing. "Fill the forms from this plan" fills every step's form, asking first when it would
-replace a value a person typed or that was put back; with "No plan" shown it returns them to the usual values. "Save as a plan…"
-writes the settings that differ from their usual values. The plan in use is the screen's, so it outlives the session
-applying replaces; a model chosen on the form leaves no plan in use and the values as they stand. Nothing of the folder
-is read while a run is live, and the choice in the list is never remembered: every launch opens on "No plan".
+replace a value a person typed or that was put back; with "No plan" shown it returns them to the usual values. "Save as
+a plan…" writes the settings that differ from their usual values. The plan in use is the screen's, so it outlives the
+session applying replaces; a model chosen on the form leaves no plan in use and the values as they stand. Nothing of the
+folder is read while a run is live, and the choice in the list is never remembered: every launch opens on "No plan".
 """
 import math
 from dataclasses import replace
@@ -77,8 +77,8 @@ UNREADABLE_UNITS_TEXT = "The units file {} cannot be read: {}"
 NO_UNITS_TEXT = "The file {} holds no units: a units file lists them under \"# Units\"."
 #: Beside the main button while a units file chosen in the chooser is refused on its row: no start was made.
 UNITS_FILE_BLOCKS = "the units file chosen cannot be used"
-FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each at "
-                           "one frequency.")
+FREQUENCY_RESPONSE_TEXT = ("Frequency response (χ(ω)): one spontaneous recording and several driven recordings, each "
+                           "at one frequency.")
 BOUNDS_FILE_TEXT = ("Set by the bounds file: a spontaneous recording, and one driven recording when the file has a "
                     "forcing section.")
 SLOTS_TEXT = "Slots: the most driven recordings one observation can hold. Fixed in the posterior once it is trained."
@@ -101,9 +101,10 @@ NO_PARAMETERS_TEXT = "This model has no free parameters to infer, so parameter i
 NOT_LISTED_WORDS = "the model {} is not among the models"
 FORCING_WORDS = "the model {} has external forcing, so parameter inference cannot use it"
 NO_PARAMETERS_WORDS = "the model {} has no free parameters to infer, so parameter inference cannot use it"
-#: Said while the model chosen is one of your own that parameter inference can take: the place is the window's own words.
-CALIBRATION_TEXT = ("The checks are not tuned for a model of your own: read their results in {}, before you rely on its "
-                    "posterior.")
+#: Said while the model chosen is one of your own that parameter inference can take: the place is the window's own
+#: words.
+CALIBRATION_TEXT = ("The checks are not tuned for a model of your own: read their results in {}, before you rely on "
+                    "its posterior.")
 #: The words beside the main button while a field breaks a rule of the page.
 SETTING_BLOCKS = "a setting cannot be used"
 QUESTION = "Start a new session?"
@@ -538,7 +539,8 @@ class ConfigPanel(StepPage):
                     cli.units_to_factors(typed)
                 except Refusal as refused:
                     found["units"] = (f"{label('units')} typed here cannot be used: {refused.message}",) * 2
-                except Exception as error:           # noqa: BLE001 -- what a units library raises on a word it cannot read
+                except Exception as error:           # noqa: BLE001 -- what a units library raises on a word it
+                                                     # cannot read
                     found["units"] = (f"{label('units')} typed here cannot be used: {error}",) * 2
         elif self.units_choice.currentData() == OWN_UNITS and self._own_units is not None:
             # A units file of its own, whatever model it is applied with, is held to the rule of units typed here.
@@ -573,14 +575,16 @@ class ConfigPanel(StepPage):
             return lambda: held_value(draft, name)
 
         def driven(name):
-            return lambda: held_value(draft, name) if held_value(draft, "chi_mode") is True and self._chi() else NOT_HELD
+            return lambda: (held_value(draft, name) if held_value(draft, "chi_mode") is True and self._chi()
+                            else NOT_HELD)
 
         def rotation():
             value = held_value(draft, "reparam_rotate")
             return value if isinstance(value, bool) else NOT_HELD
 
         def number(key):
-            return lambda value: f"{value:g} {rows[key].unit.text()}".rstrip() if isinstance(value, float) else str(value)
+            return lambda value: (f"{value:g} {rows[key].unit.text()}".rstrip() if isinstance(value, float)
+                                  else str(value))
 
         model = getattr(draft, "model", None)
         return (SelectionRow("model", held("model"), self.model_combo.currentText, chain.model_label),
@@ -666,12 +670,12 @@ class ConfigPanel(StepPage):
         self._on_model_changed(self.model_combo.currentText())
 
     def _on_model_changed(self, model: str) -> None:
-        """A model chosen, by a person or by the list read again: its units file read again, so that a file written since
-        says its units; its units line; and the box of typed units filled from it while the units come from that file, or
-        while the box still holds what a file filled it with, so that typing them starts from the file in use. Units
-        typed here are never written over. While the box is out of sight it is filled with its signals held: the units
-        row hears that box, and a box filled out of sight is no edit of the row, so a refused units file's sentence
-        stays under the row."""
+        """A model chosen, by a person or by the list read again: its units file read again, so that a file written
+        since says its units; its units line; and the box of typed units filled from it while the units come from that
+        file, or while the box still holds what a file filled it with, so that typing them starts from the file in use.
+        Units typed here are never written over. While the box is out of sight it is filled with its signals held: the
+        units row hears that box, and a box filled out of sight is no edit of the row, so a refused units file's
+        sentence stays under the row."""
         self.form.rows["model"].kept = False
         self._model_left()
         self._units_read.pop(model, None)
@@ -719,8 +723,8 @@ class ConfigPanel(StepPage):
 
     def _choose_units_file(self) -> None:
         """"Choose a units file…": a units file of any folder, chosen in the system's file chooser and read at once with
-        the engine's own reader, becomes the units row's third choice, chosen, in place of the one it offered; nothing is
-        applied. A file that cannot be read, or whose units cannot be used, changes nothing of the row: why is said
+        the engine's own reader, becomes the units row's third choice, chosen, in place of the one it offered; nothing
+        is applied. A file that cannot be read, or whose units cannot be used, changes nothing of the row: why is said
         under it, as a refusal of the row is, until the row is edited, and beside the main button that the units file
         chosen cannot be used, no start having been made. The press takes away what an earlier press of its own said
         there, so that cancelled the row stands as it stood before that file; a refused start's sentence stays. Nothing
@@ -763,7 +767,8 @@ class ConfigPanel(StepPage):
     def _build_config(self) -> None:
         """Apply: read the fields through the rules, ask before letting go of what the session holds, and hold the new
         draft. A refusal and a kept session change nothing. The button greys as it applies: pressed by the keyboard,
-        which the ring on it says before the question can take the keyboard, it hands the keyboard on to the next step."""
+        which the ring on it says before the question can take the keyboard, it hands the keyboard on to the next
+        step."""
         follower = style.current_follower()
         by_keyboard = follower is not None and follower.target() is self.foot.main_button
         model = self.model_combo.currentText()
@@ -785,7 +790,8 @@ class ConfigPanel(StepPage):
     def _draft_of(self, model: str, values: dict) -> ConfigDraft:
         """The draft of ``model`` from what the rules read, with the kind and the rotation the form shows."""
         return ConfigDraft(
-            model=model, labels=VALID_LABELS[VALID_MODELS.index(model)], state_dep_drift=registry.state_dep_drift(model),
+            model=model, labels=VALID_LABELS[VALID_MODELS.index(model)],
+            state_dep_drift=registry.state_dep_drift(model),
             units_override=values["units"], chi_mode=self._chi(), chi_n_freqs=values["chi_n_freqs"], chi_f0=None,
             chi_freq_bounds=None, chi_k_pad=values["chi_k_pad"], chi_max_cycles=values["chi_max_cycles"],
             reparam_rotate=self.rot_choice.currentData())
@@ -1195,9 +1201,9 @@ class ConfigPanel(StepPage):
         """Fill every step with ``source``, a plan's (``plans.source_of``), as "Fill the forms from this plan" does
         and as Home's "Continue with these" does: the forms filled, then the list of plans read again and standing on
         the plan, which it holds as the plan shown, and the row drawn again, so that it says the plan shown is the plan
-        in use. A source that is no plan (a run's settings, as "Continue from batch N" fills them) leaves the list on "No
-        plan", and fills the steps of ``headings`` alone, what that run reads. ``keep_remembered`` leaves a value put
-        back from last time as it is. False, and nothing changed, while a run is live."""
+        in use. A source that is no plan (a run's settings, as "Continue from batch N" fills them) leaves the list on
+        "No plan", and fills the steps of ``headings`` alone, what that run reads. ``keep_remembered`` leaves a value
+        put back from last time as it is. False, and nothing changed, while a run is live."""
         if not plans.fill_forms(self._screen, source.values, source, keep_remembered=keep_remembered,
                                 headings=headings):
             return False

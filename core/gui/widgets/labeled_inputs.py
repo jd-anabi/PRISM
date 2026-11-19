@@ -14,7 +14,8 @@ from ..style import set_class
 COMMA_SENTENCE = "Use a point as the decimal sign."
 _WHOLE = re.compile(r"-?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)")     # read: digits, or commas where grouping puts them
 _WHOLE_KEYS = re.compile(r"-?[0-9]*")                             # typed, once its commas are taken out
-_DECIMAL_KEYS = re.compile(r"[+-]?[0-9,]*\.?[0-9,]*(?:[eE][+-]?[0-9]*)?")   # typed: a comma shows, a second point does not
+_DECIMAL_KEYS = re.compile(r"[+-]?[0-9,]*\.?[0-9,]*(?:[eE][+-]?[0-9]*)?")   # typed: a comma shows, a second point
+                                                                            # does not
 
 # These classes decide for themselves which keys they take: the toolkit's own number checks are not used, because
 # they rewrote a typed text into another number when editing ended. They also set a MINIMUM WIDTH. Qt's default
@@ -156,14 +157,15 @@ class FloatField(_NumberField):
 def reading(field, label: str) -> "str | None":
     """What is wrong with the number ``field`` holds, in a sentence, or None when it reads as a number. A comma's own
     sentence comes first, typed or told: a box that shows ``6,5`` is not blank. Then, by the row's ``label``, that it is
-    blank, or that what stands in it is no number. What it reads as is all that is read: an error a page put on the field
-    is that page's to take back, and read here it would stand after the field was mended."""
+    blank, or that what stands in it is no number. What it reads as is all that is read: an error a page put on the
+    field is that page's to take back, and read here it would stand after the field was mended."""
     text = field.text().strip()
     if not text:
         return f"{label} is blank."
     if field.value_or_none() is not None:
         return None
-    return COMMA_SENTENCE if "," in text and isinstance(field, FloatField) else f"{label} must be a number; got {text!r}."
+    return (COMMA_SENTENCE if "," in text and isinstance(field, FloatField)
+            else f"{label} must be a number; got {text!r}.")
 
 
 def number_or_blank(field, key: str):

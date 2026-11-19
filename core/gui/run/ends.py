@@ -111,13 +111,14 @@ def last_run_sentence(record: dict | None, measured: dict | None = None) -> str:
         said.append(ENDED_FOR_LACK_TEXT)
     other = None if measured is None else (measured.get("health") or {}).get("memory_peak")
     if is_size(other) and not is_size(health.get("memory_peak")):
-        said.append(f"The last run that measured its batches{_which_run(measured)}: the largest held {_gib(other)} GiB.")
+        said.append(f"The last run that measured its batches{_which_run(measured)}: the largest held "
+                    f"{_gib(other)} GiB.")
     return " ".join(said)
 
 
 def _which_run(record: dict) -> str:
-    """A run's name and when it ended or was last heard, as far as its file holds them, in brackets after a space; nothing
-    when it holds neither. The date is written whole, as a sentence writes one."""
+    """A run's name and when it ended or was last heard, as far as its file holds them, in brackets after a space;
+    nothing when it holds neither. The date is written whole, as a sentence writes one."""
     ended, heard = _moment(record.get("ended")), _moment(record.get("last_heard"))
     when = (f"ended {date_text(ended)}" if ended is not None
             else f"last heard {date_text(heard)}" if heard is not None else "")

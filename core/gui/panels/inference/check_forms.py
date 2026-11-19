@@ -4,9 +4,9 @@ rows through the rules the check's stage applies again; what a form hands its st
 run a press of a check starts, as its page describes it to the run's controller.
 
 Every check with a button has its rows here. Nothing on a check's form is remembered between launches: every row opens
-at its usual value, but a card test's network, whose usual value is step 3's form's. A row is held to its stage's own rule, called and never
-copied: the line under a field says it in the window's words, from the row's label, and a press that reaches the stage
-with it is refused in the stage's own sentence.
+at its usual value, but a card test's network, whose usual value is step 3's form's. A row is held to its stage's own
+rule, called and never copied: the line under a field says it in the window's words, from the row's label, and a press
+that reaches the stage with it is refused in the stage's own sentence.
 """
 import re
 from collections.abc import Mapping
@@ -126,8 +126,8 @@ class FormRow:
     labelled as the window's table of controls names that key unless ``label`` is handed; its ``kind`` of field (one of
     ``KINDS``), the ``usual`` value it opens at, whether it is ``folded`` among the rarely changed, its ``unit``, the
     ``least`` value its rule takes, its ``help_text``, the stage's ``rule`` it is held to ("at_least", "positive",
-    "seed", "lengths", "slots"; "" for a cell file), the stage's ``argument`` it is handed as, where that name is not the
-    key's, and for a seed the stage adds to for each of its runs, ``adds``, the row whose count those runs are."""
+    "seed", "lengths", "slots"; "" for a cell file), the stage's ``argument`` it is handed as, where that name is not
+    the key's, and for a seed the stage adds to for each of its runs, ``adds``, the row whose count those runs are."""
     setting: str
     label: str | None
     kind: str
@@ -275,9 +275,9 @@ def cell_picker(form: Form) -> "ArtifactPicker | None":
 # ── the rules ──
 def seed_problem(text: str, setting: str, *, blank: bool, added: int = 0) -> str:
     """The sentence under the field of the seed ``setting`` that holds ``text``: that it is blank (nothing, with
-    ``blank``: a seed left blank is drawn at the press), that it holds no whole number, or that it breaks the one rule of
-    a seed, which the engine's own ``require_seed`` decides, for the seed and, with ``added``, for the largest the stage
-    makes of it by adding (the bound said is then what that leaves); "" when it passes."""
+    ``blank``: a seed left blank is drawn at the press), that it holds no whole number, or that it breaks the one rule
+    of a seed, which the engine's own ``require_seed`` decides, for the seed and, with ``added``, for the largest the
+    stage makes of it by adding (the bound said is then what that leaves); "" when it passes."""
     label, words = fields.label(setting), text.strip().replace(",", "")
     if not words:
         return "" if blank else SEED_BLANK_TEXT.format(label)

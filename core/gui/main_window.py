@@ -1,8 +1,8 @@
 """The PRISM main window: the rail down its left edge and, beside it, the page of the part in sight -- Home,
 Parameter inference (the six steps over one session, each a page of its own), Records, Your own models (their list
 and the model builder), Settings and Help. The window is built with Home alone; every other part is built the first
-time it is opened, and one that cannot be built shows why in its place while the rest of the window works. The panels inside the
-parts are reused unchanged in behaviour. ``go_to`` is the one way to move between the parts; the run's state
+time it is opened, and one that cannot be built shows why in its place while the rest of the window works. The panels
+inside the parts are reused unchanged in behaviour. ``go_to`` is the one way to move between the parts; the run's state
 stands at the rail's foot."""
 import logging
 import sys
@@ -259,7 +259,8 @@ class MainWindow(QMainWindow):
         # before the first.
         self._stored = None
         self._picks = None
-        self._offers: tuple = ()                 # what the run history and the kept trainings offered at Home's last reading
+        self._offers: tuple = ()                 # what the run history and the kept trainings offered at Home's last
+                                                 # reading
         self._hears_the_screen = False           # whether the native window's changes of screen are heard yet
         self._close_at_end = False               # the close was asked for: the window closes once the run has ended
         self._ends_tries = False                 # ... asked while the run waited to be tried again: it ended the tries
@@ -346,8 +347,8 @@ class MainWindow(QMainWindow):
     def _screen_moved(self, screen) -> None:
         """The window stands on ``screen`` now: the look's two layout thresholds and the window's least size are held to
         what that screen offers, and the pages lay themselves out for it, at every text size; at the ordinary one the
-        thresholds' table keeps its own numbers. The window is not resized here: only the toolkit brings a window up to a
-        larger least size. A screen taken away with no other left comes as None and is not read."""
+        thresholds' table keeps its own numbers. The window is not resized here: only the toolkit brings a window up to
+        a larger least size. A screen taken away with no other left comes as None and is not read."""
         if screen is None:
             return
         room = _room_on_screen(screen)
@@ -1106,13 +1107,13 @@ class MainWindow(QMainWindow):
         the close is refused, which keeps PRISM and its run going until Windows ends them; with none it is accepted.
 
         A close accepted, with no run live, first takes the keyboard from whatever holds it, so that what is being typed
-        in a field is judged as leaving the field would judge it: the window's X takes no keyboard, and otherwise a limit
-        typed in Settings would be kept or lost by the order of Windows' messages. A chain of loads waiting between two
-        loads, as no run is live then, is ended, so that no load starts on a window that has closed. It then writes the
-        window's own settings, closes every other window of the program (the figure windows the pages opened among
-        them), so that the program's event loop ends, and lets go of the one-PRISM claim last, in a ``finally``: after
-        the run's last history write, and also when the settings cannot be written, since a window that has closed must
-        not keep the claim.
+        in a field is judged as leaving the field would judge it: the window's X takes no keyboard, and otherwise a
+        limit typed in Settings would be kept or lost by the order of Windows' messages. A chain of loads waiting
+        between two loads, as no run is live then, is ended, so that no load starts on a window that has closed. It then
+        writes the window's own settings, closes every other window of the program (the figure windows the pages opened
+        among them), so that the program's event loop ends, and lets go of the one-PRISM claim last, in a ``finally``:
+        after the run's last history write, and also when the settings cannot be written, since a window that has closed
+        must not keep the claim.
         Windows' end of a session takes no such care: it may give the window no time, and nothing is judged inside its
         message."""
         held = controller()

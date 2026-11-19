@@ -221,9 +221,9 @@ class Ask(QDialog):
     def _line(self, label: str, text: str, column: int, room: Sequence[str]) -> QVBoxLayout:
         """The one labelled field and, under it, the place for what is wrong with the line: as wide as the question's
         text, so that a sentence wraps there and never widens the question, and holding from the start the height of the
-        tallest of ``room``, the sentences the line's rule gives, as they wrap there in the question's own lettering (one
-        line's height with none handed in), so that the question does not move as the line is judged wrong and right.
-        The text size is the launch's, so the room is worked out once, here."""
+        tallest of ``room``, the sentences the line's rule gives, as they wrap there in the question's own lettering
+        (one line's height with none handed in), so that the question does not move as the line is judged wrong and
+        right. The text size is the launch's, so the room is worked out once, here."""
         scaled = design.scaled
         block = QVBoxLayout()
         block.setSpacing(scaled(design.GAP["field_message"]))

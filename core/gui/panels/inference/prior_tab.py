@@ -697,8 +697,8 @@ class PriorPanel(StepPage):
         against = self._candidate if self._standing is None else self._standing
         self._read["same_box"] = against is not None and _same_box(gmm, against)
         try:
-            self._read["sets_of_prior"] = [batches for _name, batches in
-                                           training_checkpoint.checkpoints_using_prior(manifest.fingerprints.get("gmm"))]
+            self._read["sets_of_prior"] = [batches for _name, batches in training_checkpoint.checkpoints_using_prior(
+                manifest.fingerprints.get("gmm"))]
         except Exception:                    # noqa: BLE001 -- sets that cannot be read say nothing of the prior
             self._read["sets_of_prior"] = None
         keys = (manifest.config or {}).get("param_keys") or []
@@ -948,12 +948,12 @@ class PriorPanel(StepPage):
         self.dispatch(orchestrator.build_prior, *args, provide_fig_sink=True, on_result=self._on_prior, **kwargs)
 
     def load_record(self, ref: str, candidate=None) -> bool:
-        """Load the saved prior ``ref`` as "Load this prior" does, with the bounds file selected, for a caller that asked
-        its own question first: the saved view shown and read, so that the list holds a record saved since by another
-        program, ``ref`` selected, the facts read, and the load started unless they block it. ``candidate`` is the
-        configuration the caller holds for it (a kept training's, rebuilt from its record), handed the load in place of
-        the page's own and put in use with the prior: it stands for the bounds while the load reads its facts, so that
-        limits typed by hand, or a file the list does not hold, need no file chosen. True when its run was started.
+        """Load the saved prior ``ref`` as "Load this prior" does, with the bounds file selected, for a caller that
+        asked its own question first: the saved view shown and read, so that the list holds a record saved since by
+        another program, ``ref`` selected, the facts read, and the load started unless they block it. ``candidate`` is
+        the configuration the caller holds for it (a kept training's, rebuilt from its record), handed the load in place
+        of the page's own and put in use with the prior: it stands for the bounds while the load reads its facts, so
+        that limits typed by hand, or a file the list does not hold, need no file chosen. True when its run was started.
         While a run is live it changes nothing: neither the view, nor the list, nor what is held."""
         if controller().is_live():
             return False

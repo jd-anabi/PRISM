@@ -50,8 +50,8 @@ class Fact:
         if self.kind not in LEADS:
             raise ValueError(f"not a marker of a fact: {self.kind!r}")
         if (self.kind in BLOCKING) != bool(self.blocks.strip()):
-            raise ValueError(f"a {self.kind!r} fact {'must hold' if self.kind in BLOCKING else 'holds no'} words beside "
-                             f"the button: {self.blocks!r}")
+            raise ValueError(f"a {self.kind!r} fact {'must hold' if self.kind in BLOCKING else 'holds no'} "
+                             f"words beside the button: {self.blocks!r}")
 
 
 def refused_facts(sentences: Iterable[str], blocks: str = "") -> tuple[Fact, ...]:
@@ -223,7 +223,8 @@ def resumed_words(device: "str | None", width: "int | None") -> str:
     return RESUMED_TEXT.format(DEVICE_WORDS[device], RESUMED_WIDTH.format(width) if width else "")
 
 
-def model_facts(*, usable_reason: str, field_facts: Sequence[Fact], plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
+def model_facts(*, usable_reason: str, field_facts: Sequence[Fact],
+                plan_lines: Sequence[Fact] = ()) -> tuple[Fact, ...]:
     """The facts of the first step: that the model chosen cannot be used, when ``usable_reason`` says why; then those of
     its fields; then what the plan in use says. Those that block come first."""
     lead = (Fact("err", usable_reason, UNUSABLE_BLOCKS),) if usable_reason else ()
@@ -268,10 +269,10 @@ STEPS_TEXT = ", each integrated over {:,} steps"
 NEVER_BUILT_TEXT = "No prior has been built on this computer yet, so the time is not known."
 NO_LENGTH_TEXT = "The last build on this computer has no length that can be read, so the time is not known."
 TOOK_TEXT = "{}: the last build on this computer took {}."
-ONE_OTHER_TEXT = ("A new prior cannot continue a saved simulation set: the saved set for this model was made with another "
-                  "prior.")
-OTHERS_TEXT = ("A new prior cannot continue a saved simulation set: the {} saved sets for this model were made with other "
-               "priors.")
+ONE_OTHER_TEXT = ("A new prior cannot continue a saved simulation set: the saved set for this model was made with "
+                  "another prior.")
+OTHERS_TEXT = ("A new prior cannot continue a saved simulation set: the {} saved sets for this model were made with "
+               "other priors.")
 #: How a posterior trained on a bounds file reads, by the kind of observation a configuration made from it has.
 READS = {"chi": "a frequency response", "forced": "a spontaneous recording and one driven recording",
          "spontaneous": "a spontaneous recording only"}
@@ -299,8 +300,8 @@ def length_words(seconds: float) -> str:
 
 def build_length(took) -> "float | None":
     """How long the last build took, in seconds, from ``took``, the run history's answer (its length and its name, or
-    None for no build): None for none, and for a length a clock set wrong gave, below nothing or past the longest a build
-    is believed to take."""
+    None for no build): None for none, and for a length a clock set wrong gave, below nothing or past the longest a
+    build is believed to take."""
     try:
         seconds = float(took[0])
     except (TypeError, ValueError, IndexError, OverflowError):
@@ -331,7 +332,8 @@ def bounds_words(params: Sequence[str], scales: Sequence[str], forcing: bool, mo
 def saved_prior_words(made: str, model: str, parameters: int, built_on: "str | None") -> str:
     """A saved prior, under its list: when it was made, its model by its name, how many parameters it was made for and
     the bounds file it was built on."""
-    return SAVED_PRIOR_TEXT.format(made, model_label(model), parameters, TYPED_BY_HAND if built_on is None else built_on)
+    return SAVED_PRIOR_TEXT.format(made, model_label(model), parameters,
+                                   TYPED_BY_HAND if built_on is None else built_on)
 
 
 def prior_in_use(label: str, built_on: "str | None", parameters: int) -> tuple[str, str]:
@@ -391,12 +393,12 @@ def prior_facts(*, view: str, needs: bool = False, bounds_error: str = "", bound
     with ``edited`` (the same file, edited since) and ``same_box`` (its parameters and their limits are the selected
     file's); with no file selected the record is compared with none, and what it was built on is said only in "In use"
     and under the list of saved priors; ``sets_of_prior``, the batches of
-    each saved simulation set made with it, None for not read. A build: ``rounds``, ``batch`` and ``stable`` give what it
-    costs, ``steps`` the steps each candidate is integrated over when they are known, any of the three None leaves the
-    cost out; ``took``, the run history's last build, how long it takes; ``sets_for_model``, the saved simulation sets of
-    the model, which a new prior cannot continue. Then ``attention``, what the configuration in use asks a person to
-    know; ``others_pending``, the sentences of the steps before it whose changes are not applied, which do not block;
-    the name's and the fields' facts; and what the plan in use says."""
+    each saved simulation set made with it, None for not read. A build: ``rounds``, ``batch`` and ``stable`` give what
+    it costs, ``steps`` the steps each candidate is integrated over when they are known, any of the three None leaves
+    the cost out; ``took``, the run history's last build, how long it takes; ``sets_for_model``, the saved simulation
+    sets of the model, which a new prior cannot continue. Then ``attention``, what the configuration in use asks a
+    person to know; ``others_pending``, the sentences of the steps before it whose changes are not applied, which do not
+    block; the name's and the fields' facts; and what the plan in use says."""
     facts = [Fact("lock", NEEDS_A_MODEL, NEEDS_A_MODEL_BLOCKS)] if needs else []
     if bounds_error:
         facts.append(Fact("err", bounds_error, bounds_blocks))
@@ -526,7 +528,8 @@ def of_this_model(diffs) -> list:
     except TypeError:
         return []
     return [one for one in held
-            if not any(isinstance(field, dict) and field.get("field") == "model" for field in getattr(one, "fields", ()) or ())]
+            if not any(isinstance(field, dict) and field.get("field") == "model"
+                       for field in getattr(one, "fields", ()) or ())]
 
 
 def _unmatched_fact(sets, differences) -> Fact:
@@ -976,10 +979,10 @@ def inference_facts(*, mode: str = "simulated", uses: str = "", narrowed_words: 
     cell chosen does not fit the configuration in use, which blocks until another is chosen. ``length``, the recording
     length typed, against ``trained``, the shortest and the longest the posterior was trained on, in seconds: outside
     them it may extrapolate, which never blocks. ``checked``: whether the cell is checked against what training saw
-    (None where nothing is checked, in the second mode). ``rows`` driven recordings against the posterior's ``slots`` (None where
-    it reads none): more block, saying how many to remove. ``blanks``: the rows left blank, each by its field key, or as
-    a sentence with its words beside the button. Then the other steps' changes not applied, the names', the fields' and
-    the plan's facts. Reads nothing, and raises on nothing a reading or a session holds."""
+    (None where nothing is checked, in the second mode). ``rows`` driven recordings against the posterior's ``slots``
+    (None where it reads none): more block, saying how many to remove. ``blanks``: the rows left blank, each by its
+    field key, or as a sentence with its words beside the button. Then the other steps' changes not applied, the names',
+    the fields' and the plan's facts. Reads nothing, and raises on nothing a reading or a session holds."""
     facts = []
     if uses:
         facts.append(Fact("info", uses))
@@ -1034,8 +1037,8 @@ def _shown_value(value) -> str:
 
 
 def pressed_reading(key: str, reading: str) -> str:
-    """What a press says of the setting ``key`` whose field reads ``reading``: a blank with the setting's usual value, as
-    the stage's own refusal of a blank names it; any other reading as it stands."""
+    """What a press says of the setting ``key`` whose field reads ``reading``: a blank with the setting's usual value,
+    as the stage's own refusal of a blank names it; any other reading as it stands."""
     return f"{reading[:-1]}{default_clause(key)}." if reading.endswith(" is blank.") else reading
 
 
@@ -1105,8 +1108,8 @@ KEPT_ROUND_TEXT = "The narrowing round {} was kept after epoch {} with these set
 NEW_ROUND_TEXT = ("Resume it from the list on this page to train on from there. A new round starts its fit from the "
                   "first epoch, leaves the kept one as it is, and takes its name.")
 #: The same, for a new round named otherwise than the kept one would name its posterior.
-NEW_ROUND_OWN_NAME_TEXT = ("Resume it from the list on this page to train on from there. A new round starts its fit from "
-                           "the first epoch and leaves the kept one as it is.")
+NEW_ROUND_OWN_NAME_TEXT = ("Resume it from the list on this page to train on from there. A new round starts its fit "
+                           "from the first epoch and leaves the kept one as it is.")
 NEW_ROUND_OTHER = "Start a new round"
 
 
@@ -1168,7 +1171,8 @@ def round_facts(*, needs: Sequence[str] = (), uses: str = "", prior_own=None, si
     the posterior made replaces the one in use. ``checks``: the two checks' line for the prior in use. ``fit``: "saved"
     or "never", how a stop of the fit ends. Then how long, the memory, the other steps' changes not applied, the names',
     the fields' and the plan's facts. Reads nothing."""
-    blocks = {"posterior": (NEEDS_A_POSTERIOR, NEEDS_A_POSTERIOR_BLOCKS), "prior": (NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS),
+    blocks = {"posterior": (NEEDS_A_POSTERIOR, NEEDS_A_POSTERIOR_BLOCKS),
+              "prior": (NEEDS_A_PRIOR, NEEDS_A_PRIOR_BLOCKS),
               "observation": (NEEDS_AN_OBSERVATION, NEEDS_AN_OBSERVATION_BLOCKS)}
     facts = [Fact("lock", *blocks[need]) for need in needs if need in blocks]
     if uses:

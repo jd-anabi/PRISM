@@ -1,5 +1,5 @@
-"""One check's page, beside the Checks list or in its place: the check's name, the sentence under it, its state line, the
-result of the record that counts, its earlier runs, and its form. The foot of the Checks list holds its "Before you
+"""One check's page, beside the Checks list or in its place: the check's name, the sentence under it, its state line,
+the result of the record that counts, its earlier runs, and its form. The foot of the Checks list holds its "Before you
 start" and its button while the page is open.
 
 The page reads nothing: the list hands it its row, its result and its earlier runs at the list's own readings, and its

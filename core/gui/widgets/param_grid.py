@@ -241,8 +241,8 @@ class ValuesGrid(QWidget):
         return bool(self._fields)
 
     def problems(self) -> list:
-        """Each thing wrong with the values typed, in a sentence, in the rows' order, each parameter by the name the grid
-        shows it under; none when they can be used."""
+        """Each thing wrong with the values typed, in a sentence, in the rows' order, each parameter by the name the
+        grid shows it under; none when they can be used."""
         if not self.is_loaded():
             return [NO_VALUES_TEXT]
         out = []

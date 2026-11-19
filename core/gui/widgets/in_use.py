@@ -41,8 +41,8 @@ class InUse(QWidget):
         """Say what the step holds: ``label``, in semibold, and ``sentence``; with no label, that it holds nothing yet,
         and ``sentence`` what it waits for."""
         self._said = IN_USE.format(label) if label else NOTHING_YET
-        self.line.setText(IN_USE.format(f"<span style='font-weight:600'>{html.escape(label, quote=False)}</span>") if label
-                          else NOTHING_YET)
+        self.line.setText(IN_USE.format(f"<span style='font-weight:600'>{html.escape(label, quote=False)}</span>")
+                          if label else NOTHING_YET)
         self.sentence.set_text(sentence)
         self.sentence.setVisible(bool(sentence))
 

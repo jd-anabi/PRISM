@@ -97,7 +97,8 @@ def _install_excepthook(parent_getter):
                 try:
                     parent = parent_getter()
                     beneath = FULL_ERROR_IN_LOG if log is not None else None
-                    ask(parent, "Error", _fitted(as_sentence(str(exc)) or UNEXPECTED_ERROR_TEXT, _room(parent), beneath), "OK",
+                    ask(parent, "Error",
+                        _fitted(as_sentence(str(exc)) or UNEXPECTED_ERROR_TEXT, _room(parent), beneath), "OK",
                         marker="err", beneath=beneath, detail="".join(traceback.format_exception(exc_type, exc, tb)))
                 finally:
                     asking.clear()

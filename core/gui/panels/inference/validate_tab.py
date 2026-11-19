@@ -1,6 +1,6 @@
-"""Step 4, Checks: every check there is, in one ruled table under its four groups, each with its role, its state and when
-it last ran, under the headline over the six deciding checks; and one page for each check, beside the table on a wide
-page or in its place on a narrow one, with "All checks" to go back.
+"""Step 4, Checks: every check there is, in one ruled table under its four groups, each with its role, its state and
+when it last ran, under the headline over the six deciding checks; and one page for each check, beside the table on a
+wide page or in its place on a narrow one, with "All checks" to go back.
 
 What the page shows is read when it is shown, when a run ends and when Records changes the store, by the screen's one
 reading of what the checks need; never while a run is live, when the page shows what it read last. A check's result,
@@ -366,7 +366,8 @@ class ValidatePanel(StepPage):
     def _waits_for_training(self) -> bool:
         """Whether a deciding check of the last reading waits for a posterior or for the simulations, which a training
         makes."""
-        return any(row.key in DECIDING and row.state in check_lineage.WAITING_FOR_TRAINING for row in self._rows() or ())
+        return any(row.key in DECIDING and row.state in check_lineage.WAITING_FOR_TRAINING
+                   for row in self._rows() or ())
 
     def _draw(self, *, read: bool) -> None:
         """The heading, the headline, the table and each check's page, from the screen's last reading of what the
@@ -644,7 +645,8 @@ class ValidatePanel(StepPage):
     def _unreadable(self) -> list:
         """The folders of the check records whose manifest the last reading could not read."""
         kept = getattr(self._screen, "checks_held", None)
-        return [Path(record.folder).name for record in (kept.records if kept is not None else ()) if not record.manifest]
+        return [Path(record.folder).name for record in (kept.records if kept is not None else ())
+                if not record.manifest]
 
     # ── what a page answers ──
     def main_words(self) -> str:
@@ -682,9 +684,9 @@ class ValidatePanel(StepPage):
         """With no check open: that nothing can be checked with no prior, the changes of the earlier steps not applied,
         and each record that cannot be read. With a check open: what its run simulates or reads, how long it took here
         last at these sizes, the memory limit and the last run for a check on the graphics card, that nothing else can
-        run meanwhile and what it writes; the earlier steps' changes; and what stops its button: its row's reason, a cell
-        file not chosen, the rules its form breaks, its name and its note; and, last, what it says of the plan in use
-        (``plan_lines``): the departures its run reads."""
+        run meanwhile and what it writes; the earlier steps' changes; and what stops its button: its row's reason, a
+        cell file not chosen, the rules its form breaks, its name and its note; and, last, what it says of the plan in
+        use (``plan_lines``): the departures its run reads."""
         others = tuple(Fact("warn", said) for said in self._others_pending() if said)
         key = self.open_key
         if key is None or not entry(key).button:
@@ -723,8 +725,8 @@ class ValidatePanel(StepPage):
 
     def plan_lines(self) -> tuple:
         """What "Before you start" says of the plan in use for the open check's run: the departures of the model and its
-        options and of the prior, which every check reads; the calibration's run alone reads the calibration's sizes too,
-        so its page alone says their departures. The line under the heading counts all three, as the step's. Reads
+        options and of the prior, which every check reads; the calibration's run alone reads the calibration's sizes
+        too, so its page alone says their departures. The line under the heading counts all three, as the step's. Reads
         nothing."""
         screen = self._screen
         if self.open_key == "calibration" or not hasattr(screen, "plan_source"):
@@ -850,8 +852,8 @@ class ValidatePanel(StepPage):
                 picker.restore_key(theirs)
 
     def _edited(self) -> None:
-        """A check's form was edited: drawn again from what the last reading holds. Nothing is read, for nothing the page
-        reads hangs on its forms; the name's own check is read after its own typing."""
+        """A check's form was edited: drawn again from what the last reading holds. Nothing is read, for nothing the
+        page reads hangs on its forms; the name's own check is read after its own typing."""
         self.redraw()
 
     def refresh_local_gates(self) -> None:
@@ -897,7 +899,8 @@ class ValidatePanel(StepPage):
 
     # ── the checks' runs ──
     def _start_band(self) -> None:
-        """The frequency band, on a configuration of its own with the frequency response, the cell chosen loaded on it."""
+        """The frequency band, on a configuration of its own with the frequency response, the cell chosen loaded on
+        it."""
         made = self._prepared("band", own=True, chi_mode=True, cell=True)
         if made is not None:
             cfg, arguments = made
@@ -905,7 +908,8 @@ class ValidatePanel(StepPage):
                           **arguments)
 
     def _start_audit(self) -> None:
-        """The audit of the prior in use, on a configuration of its own with the frequency response; it reads no cell."""
+        """The audit of the prior in use, on a configuration of its own with the frequency response; it reads no
+        cell."""
         prior = self.session.inf_prior
         made = self._prepared("audit", own=True, chi_mode=True) if prior is not None else None
         if made is not None:
@@ -1091,11 +1095,11 @@ class ValidatePanel(StepPage):
         return None if cfg is None else (cfg, arguments)
 
     def _own_config(self, *, chi_mode, cell: "str | None"):
-        """A configuration of the check's own, made as the session's was, from the step 1 settings applied and the bounds
-        file in use or the limits typed by hand, on the session configuration's device: with the frequency response
-        ``chi_mode`` (None: as the session's holds it), and the cell file ``cell`` loaded on it (None for none). A
-        refusal is shown as every refusal is, a bounds or a cell file that cannot be read as a refusal of its field, and
-        any other failure as the bug it is; None then."""
+        """A configuration of the check's own, made as the session's was, from the step 1 settings applied and the
+        bounds file in use or the limits typed by hand, on the session configuration's device: with the frequency
+        response ``chi_mode`` (None: as the session's holds it), and the cell file ``cell`` loaded on it (None for
+        none). A refusal is shown as every refusal is, a bounds or a cell file that cannot be read as a refusal of its
+        field, and any other failure as the bug it is; None then."""
         session = self.session
         held = session.cfg
         mode = bool(getattr(held, "chi_mode", False)) if chi_mode is None else bool(chi_mode)

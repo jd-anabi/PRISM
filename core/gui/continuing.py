@@ -1,5 +1,5 @@
-"""What a reopened window can offer, worked out from the run history and the kept trainings, with no toolkit, no torch and
-no reading of its own: each kept training, resumable or not and why, a narrowing round's on its own page; the newest
+"""What a reopened window can offer, worked out from the run history and the kept trainings, with no toolkit, no torch
+and no reading of its own: each kept training, resumable or not and why, a narrowing round's on its own page; the newest
 training, and the newest narrowing round, that failed or was not seen to end with its simulation set unfinished,
 continued from the batch the set holds; the same with its set whole and no kept training to resume on it, fitted
 again; and the newest that was stopped with its set unfinished, which the steps say and Home passes over. Every offer
@@ -183,8 +183,8 @@ def resume_sentence(kept, prior_label: "str | None" = None, *, around: "str | No
     prior = prior_label or GONE_PRIOR
     if getattr(kept, "region", None) is not None:
         said.append(f"It trains around {around or GONE_OBSERVATION}, narrowed from {narrowed_from or GONE_POSTERIOR}"
-                    + (f", on the simulation set {simulation} and {prior}." if isinstance(simulation, str) and simulation
-                       else f", on {prior}."))
+                    + (f", on the simulation set {simulation} and {prior}."
+                       if isinstance(simulation, str) and simulation else f", on {prior}."))
     elif isinstance(simulation, str) and simulation:
         said.append(f"It trains on the simulation set {simulation} and {prior}.")
     if resumable:
@@ -221,7 +221,8 @@ def _kept_offer(kept, runs: dict, prior_label, label, gone) -> Offer:
     prior = named("prior", "prior", lambda _kind, ref: prior_label(ref))
     loads, match = "", ()
     if region is not None:
-        around, narrowed_from = named("observation", "observation", label), named("posterior", "parent_posterior", label)
+        around, narrowed_from = (named("observation", "observation", label),
+                                 named("posterior", "parent_posterior", label))
         sentence = resume_sentence(kept, prior, around=around, narrowed_from=narrowed_from, resumable=not why)
         if around and narrowed_from and prior:
             loads = LOADS_TEXT.format(narrowed_from, prior[4:] if prior.startswith("the ") else prior, around)
@@ -304,18 +305,19 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
            prior_label: Callable[[str], "str | None"] = lambda _ident: None,
            label: Callable[[str, str], "str | None"] = lambda _kind, _ident: None,
            gone: Callable[[object], Iterable[str]] = lambda _kept: ()) -> tuple[Offer, ...]:
-    """Every offer, newest first: each kept training (``kept_rows``, read by their attributes as ``KeptFit`` holds them),
-    resumable or not, a narrowing round's on its own page; and, of the history of the records folder ``records_root``
-    (``histories``, as ``history.read`` gives them, of any records folder and any order), the newest training and the
-    newest narrowing round, each by the same rule: failed or not seen to end with a history that names its settings and
-    its bounds file (a round's, its parent posterior and its observation too), it offers to continue from the batch its
-    set holds (``set_batches``, the set's own count by its folder as the history holds it, its whole path, None for no
-    set), or, its set whole and no kept training on that set to resume, to fit again; stopped with its set unfinished, it
-    offers what the steps alone say. A later run of the same word of that folder, whatever its end, leaves an earlier one
-    nothing; a run of the other word does not count. ``prior_label`` names a kept training's prior by its id, as a
-    sentence names it, None for one no longer in Records; ``label`` names a kept narrowing round's observation and
-    parent posterior by their kind and id, the same way; ``gone`` says, in sentences, what of the records a kept
-    training's Resume loads is no longer in Records, and a kept training it says any of offers no Resume."""
+    """Every offer, newest first: each kept training (``kept_rows``, read by their attributes as ``KeptFit`` holds
+    them), resumable or not, a narrowing round's on its own page; and, of the history of the records folder
+    ``records_root`` (``histories``, as ``history.read`` gives them, of any records folder and any order), the newest
+    training and the newest narrowing round, each by the same rule: failed or not seen to end with a history that names
+    its settings and its bounds file (a round's, its parent posterior and its observation too), it offers to continue
+    from the batch its set holds (``set_batches``, the set's own count by its folder as the history holds it, its whole
+    path, None for no set), or, its set whole and no kept training on that set to resume, to fit again; stopped with its
+    set unfinished, it offers what the steps alone say. A later run of the same word of that folder, whatever its end,
+    leaves an earlier one nothing; a run of the other word does not count. ``prior_label`` names a kept training's prior
+    by its id, as a sentence names it, None for one no longer in Records; ``label`` names a kept narrowing round's
+    observation and parent posterior by their kind and id, the same way; ``gone`` says, in sentences, what of the
+    records a kept training's Resume loads is no longer in Records, and a kept training it says any of offers no
+    Resume."""
     records = [record for record in histories if isinstance(record, dict)]
     kept_rows = list(kept_rows)
     newest, runs = [], {}

@@ -280,13 +280,13 @@ def next_step(session, states, *, run=None, picks=None, offers=(), checks=None) 
     attributes; None for none). The first that holds decides, for a run with a place: a live run needs someone (its
     reason, and the button goes to it); a run is live (nothing until it ends: it is running, stopping or waiting to be
     tried again); a run has ended and nobody has seen how (how and when it ended and what it kept, and the button opens
-    its page and acknowledges it: "See the result" for a finished run, "Go to the run" for a stopped one, "See what happened" for a
-    failure or a run not seen to end; but for a failure or a run not seen to end that something is offered for, the
-    button takes the offer and "See what happened" stands beside it). Then the newest offer that can be taken, a
-    run stopped with its set unfinished passed over: continue a training or a narrowing round, fit it again, resume a
-    kept training, or for a kept narrowing round the page that lists it. Then, with no model chosen and a model in use
-    last time, what was in use last time, which the button applies and loads, staying on Home. Then the step in hand
-    among ``states``, which reads the steps in their order (no model, no prior, no posterior, a deciding check that
+    its page and acknowledges it: "See the result" for a finished run, "Go to the run" for a stopped one, "See what
+    happened" for a failure or a run not seen to end; but for a failure or a run not seen to end that something is
+    offered for, the button takes the offer and "See what happened" stands beside it). Then the newest offer that can be
+    taken, a run stopped with its set unfinished passed over: continue a training or a narrowing round, fit it again,
+    resume a kept training, or for a kept narrowing round the page that lists it. Then, with no model chosen and a model
+    in use last time, what was in use last time, which the button applies and loads, staying on Home. Then the step in
+    hand among ``states``, which reads the steps in their order (no model, no prior, no posterior, a deciding check that
     applies still open, no observation); otherwise nothing is waiting, and the narrowing round is offered, or Records
     once the posterior in use is a narrowed one."""
     place = getattr(run, "place", None)

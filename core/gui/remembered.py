@@ -161,9 +161,9 @@ def _observation_loads(manifest, *, model: str, param_keys, kind) -> bool:
 
 
 def last_plan(model: str, name: str, *, plans_folder=None):
-    """The plan ``name`` last used with ``model``, read and checked as step 1 reads a plan, in the model's folder of plans
-    under ``plans_folder`` (the window's folder of plans unless one is handed), found without regard to case and named
-    as the folder lists it: None when there is no name, or the plan is gone or has problems."""
+    """The plan ``name`` last used with ``model``, read and checked as step 1 reads a plan, in the model's folder of
+    plans under ``plans_folder`` (the window's folder of plans unless one is handed), found without regard to case and
+    named as the folder lists it: None when there is no name, or the plan is gone or has problems."""
     from core import plans as engine_plans
     from . import plans
     folder = plans.model_folder(plans.PLAN_FOLDER if plans_folder is None else plans_folder, model)

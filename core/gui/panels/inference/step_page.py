@@ -92,11 +92,11 @@ class _Column(QWidget):
 
 class StepPage(RunHost, QWidget):
     """The four regions of a step, on the look's ``Page``, over a stack that holds them and the run's page. ``head``,
-    ``in_use``, ``form`` and ``foot`` are the regions; ``controls``, what a run locks, is the form; the stale flag says a
-    reading is owed."""
+    ``in_use``, ``form`` and ``foot`` are the regions; ``controls``, what a run locks, is the form; the stale flag says
+    a reading is owed."""
 
-    #: Whether the page has anything saved to read, asked at every drawing: a page answers False, or a property of its own
-    #: when what it holds decides that, and its foot leaves out the line of when it read and "Check again".
+    #: Whether the page has anything saved to read, asked at every drawing: a page answers False, or a property of its
+    #: own when what it holds decides that, and its foot leaves out the line of when it read and "Check again".
     reads_the_disk = True
 
     def __init__(self, screen, title: str, sentence: str, *, step: str, parent=None):
@@ -109,7 +109,8 @@ class StepPage(RunHost, QWidget):
         self._head_fact: Fact | None = None
         self._live = controller().is_live()
         self._by_keyboard = False            # the last press was made by the keyboard, until its run is over
-        self._hand_back = False              # a load pressed by the keyboard failed: its question gives the keyboard back
+        self._hand_back = False              # a load pressed by the keyboard failed: its question gives the keyboard
+                                             # back
         self._load_from = None               # where the figures of the load in hand begin, while it runs
         self._build_from = None              # the same, for a run that keeps the figures until its record returns
         self._link_withdrawn = False         # a load returned its record since the last run that took the column
@@ -122,7 +123,8 @@ class StepPage(RunHost, QWidget):
         self.head = PageHead(title, sentence)
         self.help_button = QPushButton(style.access_key(HELP_TEXT))
         self.help_button.setIcon(painted_icon("help"))
-        self.help_button.setIconSize(QSize(design.scaled(design.SIZE["marker"]) + design.scaled(design.SIZE["icon_gap"]),
+        self.help_button.setIconSize(QSize(design.scaled(design.SIZE["marker"])
+                                           + design.scaled(design.SIZE["icon_gap"]),
                                            design.scaled(design.SIZE["marker"])))
         self.help_button.clicked.connect(self._help_pressed)
         self.head.add_action(self.help_button)
@@ -219,8 +221,8 @@ class StepPage(RunHost, QWidget):
         return controller().now()
 
     def _new_run_page(self) -> RunView:
-        """A run's page takes the place of the form, so it brings the room for a focus ring as every part of a page does,
-        and stands at the heading's edges."""
+        """A run's page takes the place of the form, so it brings the room for a focus ring as every part of a page
+        does, and stands at the heading's edges."""
         view = super()._new_run_page()
         room = _ring_room()
         view.setContentsMargins(room, 0, room, 0)
@@ -277,9 +279,9 @@ class StepPage(RunHost, QWidget):
         return self.form.first_control() if self.form.isEnabled() else None
 
     def order_the_keys(self) -> None:
-        """The Tab key's order, as the page is read: the heading's buttons, the run's page, which stands in place of what
-        comes next, what stands over the form, the result's stops, the form, then what scrolls while it scrolls, and
-        the foot. Figures stand on the run's page or over the form, so they follow both. Widgets take their turn as
+        """The Tab key's order, as the page is read: the heading's buttons, the run's page, which stands in place of
+        what comes next, what stands over the form, the result's stops, the form, then what scrolls while it scrolls,
+        and the foot. Figures stand on the run's page or over the form, so they follow both. Widgets take their turn as
         they come to the window, and a page adds its rows after this page is built, so the order is set here, once
         they stand, as a page first comes into sight, and again as a row joins the form, a figure joins the stack or a
         stop joins the result, its table's block among them. A part that is a stop only at times has its place all the
@@ -353,9 +355,9 @@ class StepPage(RunHost, QWidget):
         leaves a choice "Changed, not applied"."""
 
     def use_form(self, form: Form) -> None:
-        """Hand the foot and the keys ``form``, the one in sight on a page that holds several: what a run locks, what the
-        main button reads and where the keyboard goes, with its edits and its rows heard, once. A run locks every form
-        a page has handed, whichever is in sight; one handed while a run is live is locked as it is handed."""
+        """Hand the foot and the keys ``form``, the one in sight on a page that holds several: what a run locks, what
+        the main button reads and where the keyboard goes, with its edits and its rows heard, once. A run locks every
+        form a page has handed, whichever is in sight; one handed while a run is live is locked as it is handed."""
         if form is self.form:
             return
         for said, heard in ((self.form.edited, self._edited), (self.form.joined, self._a_stop_joined)):
@@ -522,8 +524,8 @@ class StepPage(RunHost, QWidget):
 
     def _status_heard(self, status) -> None:
         """A run began or ended, or a start was taken back, which says no ``run_ended``. What follows from it is drawn
-        again, and on any status of no run live: a start taken back at its first drawing never said it was live, and left
-        the page drawn as if it were. A change to no run live reads, once the end of the run has had its say."""
+        again, and on any status of no run live: a start taken back at its first drawing never said it was live, and
+        left the page drawn as if it were. A change to no run live reads, once the end of the run has had its say."""
         changed = status.live != self._live
         self._live = status.live
         if changed or not status.live:
@@ -549,8 +551,8 @@ class StepPage(RunHost, QWidget):
 
     def _main_clicked(self) -> None:
         """The press: the reading that counts, then the page's own, unless that reading found something that blocks,
-        which greys the button and says so beside it. A press is by the keyboard when the ring stands on the button as it
-        is pressed, which is the window's own test for Enter. It is remembered while the run it started lives, and no
+        which greys the button and says so beside it. A press is by the keyboard when the ring stands on the button as
+        it is pressed, which is the window's own test for Enter. It is remembered while the run it started lives, and no
         longer: a press that started none, greyed by its reading or answered "keep", ends with itself."""
         follower = style.current_follower()
         self._by_keyboard = follower is not None and follower.target() is self.foot.main_button
@@ -564,17 +566,17 @@ class StepPage(RunHost, QWidget):
 
     @reported()
     def _focus_moved(self, before, now) -> None:
-        """The keyboard moved, in any window. A move from one control to another of this page's own window is brought into
-        view once what moved it has been laid out. One that comes from no control or goes to none is the window going to
-        the back or coming to the front; one from another window, or to it, is a box or a figure's window giving the
-        keyboard back or taking it; and one between two controls of another window happens in that window alone: none of
-        them moved it on the page, so a page scrolled away with the wheel stays where it was."""
+        """The keyboard moved, in any window. A move from one control to another of this page's own window is brought
+        into view once what moved it has been laid out. One that comes from no control or goes to none is the window
+        going to the back or coming to the front; one from another window, or to it, is a box or a figure's window
+        giving the keyboard back or taking it; and one between two controls of another window happens in that window
+        alone: none of them moved it on the page, so a page scrolled away with the wheel stays where it was."""
         if before is not None and now is not None and before.window() is now.window() is self.window():
             QTimer.singleShot(0, self, self._keyboard_into_view)
 
     def _keyboard_into_view(self) -> None:
-        """The control that holds the keyboard in this window, whole, in the viewport, on a page in sight, if it stands in
-        the body."""
+        """The control that holds the keyboard in this window, whole, in the viewport, on a page in sight, if it stands
+        in the body."""
         held = self.window().focusWidget()
         if held is not None and self.isVisible() and self.scroller.body.isAncestorOf(held):
             QApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)   # a fold, or the foot, may be growing yet
@@ -716,4 +718,5 @@ class StepPage(RunHost, QWidget):
         target = row.focus_target()
         if target is not None and self.isVisible():
             target.setFocus(Qt.OtherFocusReason)
-            QTimer.singleShot(0, self, self._keyboard_into_view)  # it may hold the keyboard already, with no move to hear
+            QTimer.singleShot(0, self, self._keyboard_into_view)  # it may hold the keyboard already, with no move to
+                                                                  # hear

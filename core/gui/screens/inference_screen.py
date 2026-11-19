@@ -138,10 +138,10 @@ def _completed(text: "str | None") -> "datetime | None":
 
 
 def _the_sets_training(simulation: "str | None") -> tuple:
-    """Of the simulation set whose id is ``simulation``, as the run history holds its runs: the comparison with the audit
-    the newest training or narrowing round of it keeps, with the answers given to it and that run's id (None for none),
-    and whether any run of the history names the set. A reading of the run history, by the set's id: the screen makes
-    it only with no run live."""
+    """Of the simulation set whose id is ``simulation``, as the run history holds its runs: the comparison with the
+    audit the newest training or narrowing round of it keeps, with the answers given to it and that run's id (None for
+    none), and whether any run of the history names the set. A reading of the run history, by the set's id: the screen
+    makes it only with no run live."""
     if not simulation:
         return None, False
     from ..run import history
@@ -638,17 +638,18 @@ class InferenceScreen(QWidget):
         return found
 
     def continue_from(self, offer, where: str = "home") -> "LoadChain | None":
-        """"Continue from batch N", or "Fit again on the saved simulations", for the training of the run ``offer`` names,
-        after a reopening: its history read again, asked first when the session holds a record, then step 1 applied with
-        the model and the options the run was started with, the Training step's forms filled from its settings once the
-        model stands, its bounds file selected and its prior loaded by step 2's own load, and, once the prior is loaded,
-        the Training step set to continue: "Only continue", the name and the note blank with the earlier name as the
-        hint. The press is the next press: what an earlier press left under a heading goes first. Its prior and its
-        bounds file are read then: one gone is said under the Training step's heading, the step shown with its form when
-        ``where``, the place the press was made, is "home" (a past view of the Training step, "training", stands where
-        it is and says it too), and nothing is let go. Once the step is shown, its form is in sight, not the page of a
-        run that is over. The chain of loads is handed back; None when nothing started: a run live, a history gone or no
-        longer naming its settings, its prior or its bounds file gone, or the question answered "Keep this session"."""
+        """"Continue from batch N", or "Fit again on the saved simulations", for the training of the run ``offer``
+        names, after a reopening: its history read again, asked first when the session holds a record, then step 1
+        applied with the model and the options the run was started with, the Training step's forms filled from its
+        settings once the model stands, its bounds file selected and its prior loaded by step 2's own load, and, once
+        the prior is loaded, the Training step set to continue: "Only continue", the name and the note blank with the
+        earlier name as the hint. The press is the next press: what an earlier press left under a heading goes first.
+        Its prior and its bounds file are read then: one gone is said under the Training step's heading, the step shown
+        with its form when ``where``, the place the press was made, is "home" (a past view of the Training step,
+        "training", stands where it is and says it too), and nothing is let go. Once the step is shown, its form is in
+        sight, not the page of a run that is over. The chain of loads is handed back; None when nothing started: a run
+        live, a history gone or no longer naming its settings, its prior or its bounds file gone, or the question
+        answered "Keep this session"."""
         from ..run import history
         if controller().is_live() or offer is None or not offer.run:
             return None
@@ -894,11 +895,11 @@ class InferenceScreen(QWidget):
                    candidate=None, press: str = "", where: str = ""):
         """Step 1 applied with ``model`` and ``options``, asking nothing (``ConfigPanel.apply_quietly``, which calls
         ``fill`` once the model stands on the form), ``bounds_file`` then selected in step 2's list when one is named,
-        and the saved ``prior`` loaded by step 2's own "Load this prior", then, once it has returned its record, the saved
-        ``posterior`` by step 3's, then, once that has returned its record, the saved ``observation`` by the narrowing
-        round's load: a chain of loads, started and handed back. A load that does not start or does not finish ends the
-        chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while another goes,
-        starts nothing, and the chain stops at once. ``candidate``
+        and the saved ``prior`` loaded by step 2's own "Load this prior", then, once it has returned its record, the
+        saved ``posterior`` by step 3's, then, once that has returned its record, the saved ``observation`` by the
+        narrowing round's load: a chain of loads, started and handed back. A load that does not start or does not finish
+        ends the chain, and what came before it stays. A step 1 that cannot be applied, or a chain asked for while
+        another goes, starts nothing, and the chain stops at once. ``candidate``
         is the configuration the prior is loaded with, when the caller holds one (a kept training's, rebuilt from its
         record), else step 2 builds its own. With ``press``, the words of the button that asked for the chain, a chain
         that stops before its end says so under the heading of ``where``, the place the press opened ("home", or a

@@ -126,8 +126,8 @@ class Facts(QWidget):
 
 
 class Foot(QWidget):
-    """The foot of a page. ``main_button`` is the page's one main button, ``check_again`` reads the facts again, ``reason``
-    says why the button is greyed, ``go_to_run`` is said when "Go to the run" is pressed."""
+    """The foot of a page. ``main_button`` is the page's one main button, ``check_again`` reads the facts again,
+    ``reason`` says why the button is greyed, ``go_to_run`` is said when "Go to the run" is pressed."""
 
     go_to_run = Signal()
 
@@ -201,8 +201,8 @@ class Foot(QWidget):
         self.reading.setText(words)
 
     def set_reads(self, on: bool) -> None:
-        """Whether the page has anything saved to read: with nothing, no line says when it was read, and nothing offers to
-        read it again."""
+        """Whether the page has anything saved to read: with nothing, no line says when it was read, and nothing offers
+        to read it again."""
         self.reading.setVisible(on)
         self.check_again.setVisible(on)
 

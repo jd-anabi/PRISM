@@ -16,10 +16,10 @@ class Choice(QComboBox):
     its items change: left to the toolkit that is worked out once, as it is first shown, and an item added later is
     cut mid-letter where the chevron's box begins.
 
-    ``most`` caps that width, in the look's pixels at the ordinary text size, for a list whose items a person names, as a
-    file's or a record's name: the item shown is cut short in its middle, with the whole of it in the tip, and the list
-    opens as wide as its longest item. A page never scrolls sideways for a long name. A form that has not the room for
-    a list's longest item beside its label holds it to the room it has (``hold_to``), cut short the same way."""
+    ``most`` caps that width, in the look's pixels at the ordinary text size, for a list whose items a person names, as
+    a file's or a record's name: the item shown is cut short in its middle, with the whole of it in the tip, and the
+    list opens as wide as its longest item. A page never scrolls sideways for a long name. A form that has not the room
+    for a list's longest item beside its label holds it to the room it has (``hold_to``), cut short the same way."""
 
     def __init__(self, parent=None, *, most: "int | None" = None) -> None:
         super().__init__(parent)

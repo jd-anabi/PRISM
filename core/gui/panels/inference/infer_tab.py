@@ -519,7 +519,8 @@ class InferPanel(StepPage):
 
     def _driven_lines(self) -> tuple:
         """Each driven recording's line: what stops it from being run; else what the planner last read of it, while the
-        row holds what it held then; else nothing. Whether any is incomplete, and whether any the engine would refuse."""
+        row holds what it held then; else nothing. Whether any is incomplete, and whether any the engine would
+        refuse."""
         incomplete = refused = False
         for row in self.driven.rows():
             problem = row.problem()
@@ -578,7 +579,8 @@ class InferPanel(StepPage):
                                narrowed_words=(self._observation_label or NO_OBSERVATION_WORDS) if narrowed else "",
                                cell_problem=cell_problem, length=self.form.rows["t_obs"].value() if shown else None,
                                trained=trained_lengths(posterior, cfg) if posterior is not None else None,
-                               checked=self._prior_handed() is not None if simulated and posterior is not None else None,
+                               checked=(self._prior_handed() is not None if simulated and posterior is not None
+                                        else None),
                                slots=posterior_slots(posterior, cfg) if chi else None,
                                rows=len(self.driven.rows()) if chi else 0, blanks=blank,
                                others_pending=self._others_pending(), name_facts=names, field_facts=field_facts,
@@ -793,8 +795,8 @@ class InferPanel(StepPage):
         return self.dispatch(orchestrator.experimental_inference, cfg, posterior, rec, **common)
 
     def run_spec(self, fn, *args, **kwargs) -> RunSpec:
-        """An inference, of a simulated cell or of recordings: it writes an observation and the inference made on it, and
-        its run's history keeps what it was started with and the plan in use."""
+        """An inference, of a simulated cell or of recordings: it writes an observation and the inference made on it,
+        and its run's history keeps what it was started with and the plan in use."""
         if fn not in (orchestrator.simulated_inference, orchestrator.experimental_inference):
             return super().run_spec(fn, *args, **kwargs)
         plan = self._screen.plan_entry() if hasattr(self._screen, "plan_entry") else None
@@ -953,7 +955,8 @@ class InferPanel(StepPage):
                                           saved_as=getattr(observation, "name", "") or ""))
         region.set_pictures(_pictures(inference) + _pictures(observation, first=False))
         narrow = narrows_around(self._held()[1], getattr(observation, "digest", None))
-        region.set_next_steps(((NextStep(NARROW_WORDS, "narrowing", {"observation": observation.id}),) if narrow else ())
+        region.set_next_steps(((NextStep(NARROW_WORDS, "narrowing", {"observation": observation.id}),)
+                               if narrow else ())
                               + (NextStep(ANOTHER_WORDS, self.step),))
 
     def _next_step_pressed(self, step) -> None:

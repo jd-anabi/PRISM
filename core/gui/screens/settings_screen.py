@@ -250,8 +250,8 @@ class SettingsScreen(QWidget):
         self._show_limit()
 
     def _say_kept(self, kept: bool) -> None:
-        """The last write reached the settings file, or it did not: the line follows the answer. A line that has just come
-        is brought into sight, since it stands at the foot of a page that scrolls."""
+        """The last write reached the settings file, or it did not: the line follows the answer. A line that has just
+        come is brought into sight, since it stands at the foot of a page that scrolls."""
         coming = not kept and self.not_kept.isHidden()
         self.not_kept.setVisible(not kept)
         if coming:

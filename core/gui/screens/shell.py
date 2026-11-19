@@ -33,8 +33,8 @@ def as_sentence(message: str) -> str:
     apostrophe or a hyphen between two of them counted in ("can't", "non-finite"), that starts with a small one; any
     other start is kept as it was raised, so that a name in code, a path, a number or a quotation is shown as it is.
     A message that holds no word outside its quotations -- a missing key's name, as one is raised -- follows the
-    general sentence, ``UNEXPECTED_ERROR_TEXT`` with a colon for its stop. A full stop at its end when it ends without a mark
-    that ends a sentence; nothing else of it changes. An empty message stays empty. The last-resort question writes
+    general sentence, ``UNEXPECTED_ERROR_TEXT`` with a colon for its stop. A full stop at its end when it ends without a
+    mark that ends a sentence; nothing else of it changes. An empty message stays empty. The last-resort question writes
     its sentence with this too."""
     text = message.rstrip()
     if not text:

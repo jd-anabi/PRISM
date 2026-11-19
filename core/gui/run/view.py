@@ -948,10 +948,10 @@ class RunView(QWidget):
         self._draw()
 
     def stops(self) -> list:
-        """What the Tab key stops at on this page before its figures, as it is read: the buttons at its head, what its end
-        offers, and what scrolls."""
-        return [self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button, self.stop_trying_button,
-                self.back_button, self.keep_button, self.discard_button, self.failure_message,
+        """What the Tab key stops at on this page before its figures, as it is read: the buttons at its head, what its
+        end offers, and what scrolls."""
+        return [self.text_button, self.stop_button, self.withdraw_button, self.keep_open_button,
+                self.stop_trying_button, self.back_button, self.keep_button, self.discard_button, self.failure_message,
                 self.full_error_button, self.full_error, self.continue_button, self.resume_button,
                 self.discard_kept_button, self.comparison_stop_button, self.keep_training_button, self.body]
 

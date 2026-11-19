@@ -106,9 +106,9 @@ class RunSpec:
     what is known before the run says it ("rotated": False for a training with no rotation; "memory_limit": the graphics
     card's limit in GiB; "memory_source": where that limit was set, as the history keeps it; "computer": this computer's
     name; "cadence": the batches between two saves of a simulation set the run continues; "keeps_nothing": True for a
-    check that keeps nothing but its result, whose training is never kept and is not said to be; "uncompared": True for a
-    run read back from a history that kept no comparison with the audit, as every history written before runs kept one:
-    its total is said, not compared)."""
+    check that keeps nothing but its result, whose training is never kept and is not said to be; "uncompared": True for
+    a run read back from a history that kept no comparison with the audit, as every history written before runs kept
+    one: its total is said, not compared)."""
     word: str
     place: tuple[str, str | None]
     name: str = ""

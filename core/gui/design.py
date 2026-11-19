@@ -100,7 +100,8 @@ GAP = {                           # the spaces between the blocks of a page, top
     "message": (10, 4, 0, 4), "message_marker": 10, "message_marker_drop": 3,
     "gate_rows": 5, "gate_action": 9, "gate_above": 12, "action": 12, "action_why": 4,
     "status": (12, 10), "stages": (36, 6), "stage_parts": 7, "now": (8, 4), "axis_key": 8, "status_to_body": 12,
-    "run_columns": (668, 354, 16), "health_columns": (118, 56), "figure_inset": 28, "caption_inset": 8, "figure_caption": 6, "trace_caption": 4,
+    "run_columns": (668, 354, 16), "health_columns": (118, 56), "figure_inset": 28, "caption_inset": 8,
+    "figure_caption": 6, "trace_caption": 4,
     "block": 14, "side_block": 10, "head_table": 6, "switch": 16,
     "rail_group": 12,
 }
@@ -114,9 +115,10 @@ AXIS = {                          # the time axis, as painted
 }
 DIALOG = {"w": 448, "pad": (20, 16, 20, 18), "gap": 16, "marker": 24, "marker_gap": 14, "marker_drop": 1}
 FIGURE = {                        # figures: margins round the axes in pixels; the rest follows the widget's size
-    "loss":  {"h": 282, "min_w": 280, "left": 60, "top": 12, "right": 80, "bottom": 42, "x_name_drop": 38, "tick_pad": 5},
-    "trace": {"h": 100, "min_w": 240, "left": 40, "top": 18, "right": 12, "bottom": 34, "x_name_drop": 31, "tick_pad": 4,
-              "y_name_above": True},
+    "loss":  {"h": 282, "min_w": 280, "left": 60, "top": 12, "right": 80, "bottom": 42, "x_name_drop": 38,
+              "tick_pad": 5},
+    "trace": {"h": 100, "min_w": 240, "left": 40, "top": 18, "right": 12, "bottom": 34, "x_name_drop": 31,
+              "tick_pad": 4, "y_name_above": True},
     "tick": 5, "axis_w": 1, "line_w": 2, "y_name_gap": 10, "y_name_sink": 2, "y_name_lift": 8, "line_label_gap": 8,
     "best_mark": 9, "note_x": 12,
 }
@@ -281,7 +283,8 @@ def _windows_text_scale():
 
         def method(pointer, slot, restype, *argtypes):
             table = ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            entry = ctypes.cast(table + slot * ctypes.sizeof(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)).contents.value
+            entry = ctypes.cast(table + slot * ctypes.sizeof(ctypes.c_void_p),
+                                ctypes.POINTER(ctypes.c_void_p)).contents.value
             return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(entry)
 
         second = ctypes.c_void_p()           # the interface that carries the text size

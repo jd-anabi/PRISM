@@ -46,10 +46,10 @@ def _stops_of(part: QWidget) -> list:
 
 
 class ListAndDetail(QWidget):
-    """``listing`` and the detail ``show_detail`` hands it. The listing answers ``set_narrow(on)``: told True while a detail
-    is open, it shows less of itself; and it may answer ``take_the_keyboard(detail)``, putting the keyboard on the row
-    of ``detail`` and saying True, which "All checks" asks when it held the keyboard, else the list's first stop takes
-    it. ``back_pressed`` is said when the link above a detail in the list's place is pressed, once the whole list
+    """``listing`` and the detail ``show_detail`` hands it. The listing answers ``set_narrow(on)``: told True while a
+    detail is open, it shows less of itself; and it may answer ``take_the_keyboard(detail)``, putting the keyboard on
+    the row of ``detail`` and saying True, which "All checks" asks when it held the keyboard, else the list's first stop
+    takes it. ``back_pressed`` is said when the link above a detail in the list's place is pressed, once the whole list
     stands again. ``switched`` is said when the detail moves between beside the list and its place, which changes what
     the Tab key stops at."""
 
@@ -106,8 +106,8 @@ class ListAndDetail(QWidget):
 
     def _arrange(self) -> None:
         """Beside where the width holds both, else in the list's place; the whole list with no detail. Beside, the list
-        is held at the width it asks for, told narrow, and the detail takes the rest, which it is told, as it is told the
-        whole width in the list's place. The detail's least width is read as it would stand beside, told that room
+        is held at the width it asks for, told narrow, and the detail takes the rest, which it is told, as it is told
+        the whole width in the list's place. The detail's least width is read as it would stand beside, told that room
         first, so that one width gives one arrangement, however the window came to it and whatever the detail was told
         before."""
         was = self.beside()

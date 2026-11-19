@@ -1,6 +1,6 @@
 """What makes a page the host of a run: ``dispatch``, which asks the process's run controller to run a callable on a
-background worker, described by the page's own ``run_spec``; the set of pages every run locks; and the moves of the run's
-page in and out of the page's column, its figures with it.
+background worker, described by the page's own ``run_spec``; the set of pages every run locks; and the moves of the
+run's page in and out of the page's column, its figures with it.
 
 ``RunHost`` is a mixin, and stands first in a page's bases, before its toolkit class. It declares no signal and has no
 ``__init__``: a page calls ``_enrol`` right after its toolkit class is built. A page holds ``results``, a stack that
@@ -52,8 +52,8 @@ class RunHost:
         self.destroyed.connect(lambda *_: enrolled.discard(held()) if held() is not None else None)
 
     def _new_run_page(self) -> RunView:
-        """A run's page for this page's stack, the run's own and the past view alike: made here, so that what a page does
-        to one it does to both."""
+        """A run's page for this page's stack, the run's own and the past view alike: made here, so that what a page
+        does to one it does to both."""
         return RunView()
 
     def own_line(self, text: str, level: str = "info") -> None:

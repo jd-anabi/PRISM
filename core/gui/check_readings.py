@@ -395,8 +395,8 @@ NARROWED_COMPARISON_TEXT = "The audit measured the whole prior; this round simul
 ACCEPT_WORDS = "Accept this difference"
 NO_HISTORY_TEXT = ("This simulation set was made outside the window: there is no run history to keep the acceptance "
                    "in.")
-NO_COMPARISON_TEXT = ("The trainings of this simulation set ran before the window kept their comparison with the audit, "
-                      "so there is none to accept the difference into.")
+NO_COMPARISON_TEXT = ("The trainings of this simulation set ran before the window kept their comparison with the "
+                      "audit, so there is none to accept the difference into.")
 KEPT_TRAINING_TEXT = "You chose to keep training on {}."
 #: The comparison's table: the simulation set and the audit, each its share, the driven recordings counted, the batches
 #: and the median and the range of the share across its batches.
@@ -641,7 +641,8 @@ def _calibration_sentence(name, word, body, _manifest, *, others_open, **_given)
         ranks = (f"{RANKS_ALL_TEXT.format(len(parameters))}, {'and' if joint else 'but'} the joint coverage test "
                  f"{JOINT_WORDS[joint]}.")
     seed = results.get("seed")
-    made = CALIBRATION_MADE_TEXT.format(number_text(_whole(results["n_cal"])), number_text(_whole(results["cal_n_scales"])),
+    made = CALIBRATION_MADE_TEXT.format(number_text(_whole(results["n_cal"])),
+                                        number_text(_whole(results["cal_n_scales"])),
                                         SEED_TEXT.format(seed) if isinstance(seed, int) and not isinstance(seed, bool)
                                         else "")
     said = [SHORT_TEXT.format(name, word), ranks, made]
@@ -772,8 +773,9 @@ def comparison_table(*, unusable: int, total: int, batches, audit: "Mapping | No
         body = _body(audit)
         results, settings = body["results"], body["settings"]
         shares = [_real(value) * 100 for value in ((results.get("per_batch") or {}).get("fractions") or ())]
-        rows.append((AUDIT_ROW, f"{_share(_real(results['masked_fraction']))} %", number_text(_whole(results["probes"])),
-                     number_text(_whole(settings["num_runs"])), *_per_batch(shares)))
+        rows.append((AUDIT_ROW, f"{_share(_real(results['masked_fraction']))} %",
+                     number_text(_whole(results["probes"])), number_text(_whole(settings["num_runs"])),
+                     *_per_batch(shares)))
     except (KeyError, TypeError, ValueError, AttributeError):
         pass
     return TableWords(COMPARISON_COLUMNS, tuple(rows), right=COMPARISON_RIGHT)
@@ -1037,8 +1039,8 @@ ON_THE_CARD = ("band", "audit", "calibration", "pin_down", "timing", "fixed_numb
 #: The card test, said in one sentence: its prior built at full size (the stage takes no size of its own), then its
 #: three small stages; how long it took here last time, or that it has not run here; and that it keeps nothing.
 CARD_TEXT = ("This builds a prior at full size and then trains a small posterior, calibrates it and runs one inference "
-             "on a simulated cell: four real stages, the last three at very small sizes, on the graphics card. It takes "
-             "minutes{}. Nothing else can run meanwhile, and nothing it makes is kept.")
+             "on a simulated cell: four real stages, the last three at very small sizes, on the graphics card. It "
+             "takes minutes{}. Nothing else can run meanwhile, and nothing it makes is kept.")
 CARD_TOOK_WORDS = " ({} here last time)"
 CARD_NOT_RUN_WORDS = "; it has not run on this computer yet"
 #: The timing of a short fit: its two fits, one per network, or one when the Training form's network is the built-in
@@ -1313,8 +1315,8 @@ CARD_DONE_TEXT = "Card test: done. Every stage ran on the graphics card in {}."
 CARD_FAILED_TEXT = "Card test: failed in {}."
 CARD_COLUMNS = ("Stage", "Seconds", "Last time")
 CARD_RIGHT = frozenset({1, 2})
-CARD_UNUSABLE_TEXT = ("Unusable driven recordings in its training: {} %. At this size a share within about {} points of "
-                      "{} % says nothing either way.")
+CARD_UNUSABLE_TEXT = ("Unusable driven recordings in its training: {} %. At this size a share within about {} "
+                      "points of {} % says nothing either way.")
 #: How far from the expected share of unusable driven recordings (the audit's, ``AUDIT_EXPECTED_SHARE``) a card test's
 #: share can lie, in points, and still say nothing either way: its training simulates a few batches of a few
 #: simulations, which draw too few driven recordings to read the share closer. The command line's reading of the card

@@ -238,8 +238,8 @@ class TSNPEPanel(StepPage):
         return getattr(getattr(self._held()[2], "posterior", None), "x_obs_digest", None)
 
     def _of_this_kind(self, summary) -> bool:
-        """Whether the observation ``summary`` is of the configuration's kind of observation and width: only those can be
-        used with it. With no configuration in use every observation is listed."""
+        """Whether the observation ``summary`` is of the configuration's kind of observation and width: only those can
+        be used with it. With no configuration in use every observation is listed."""
         cfg = self._held()[0]
         if cfg is None:
             return True
@@ -255,16 +255,16 @@ class TSNPEPanel(StepPage):
         return held in (None, 0) or int(held) == width
 
     def _usable(self, ident: str) -> bool:
-        """Whether the observation ``ident`` can be used by the posterior in use: any, unless it was narrowed around one,
-        and then only that one, by its digest, as the last reading read the digests (``narrows_around``, the rule an
-        inference's result offers its next step by)."""
+        """Whether the observation ``ident`` can be used by the posterior in use: any, unless it was narrowed around
+        one, and then only that one, by its digest, as the last reading read the digests (``narrows_around``, the rule
+        an inference's result offers its next step by)."""
         return not self._digests_read or narrows_around(self._held()[2], self._digests.get(ident))
 
     def _grey(self) -> None:
-        """The observations the posterior in use cannot be used on, greyed in the list with why. Each row is told through
-        the list's own data, its flags under the role its items keep them in, and no item of the list is held: the list
-        deletes its items as it lists the store again, and a handle kept on one would outlive it. A row the round can
-        use keeps the list's own tip: the list is listed afresh before each greying."""
+        """The observations the posterior in use cannot be used on, greyed in the list with why. Each row is told
+        through the list's own data, its flags under the role its items keep them in, and no item of the list is held:
+        the list deletes its items as it lists the store again, and a handle kept on one would outlive it. A row the
+        round can use keeps the list's own tip: the list is listed afresh before each greying."""
         combo = self.obs_picker.combo
         for at in range(combo.count()):
             ident = combo.itemData(at)
@@ -307,9 +307,9 @@ class TSNPEPanel(StepPage):
             self._changed = ""
 
     def take_carried(self, carries) -> None:
-        """What a next step carries here: the observation it names, chosen in the list. Nothing is asked: the round holds
-        nothing of its own to let go. One the list does not hold is looked for in the store at once, unless a run is
-        live; one not found then is held, said under the list, and chosen at the step's next reading of its list."""
+        """What a next step carries here: the observation it names, chosen in the list. Nothing is asked: the round
+        holds nothing of its own to let go. One the list does not hold is looked for in the store at once, unless a run
+        is live; one not found then is held, said under the list, and chosen at the step's next reading of its list."""
         ident = carries.get("observation") if hasattr(carries, "get") else None
         if not ident:
             return
@@ -629,7 +629,8 @@ class TSNPEPanel(StepPage):
         continuing = self._continuing
         continued = continuing.batch if continuing is not None and continuing.kind == "continue" else None
         return round_facts(needs=needs, uses=uses, prior_own=prior_own or None, simulations=simulations,
-                           continuing_from=continued, checks=self._pre_run(), fit="never" if self._never() else "saved", how_long=how_long,
+                           continuing_from=continued, checks=self._pre_run(), fit="never" if self._never() else "saved",
+                           how_long=how_long,
                            memory=memory, others_pending=self._others_pending(), name_facts=names,
                            field_facts=field_facts, plan_lines=self.plan_lines())
 
@@ -710,7 +711,8 @@ class TSNPEPanel(StepPage):
         try:
             spec = training_spec("Narrowing round", _PLACE, STOP_WORDS, cfg, self._stage_values(), narrowed=True)
             self._expected = controller().expected_epochs(spec)
-        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its kind has no last round
+        except Exception:                    # noqa: BLE001 -- a configuration that cannot say its kind has no last
+                                             # round
             self._expected = None
 
     def _stage_values(self) -> dict:
@@ -846,7 +848,8 @@ class TSNPEPanel(StepPage):
         region = getattr(kept, "region", None) or {}
         cfg = self._held()[0]
         from .prior_tab import bounds_in_use
-        rows = [{"step": self.step, "name": key, "label": self.form.rows[key].label_text(), "value": _plain(record[key]),
+        rows = [{"step": self.step, "name": key, "label": self.form.rows[key].label_text(),
+                 "value": _plain(record[key]),
                  "origin": "kept training", "plan": None, "usual": _plain(self.form.rows[key].usual())}
                 for key in _FIT if key in record]
         options = {key: _plain(record.get(key)) for key in ("chi_mode", "chi_k_pad", "chi_max_cycles",
