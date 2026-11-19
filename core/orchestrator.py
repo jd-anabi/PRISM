@@ -40,8 +40,8 @@ from . import cli, config, forcing
 # PreflightWarning, the judgement channel, is defined in core.refusals (with its "always" filter) so
 # a module can raise it without importing this one; ``orchestrator.PreflightWarning`` is that
 # same class, re-exported here for every caller and test that names it through this module.
-from .refusals import (PreflightWarning, Refusal, describe, require_at_least, require_between,
-                       require_choice, require_file, require_positive)
+from .refusals import (PreflightWarning, Refusal, default_clause, describe, require_at_least, require_between,
+                       require_choice, require_file, require_given, require_positive)
 from .rng import calibration_seed, require_seed, seeded
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
@@ -925,7 +925,11 @@ _FIT_FIELD = {("simulation", "prior_fingerprint"): "prior", ("simulation", "n_ru
               ("settings", "num_transforms"): "num_transforms", ("settings", "learning_rate"): "learning_rate",
               ("settings", "stop_after_epochs"): "stop_after_epochs",
               ("settings", "max_num_epochs"): "max_num_epochs", ("settings", "device"): "device",
-              ("settings", "dtype"): "device"}
+              ("settings", "dtype"): "device",
+              # the kind of observation, a frequency response or not: build_posterior names it so whichever entry the
+              # frequency response decides comes first, its two values the modes (the other two modes are told
+              # apart by the bounds file, so a difference in "mode" alone is not named by this setting)
+              ("simulation", "chi_mode"): "chi_mode"}
 _BOX_KEYS = ("param_keys", "nd_lows", "nd_highs", "rescale_lows", "rescale_highs", "log_params")
 # The fit's settings no setting of this call changes, in words.
 _SETTING_WORDS = {"density_estimator": "the flow's family", "num_bins": "the spline bins",
@@ -953,6 +957,21 @@ def _fit_refusal(kept, d) -> Refusal:
         words = "the number of batches it was trained on"
     return Refusal(f"The kept training {kept.id} cannot be resumed with these settings: {words} was "
                    f"{d.kept!r} when it was kept, and is {d.now!r} now.", field=field)
+
+
+def _a_number(key: str, value, *, whole: bool):
+    """``value`` as it was handed, for the rule of one of a training's settings: a value that rule cannot read as a
+    number, a whole one for a count (a text such as "abc"), is refused under the setting's own field, where the
+    rule's conversion would stop the stage with a bare error. A blank is left to the rule, which refuses it."""
+    if value is None:
+        return value
+    try:
+        int(value) if whole else float(value)
+    except (TypeError, ValueError, OverflowError):
+        what = describe(key)
+        raise Refusal(f"{what[0].upper()}{what[1:]} must be {'a whole number' if whole else 'a number'}; got "
+                      f"{value!r}{default_clause(key)}.", field=key) from None
+    return value
 
 
 # ── Step 3: Posterior construction ──────────────────────────────────────────
@@ -1080,6 +1099,9 @@ def build_posterior(
     and the one stage it shortens is the flow's fit, whose time grows with the rows.
     """
     store = resolve_store(store)
+    # A posterior is trained from its prior and loaded beside it: a call that hands none is refused first, before
+    # the kept training's record or anything else is read.
+    require_given("prior", prior)
     # A RESUMED TRAINING RUNS ON ITS OWN RECORD. Read first, because the record gives the name, the note
     # and every setting not given here; a setting given is kept as given, and compared with the
     # record's below, before anything is read.
@@ -1092,6 +1114,11 @@ def build_posterior(
         if save_fit is False:
             raise Refusal("A resumed training is saved as it goes; saving cannot be switched off for it.",
                           field="resume_fit")
+        if kept.region is not None and truncation is None:
+            # A narrowing round's rows were drawn in its region, which only the round hands on: as a plain
+            # training it would be refused only once its identity was compared, its whole region in the sentence.
+            raise Refusal(f"The kept training {kept.id} is a narrowing round's, and resumes only as a narrowing "
+                          f"round, in the region it was trained in.", field="resume_fit")
         name = name or kept.posterior_name
         note = note or kept.note
         _own = kept.config
@@ -1145,34 +1172,38 @@ def build_posterior(
     # exemption fixed first; the budget and the cadence now follow it. The resume POLICY is checked on
     # both branches.
     trains = train_new or ref is None
+    # Each knob reaches its rule as it was handed, and the rule converts it: an int() before the rule cut a
+    # count of 10000.5 to 10000 unseen, and stopped on a text that is no number with a bare error. A load
+    # converts none of them, since it reads none.
     # The budget, resolved before anything reads it: both are part of the checkpoint identity below.
-    n_runs = TRAINING_NUM_RUNS if num_runs is None else int(num_runs)
-    size_cap = TRAINING_RUN_SIZE if run_size_cap is None else int(run_size_cap)
+    n_runs = TRAINING_NUM_RUNS if num_runs is None else num_runs
+    size_cap = TRAINING_RUN_SIZE if run_size_cap is None else run_size_cap
     # The cadence, resolved beside them for the same reason: everything that decides WHETHER a
     # simulation cache is touched has to be settled before the identity is built.
-    ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
-    max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
-    hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
-    nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
-    lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
-    patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
+    ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else checkpoint_every
+    max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else max_num_epochs
+    hf = NSF_HIDDEN_FEATURES if hidden_features is None else hidden_features
+    nt = NSF_NUM_TRANSFORMS if num_transforms is None else num_transforms
+    lr = TRAINING_LEARNING_RATE if learning_rate is None else learning_rate
+    patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else stop_after_epochs
     # The rotation's three, resolved HERE and passed down resolved; the record below names them only
     # when the Fisher actually ran with them.
-    fm = REPARAM_FISHER_M if fisher_m is None else int(fisher_m)
-    fdz = REPARAM_FISHER_DZ if fisher_dz is None else float(fisher_dz)
-    fp = REPARAM_FISHER_POINTS if fisher_points is None else int(fisher_points)
+    fm = REPARAM_FISHER_M if fisher_m is None else fisher_m
+    fdz = REPARAM_FISHER_DZ if fisher_dz is None else fisher_dz
+    fp = REPARAM_FISHER_POINTS if fisher_points is None else fisher_points
     if trains:
-        n_runs = require_at_least("num_runs", n_runs, 1)
-        size_cap = require_at_least("run_size_cap", size_cap, 0)        # 0 = follow the hardware batch
-        ck_every = require_at_least("checkpoint_every", ck_every, 0)    # 0 = checkpointing off
-        hf = require_at_least("hidden_features", hf, 1)
-        nt = require_at_least("num_transforms", nt, 1)
-        lr = require_positive("learning_rate", lr)
-        patience = require_at_least("stop_after_epochs", patience, 1)
-        max_ep = require_at_least("max_num_epochs", max_ep, 1)
-        fm = require_at_least("fisher_m", fm, 1)
-        fdz = require_positive("fisher_dz", fdz)
-        fp = require_at_least("fisher_points", fp, 1)
+        n_runs = require_at_least("num_runs", _a_number("num_runs", n_runs, whole=True), 1)
+        # 0 = follow the hardware batch, and 0 = checkpointing off
+        size_cap = require_at_least("run_size_cap", _a_number("run_size_cap", size_cap, whole=True), 0)
+        ck_every = require_at_least("checkpoint_every", _a_number("checkpoint_every", ck_every, whole=True), 0)
+        hf = require_at_least("hidden_features", _a_number("hidden_features", hf, whole=True), 1)
+        nt = require_at_least("num_transforms", _a_number("num_transforms", nt, whole=True), 1)
+        lr = require_positive("learning_rate", _a_number("learning_rate", lr, whole=False))
+        patience = require_at_least("stop_after_epochs", _a_number("stop_after_epochs", patience, whole=True), 1)
+        max_ep = require_at_least("max_num_epochs", _a_number("max_num_epochs", max_ep, whole=True), 1)
+        fm = require_at_least("fisher_m", _a_number("fisher_m", fm, whole=True), 1)
+        fdz = require_positive("fisher_dz", _a_number("fisher_dz", fdz, whole=False))
+        fp = require_at_least("fisher_points", _a_number("fisher_points", fp, whole=True), 1)
         if save_fit and not ck_every:
             # A kept training is resumed on its kept rows; with checkpointing off there are none.
             raise Refusal("Saving the training as it goes needs its rows in a kept simulation set, and "
@@ -1341,6 +1372,11 @@ def build_posterior(
                 device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)}
             _d = fit_state.first_difference(kept.identity, fit_state._plain(_now),
                                             parts=("simulation", "batches", "settings"))
+            _kept_set_identity = kept.identity.get("simulation") or {}
+            if _d is not None and _kept_set_identity.get("chi_mode") != ident.get("chi_mode"):
+                # Kept in another kind of observation, a frequency response against a recording's own: every entry
+                # the frequency response decides differs, and the first of them is said as the kind itself.
+                _d = fit_state.Difference("simulation", "chi_mode", _kept_set_identity.get("mode"), ident.get("mode"))
             if _d is not None:
                 raise _fit_refusal(kept, _d)
             # The simulation set these settings name must be the kept training's own, and whole. The digest

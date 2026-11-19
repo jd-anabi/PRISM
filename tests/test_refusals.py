@@ -281,6 +281,31 @@ def test_require_at_least_refuses_below_the_minimum_and_returns_an_int():
     assert _shape(e.value, "repeats") == "The number of SBC repeats must be at least 1; got 0 (default 10)."
 
 
+def test_require_at_least_refuses_a_fractional_part_and_takes_every_whole_value_as_before():
+    """A count handed a number with a fractional part is refused, naming the value, where ``int()`` cut 10000.5 to
+    10000 without a word. A whole value of any kind passes as the int it is, and a text is read as it was: "7"
+    passes, and a text ``int()`` cannot read stays the bare error it raises. The seed's rule, built on this one,
+    refuses a seed with a fractional part the same way."""
+    import numpy as np
+    from core.rng import require_seed
+    for whole in (10000, 10000.0, 1e4, np.int64(10000), np.float64(10000.0), np.float32(10000.0), "10000"):
+        got = require_at_least("num_runs", whole, 1)
+        assert got == 10000 and type(got) is int, (whole, got)
+    assert require_at_least("run_size_cap", True, 0) == 1
+    for bad, shown in ((10000.5, "10000.5"), (np.float64(2.25), "2.25"), (0.5, "0.5"), (-1.5, "-1.5")):
+        with pytest.raises(Refusal) as e:
+            require_at_least("num_runs", bad, 1)
+        assert _shape(e.value, "num_runs") == (
+            f"The number of training batches must be a whole number; got {shown} (default 5000)."), str(e.value)
+    for text in ("abc", "10000.5"):
+        with pytest.raises(ValueError) as e:
+            require_at_least("num_runs", text, 1)
+        assert not isinstance(e.value, Refusal), e.value
+    with pytest.raises(Refusal) as e:
+        require_seed(1.5)
+    assert e.value.field == "seed" and "must be a whole number; got 1.5" in str(e.value), str(e.value)
+
+
 def test_require_between_honours_open_and_closed_ends_and_treats_nan_as_outside():
     """The HPD level is 0 < x < 1 (both ends open: 0 truncates everything, 1 nothing); the chi probe
     count and slots are closed intervals. " (exclusive)" appears when either end is open, and the
@@ -1199,7 +1224,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         "mask_run_size": "--run-size", "drive_t_obs": "--t-obs", "drive_repeats": "--repeats",
         "drive_detune": "--detune", "drive_strengths": "--strengths", "free_min": "--free-min",
         "captured_max": "--captured-max", "drive_peak_window": "--peak-window", "clarity_min": "--clarity-min",
-        "plan": None, "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
+        "plan": None, "chi_mode": "--chi", "reparam_rotate": None, "expected_epochs": None,
     }
     differ = {key: (tool_fields.FLAG.get(key), flags.get(key)) for key in sorted(tool_fields.FLAG.keys() | flags.keys())
               if tool_fields.FLAG.get(key) != flags.get(key)}
@@ -1210,6 +1235,8 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     assert tool_fields.fix_sentence("new_run") == "(--new-run)"
     assert tool_fields.fix_sentence("repeats") == "(--repeats)"
     assert tool_fields.fix_sentence("units") == ""
+    # the kind of observation a kept training is resumed in is the one --chi or --no-chi sets
+    assert tool_fields.fix_sentence("chi_mode") == "(--chi)"
     assert tool_fields.fix_sentence(None) == ""
     assert tool_fields.fix_sentence("no_such_key") == ""
 

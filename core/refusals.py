@@ -273,12 +273,18 @@ def require_positive(key: str, value) -> float:
 
 
 def require_at_least(key: str, value, minimum: int) -> int:
-    """A blank or a value below ``minimum`` is refused; the value is returned as an int. ``minimum``
-    is 1 for a count, 0 for the two "0 = automatic" fields and the checkpoint cadence, 2 for the
-    minimum cluster size. The rule text is "at least <minimum>"."""
+    """A blank, a number with a fractional part or a value below ``minimum`` is refused; the value is
+    returned as an int. ``minimum`` is 1 for a count, 0 for the two "0 = automatic" fields and the
+    checkpoint cadence, 2 for the minimum cluster size. The rule text is "at least <minimum>".
+
+    A whole value of any kind passes as the int it is (10000, 10000.0, 1e4, a numpy integer); one with a
+    fractional part, 10000.5, is refused rather than cut to 10000 without a word. A text is read by
+    ``int()`` as it always was, so "7" passes and a text that is no whole number raises its bare error."""
     if value is None:
         _blank(key)
     v = int(value)
+    if not isinstance(value, (str, bytes, bytearray)) and v != value:
+        raise Refusal(f"{_what(key)} must be a whole number; got {value}{default_clause(key)}.", field=key)
     if v < minimum:
         raise Refusal(f"{_what(key)} must be at least {minimum}; got {v}{default_clause(key)}.", field=key)
     return v

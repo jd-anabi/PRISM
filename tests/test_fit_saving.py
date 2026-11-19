@@ -1643,6 +1643,11 @@ def _library(r, patch):
     return {}
 
 
+def _mode(r, patch):
+    patch.setattr(r.cfg, "chi_mode", True)
+    return {}
+
+
 # Each part of the identity changed alone: what changes it, the setting that answers the refusal, and
 # words the refusal says.
 _IDENTITY_CASES = {
@@ -1663,6 +1668,7 @@ _IDENTITY_CASES = {
                                          "training was kept (core.SBI.train.restore_trainer)"),
     "constant": (_constant, "resume_fit", "the configuration constant WINSOR_PCT was"),
     "library": (_library, "resume_fit", "sbi was"),
+    "mode": (_mode, "chi_mode", "the kind of observation was 'spontaneous' when it was kept, and is 'chi' now"),
 }
 
 
@@ -2570,6 +2576,53 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
     note = stopped.value.kept_fit
     assert (note.passes, note.resumed, note.saved_here, note.processes) == (1, False, True, 1), note
     assert r.store.get("fit", note.id).body["region"] is not None
+
+
+def test_a_kept_narrowing_round_handed_to_a_plain_training_is_refused_before_anything_is_read(
+        tiny_run, fits_left, monkeypatch):
+    """A kept narrowing round resumes only as a narrowing round, in the region it was trained in: handed to a plain
+    training, which has no region, it is refused under the kept training to resume, naming the round, before the
+    simulation set its settings name or anything else is read. It was refused only once the two identities were
+    compared, with the whole region in the sentence. The kept round is left as it was, its lock free."""
+    from core import orchestrator
+    from core.artifacts import identity
+    r = tiny_run
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_round_handed_on_obs")
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 1, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, n_directions=1, num_runs=4, run_size_cap=8,
+                                     name="fit_round_handed_on", fig_sink=r.sink, store=r.store, **_TRAINING)
+    row, = _new_fits(r, fits_left)
+    posteriors, before, read = _posterior_names(r), _bytes(row.path), []
+    with monkeypatch.context() as patch:
+        patch.setattr(identity.SimulationIdentity, "from_cfg", classmethod(lambda cls, *a, **k: read.append("set")))
+        patch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: read.append("rows"))
+        with pytest.raises(Refusal) as refused:
+            _resume(r, row.id)
+    assert refused.value.field == "resume_fit", refused.value
+    assert str(refused.value) == (f"The kept training {row.id} is a narrowing round's, and resumes only as a "
+                                  f"narrowing round, in the region it was trained in."), str(refused.value)
+    assert read == [] and _bytes(row.path) == before and not running(row.path)
+    assert _posterior_names(r) == posteriors
+
+
+def test_the_resume_refusals_table_names_registered_fields_and_every_fit_setting():
+    """The table that names the setting answering each part of a kept training's identity names only fields the
+    front ends map to a control or a flag -- an unregistered one would be a KeyError at the click in place of a
+    refusal -- and, with the words for the settings no setting of a call changes, it covers every setting a fit
+    records, no more: a setting added to the fit's record with neither would be refused as "the setting '...'"."""
+    from core import orchestrator
+    from core.refusals import FIELDS
+    named = orchestrator._FIT_FIELD
+    assert {part for part, _ in named} == {"simulation", "settings"}, sorted(named)
+    assert set(named.values()) <= set(FIELDS), sorted(set(named.values()) - set(FIELDS))
+    settings, words = {name for part, name in named if part == "settings"}, set(orchestrator._SETTING_WORDS)
+    assert not settings & words, sorted(settings & words)
+    recorded = set(train.fit_settings(model="nsf", hidden_features=8, num_transforms=1, num_bins=10,
+                                      learning_rate=0.001, stop_after_epochs=20, max_num_epochs=8, batch_size=512,
+                                      z_score_x="none", device="cpu", dtype=torch.float32))
+    assert settings | words == recorded, (sorted(recorded - settings - words), sorted((settings | words) - recorded))
 
 
 def test_the_training_stages_handlers_rebind_none_of_its_parameters():

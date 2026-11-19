@@ -2524,6 +2524,88 @@ def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypat
     assert spent == []
 
 
+def test_a_training_setting_not_whole_or_no_number_is_refused_by_its_field_before_any_spend(store, monkeypatch):
+    """Each of a training's settings reaches its rule as it was handed, and the rule converts it. A count with a
+    fractional part, which ``int()`` cut short unseen before its rule ran (10000.5 trained 10000 batches), is refused
+    under its own field, and so is a setting that is no number at all, which stopped the stage with a bare error;
+    nothing is simulated or trained and no record is written. A whole value of another kind trains as the number it
+    is, and a load, which reads none of them, converts none."""
+    import numpy as np
+    from core import orchestrator
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    post = _posterior_artifact(store, cfg, name="stored")
+    spent = []
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: spent.append("train"))
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
+    records = {kind: len(store.list(kind)) for kind in ("posterior", "simulation", "fit")}
+    for knob in ("num_runs", "run_size_cap", "hidden_features", "num_transforms", "stop_after_epochs",
+                 "max_num_epochs", "checkpoint_every", "fisher_m", "fisher_points"):
+        for bad, words in ((2.5, "must be a whole number; got 2.5"), ("abc", "must be a whole number; got 'abc'")):
+            kw = {"num_runs": 2, "run_size_cap": 4, "checkpoint_every": 1, knob: bad}
+            with pytest.raises(Refusal) as e:
+                orchestrator.build_posterior(cfg, lp, None, True, store=store, **kw)
+            assert e.value.field == knob and words in str(e.value), (knob, bad, e.value.field, str(e.value))
+    for knob in ("learning_rate", "fisher_dz"):
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_posterior(cfg, lp, None, True, store=store, num_runs=2, run_size_cap=4,
+                                         **{knob: "abc"})
+        assert e.value.field == knob and "must be a number; got 'abc'" in str(e.value), (knob, str(e.value))
+    assert spent == [], f"a setting not whole or no number was refused only after the spend: {spent}"
+    assert {kind: len(store.list(kind)) for kind in records} == records
+    loaded = orchestrator.build_posterior(cfg, lp, post.id, False, store=store, num_runs="abc", learning_rate=2.5,
+                                          max_num_epochs=1.5)
+    assert loaded.id == post.id and spent == []
+
+    class _Reached(RuntimeError):
+        """Raised by the training's stand-in: the stage got past every rule."""
+
+    seen = {}
+
+    def reached(plan, **kwargs):
+        seen.update(kwargs, num_runs=plan.num_runs)
+        raise _Reached
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", reached)
+    with pytest.raises(_Reached):
+        orchestrator.build_posterior(cfg, lp, None, True, store=store, num_runs=2.0, run_size_cap=np.int64(4),
+                                     checkpoint_every=0, hidden_features=8.0, num_transforms=np.int32(1),
+                                     stop_after_epochs=3.0, max_num_epochs=np.float64(8.0),
+                                     learning_rate=np.float64(1e-3))
+    got = {key: seen[key] for key in ("num_runs", "hidden_features", "num_transforms", "stop_after_epochs",
+                                      "max_num_epochs", "learning_rate")}
+    assert got == {"num_runs": 2, "hidden_features": 8, "num_transforms": 1, "stop_after_epochs": 3,
+                   "max_num_epochs": 8, "learning_rate": 1e-3}, got
+    assert all(type(got[key]) is int for key in got if key != "learning_rate"), {k: type(v) for k, v in got.items()}
+    assert type(got["learning_rate"]) is float
+
+
+def test_a_training_or_a_load_given_no_prior_is_refused_before_anything_is_read(store, monkeypatch):
+    """A posterior is trained from its prior and loaded beside it, so a call that hands none is refused under the
+    prior's own field before anything is read: no posterior loaded, no kept training looked up, nothing simulated or
+    trained, no record written. It was an AttributeError at the prior's first use."""
+    from core import orchestrator
+    from core.SBI import fit_state
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    post = _posterior_artifact(store, cfg, name="stored")
+    read, spent = [], []
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: spent.append("train"))
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
+    monkeypatch.setattr(store, "load_posterior", lambda *a, **k: read.append("posterior"))
+    monkeypatch.setattr(fit_state, "kept_fit", lambda *a, **k: read.append("kept"))
+    records = {kind: len(store.list(kind)) for kind in ("posterior", "simulation", "fit")}
+    for call in (lambda: orchestrator.build_posterior(cfg, None, post.id, False, store=store),
+                 lambda: orchestrator.build_posterior(cfg, None, None, True, store=store, num_runs=2, run_size_cap=4),
+                 lambda: orchestrator.build_posterior(cfg, None, None, True, store=store, resume_fit="kept")):
+        with pytest.raises(Refusal) as e:
+            call()
+        assert e.value.field == "prior" and str(e.value) == "The prior is blank.", str(e.value)
+    assert read == [] and spent == []
+    assert {kind: len(store.list(kind)) for kind in records} == records
+
+
 def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, caplog):
     """The cost-on-screen rule on the command line: what this run will actually simulate, said once,
     whether or not a cap or a batch count was overridden. The two conditional announcements stay --

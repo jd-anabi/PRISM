@@ -18,9 +18,11 @@ constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``
 quotes the ref -- the model builder's seven numeric fields, which live on a window-only screen, the
 name of the
 observation an inference makes (``observation_name``), which ``infer`` never gives, so its observation
-stays unnamed, and the four keys of a run plan (``plan``, ``chi_mode``, ``reparam_rotate``,
-``expected_epochs``): the tool reads no plan, so none of them is ever a refusal of the tool's, whatever
-flag sets the same setting. One repeatable flag can carry several keys:
+stays unnamed, and three keys of a run plan (``plan``, ``reparam_rotate``, ``expected_epochs``): the tool
+reads no plan, so none of them is ever a refusal of the tool's, whatever flag sets the same setting. The
+plan's fourth, ``chi_mode``, the kind of observation, is a refusal of the tool's too: a kept training
+resumed in another kind is refused under it, and ``--chi`` (or ``--no-chi``) is the flag that answers it.
+One repeatable flag can carry several keys:
 ``--forced PATH[@HZ]`` is both the driven recording and a chi probe's, ``--drive NAME=VALUE`` is the
 amplitude, frequency and phase.
 """
@@ -97,8 +99,8 @@ FLAG: dict[str, str | None] = {
     "chi_max_cycles": None,
     "chi_f0": None,
     "chi_freq_bounds": None,
-    # a run plan: the tool reads none
-    "plan": None, "chi_mode": None, "reparam_rotate": None, "expected_epochs": None,
+    # a run plan: the tool reads none; the kind of observation is also a kept training's, which --chi sets
+    "plan": None, "chi_mode": "--chi", "reparam_rotate": None, "expected_epochs": None,
     # the diagnostics' knobs
     "repeats": "--repeats",
     "n_points": "--n-points",

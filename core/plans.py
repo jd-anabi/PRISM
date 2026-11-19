@@ -26,9 +26,9 @@ named as a problem with its line, all of them at once, and a plan with any probl
 part of a plan.
 
 WHY THE KIND COMES FIRST. The registry's rules convert with ``int()`` and ``float()``: a text that is no
-number raises a bare ValueError there, and a float handed to ``require_at_least`` is truncated without a
-word, so 10000.5 would become 10000. The reader checks a value's form itself and hands the rule only what
-has that form, so the sentence a person reads is the rule's own or this module's, never a traceback.
+number raises a bare ValueError there, and a text such as 10000.5 or 1e4 is no ``int()`` at all. The reader
+checks a value's form itself and hands the rule only what has that form, so the sentence a person reads is
+the rule's own or this module's, never a traceback.
 
 STANDARD LIBRARY ONLY, like ``core/refusals.py``: the window reads a plan on its own thread, and the command
 line could read one before torch is imported. This module reads one file, no store and no ``core/config.py``,
