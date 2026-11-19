@@ -1489,7 +1489,9 @@ def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None
     save and at completion. Keeps id, name, created, note, prism, env, inputs and parents from an
     existing manifest (a resume must not rewrite who started the run, nor drop the name the set was
     given through the store's rename); ``wall_seconds`` is the span from ``created`` to completion,
-    across resumes. The name is in neither the identity nor its digest, so keeping it moves nothing."""
+    across resumes, recorded once: a training that reuses a complete set completes it again, and keeps
+    the time its manifest records, however long after the set was made it comes. The name is in neither
+    the identity nor its digest, so keeping it moves nothing."""
     from core.SBI.training_checkpoint import identity_digest
     path = Path(path)
     digest = identity_digest(identity)
@@ -1499,10 +1501,11 @@ def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None
         with contextlib.suppress(mf.ManifestError, OSError):
             old = mf.from_json_text(mpath.read_text(encoding="utf-8"))
     created = old.created if old else _utc_now().isoformat()
-    if complete:
+    recorded = old.body.get("wall_seconds") if old else None
+    if complete and not (old and old.body.get("complete") and recorded is not None):
         wall = (_utc_now() - datetime.fromisoformat(created)).total_seconds()
     else:
-        wall = old.body.get("wall_seconds") if old else None
+        wall = recorded
     v_digest = mf.tensor_digest(V) if V is not None else (old.fingerprints.get("V") if old else None)
     d = dict(
         schema=mf.SCHEMA, kind="simulation", id=digest, name=old.name if old else "", created=created,

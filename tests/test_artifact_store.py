@@ -1214,6 +1214,51 @@ def test_a_simulation_sets_name_lasts_through_its_saves_its_completion_and_its_r
     assert default_store() is sandbox
 
 
+def test_a_complete_simulation_set_reused_keeps_the_time_its_generation_took(tiny_run, tmp_path, monkeypatch):
+    """A simulation set's manifest records how long its rows took to make: from the day the set was made to the save
+    that completed it, across every process that made it. A training that reuses the complete set completes it again
+    and rewrites its manifest, and that write keeps the time recorded, however long after the set was made the reuse
+    comes (three days here); the set's folder, its identity, the day it was made and its rows are as they were. Each
+    training ends once its rows are made, since the fit is not what is under test."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.SBI import pipeline
+    from core.SBI import training_checkpoint as tc
+    r = tiny_run
+    s = ArtifactStore(tmp_path / "reused_set")
+    real_generate = pipeline.gen_training_data
+
+    class _RowsMade(Exception):
+        """Ends a training once its rows are made."""
+
+    def generate(*a, **k):
+        real_generate(*a, **k)
+        raise _RowsMade
+
+    monkeypatch.setattr(pipeline, "gen_training_data", generate)
+    train = dict(fig_sink=r.sink, store=s, num_runs=2, run_size_cap=3, checkpoint_every=1, fisher_m=4,
+                 fisher_points=1)
+    with pytest.raises(_RowsMade):
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, **train)
+    made, = [s.get("simulation", row.id) for row in s.list("simulation")]
+    folder = s.path("simulation", made.id)
+    rows = {p.name: p.read_bytes() for p in sorted((folder / "shards").iterdir())}
+    assert made.body["complete"] is True and made.body["wall_seconds"] >= 0.0 and rows
+
+    later = datetime.fromisoformat(made.created) + timedelta(days=3)
+    monkeypatch.setattr(st, "_utc_now", lambda: later)
+    with pytest.raises(_RowsMade):
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, **train)
+    again = s.get("simulation", made.id)
+    assert again.body["wall_seconds"] == made.body["wall_seconds"], (
+        f"the reuse recorded {again.body['wall_seconds']} s for rows made in {made.body['wall_seconds']} s")
+    assert (again.body["complete"], again.created, again.body["identity"], again.body["digest"]) == (
+        True, made.created, made.body["identity"], made.id)
+    assert s.path("simulation", made.id) == folder == tc.resolve_dir(made.body["identity"], s.kind_dir("simulation"))
+    assert {p.name: p.read_bytes() for p in sorted((folder / "shards").iterdir())} == rows
+    assert [row.id for row in s.list("simulation")] == [made.id]
+
+
 def test_load_prior_refuses_model_param_order_and_box_and_returns_a_wrapper(store):
     cfg = _nad_cfg()
     ok = _prior_artifact(store, cfg, name="ok")
@@ -4797,6 +4842,43 @@ def test_a_resume_carries_the_stored_eigenvalues_under_the_checkpoint_prefix(sto
     assert any(s.startswith("[checkpoint] ") and "eigenvalues come with it" in s
                and f"spread best/worst {h.P:.3g}" in s for s in said), said
     assert not any(r.getMessage().startswith("[fisher]") for r in mine), [r.getMessage() for r in mine]
+
+
+def test_a_training_on_a_resumed_set_records_the_fisher_spread_as_an_uninterrupted_one_does(store, monkeypatch):
+    """The spread of the rotation's eigenvalues, best over worst, is recorded with the posterior by one rule: the first
+    over the last when the last is above zero, and nothing when that is not a finite number. A training whose rotation
+    came with a resumed simulation set records it from the eigenvalues stored beside the rotation, as the training that
+    computed them records it, to the last digit; a last eigenvalue of zero records nothing, as it would there."""
+    from core import orchestrator
+    from core.artifacts.identity import SimulationIdentity
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch, rotate=True)
+    Q, _ = torch.linalg.qr(torch.randn(h.P, h.P))
+    evals = torch.linspace(7.3, 0.37, h.P, dtype=torch.float64)
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation",
+                        lambda *a, **k: (Q.to(h.cfg.hw.dtype), evals))
+    fresh = store.get("posterior", orchestrator.build_posterior(
+        h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=0, **h.budget).id)
+    spread = fresh.body["training"]["fisher_spread"]
+    assert spread == float(evals[0] / evals[-1]) and fresh.body["training"]["resumed_from_batch"] is None
+
+    def fisher_must_not_run(*a, **k):
+        raise AssertionError("a resumed run recomputed the Fisher")
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", fisher_must_not_run)
+    stored = fresh.body["transform"]["fisher_eigenvalues"]
+    for n_runs, kept, recorded in ((2, stored, spread), (3, [*stored[:-1], 0.0], None)):
+        ident = SimulationIdentity.from_cfg(h.cfg, h.prior, 4, n_runs).to_dict()
+        d = tc.resolve_dir(ident, store.kind_dir("simulation"))
+        tc.create(d, ident, schedule_t_scales=torch.zeros(n_runs), schedule_Ts=torch.zeros(n_runs),
+                  inits=torch.zeros(4, 3), V=Q, fisher_eigenvalues=kept, probe=torch.zeros(0), run_size=4,
+                  n_runs=n_runs)
+        torch.save({"batches_done": 1, "complete": False, "rng": None}, d / "state.pt")
+        resumed = store.get("posterior", orchestrator.build_posterior(
+            h.cfg, h.prior, None, True, num_runs=n_runs, checkpoint_every=1, **h.budget).id)
+        assert resumed.body["training"]["resumed_from_batch"] == 1, n_runs
+        assert resumed.body["transform"]["fisher_eigenvalues"] == kept, n_runs
+        assert resumed.body["training"]["fisher_spread"] == recorded, (n_runs, resumed.body["training"])
 
 
 def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkeypatch):

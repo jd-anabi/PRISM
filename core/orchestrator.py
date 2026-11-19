@@ -1522,13 +1522,16 @@ def build_posterior(
                  f"targets stored beside them.")
         # The eigenvalues come from the header beside V. A header written before they were kept there
         # has no such key: the run still resumes, and the record says they are unknown. The prefix is
-        # the checkpoint's, because no Fisher ran in this process.
+        # the checkpoint's, because no Fisher ran in this process. Their spread is recorded by the rule
+        # the branch that computes the rotation uses, below: the first over the last when the last is
+        # above zero, and nothing in the record unless that is finite. The stored values are the float64
+        # eigenvalues that branch divides, so the spread is the very number it records.
         _stored = ckpt_resumed.get("fisher_eigenvalues")
         evals_rec = [float(v) for v in _stored] if _stored is not None and len(_stored) else None
         if evals_rec is not None:
-            _stored_spread = evals_rec[0] / evals_rec[-1] if evals_rec[-1] > 0 else float("inf")
+            _spread = evals_rec[0] / evals_rec[-1] if evals_rec[-1] > 0 else float("inf")
             log.info(f"[checkpoint] the stored rotation's eigenvalues come with it (spread best/worst "
-                     f"{_stored_spread:.3g}); the Fisher settings stay unrecorded, since the Fisher did not "
+                     f"{_spread:.3g}); the Fisher settings stay unrecorded, since the Fisher did not "
                      f"run in this process.")
         else:
             log.info("[checkpoint] this checkpoint stores no rotation eigenvalues (it was written before "
