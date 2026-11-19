@@ -193,9 +193,11 @@ def parse_bounds_file(file_name: str) -> tuple:
 def parse_units_file(file_name: str) -> tuple:
     """
     Parse a UNITS-only file: a ``# Units`` section of whitespace-separated unit tokens (one per physical
-    dimension, e.g. ``nm ms pN Hz rad``). Returns the unit set as a tuple.
+    dimension, e.g. ``nm ms pN Hz rad``). Returns the units as a tuple in the file's order, each unit once,
+    at its first place, so that a configuration and the records made from it list them as they are
+    written, the same in every process.
     """
-    collected_units = set()
+    collected_units = {}
     current_section = None
     for line in _read_lines(file_name):
         line = line.strip()
@@ -206,7 +208,7 @@ def parse_units_file(file_name: str) -> tuple:
             continue
         if current_section == "UNITS":
             for u in line.split():
-                collected_units.add(u.split('^')[0])
+                collected_units.setdefault(u.split('^')[0], None)
     return tuple(collected_units)
 
 

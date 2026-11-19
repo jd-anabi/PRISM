@@ -145,6 +145,19 @@ def test_chi_probe_band_is_sub_resonance():
         f"captures the bundle and chi reports the drive back to itself")
 
 
+def test_the_units_files_reader_keeps_the_files_order_and_each_unit_once(tmp_path):
+    """A units file is read in its own order, each unit once, at its first place, so that what a configuration and a
+    record list of the units is the declaration as it is written, the same in every process; read through a set, the
+    order changed with the string hash's seed at every launch. The order says nothing of which unit is which: units are
+    matched to quantities by their dimension."""
+    written = tmp_path / "units.txt"
+    written.write_text("# Units\nnm ms pN kHz\n", encoding="utf-8")
+    reversed_ = tmp_path / "reversed.txt"
+    reversed_.write_text("# Units\nkHz pN\nms nm ms^-1\n", encoding="utf-8")
+    assert file_manager.parse_units_file(str(written)) == ("nm", "ms", "pN", "kHz")
+    assert file_manager.parse_units_file(str(reversed_)) == ("kHz", "pN", "ms", "nm")
+
+
 # ── prior identity ────────────────────────────────────────────────────────────────────────────────
 def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
     """A minimal on-disk prior file, still used by the atomic-write test below (build_prior's load

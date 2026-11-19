@@ -45,8 +45,10 @@ class SimConfig:
     rescale_params: OrderedDict # {name: (val, (lo, hi))}
     force_params_dict: OrderedDict # {name: (val, (lo, hi))}
     units_dict: tuple
-    # si_factors was removed here: built by iterating SET-derived units_dict it had non-deterministic
-    # order, so it could never be safely indexed, and nothing ever read it. Unit conversions go
+    # si_factors was removed here: built by iterating units_dict while the units file was still read
+    # through a set, it had a non-deterministic order, so it could never be safely indexed, and nothing
+    # ever read it. units_dict keeps the file's order now, which still says nothing of which unit is
+    # which. Unit conversions go
     # through get_unit_conversion_factor / freq_si_to_cell / the *_unit properties, which match by
     # DIMENSION rather than position.
 
@@ -525,7 +527,8 @@ class SimConfig:
     def _resolve_unit(self, si_unit: str) -> "str | None":
         """The cell's unit TOKEN whose dimensionality matches ``si_unit`` (e.g. "s" -> "ms"), or None.
 
-        units_dict is set-derived (unordered), so match by DIMENSIONALITY, never by index."""
+        units_dict is in the order its units were declared, which says nothing of which is which, so
+        match by DIMENSIONALITY, never by index."""
         ureg = self._ureg
         try:
             target = ureg.Quantity(1, si_unit).dimensionality

@@ -23,8 +23,8 @@ other rows. The declaration comes from one of two places, fingerprinted differen
 
   * a units FILE, named by ``cfg.sources["units"]``: the sha256 of its bytes with CRLF read as LF, so
     a checkout that rewrites line endings does not re-key a cache. The file, never
-    ``cfg.units_dict``, because that tuple is parsed through a set and its order is not stable
-    between processes.
+    ``cfg.units_dict``: that tuple keeps the file's order, but the file's bytes are what every set
+    made from a file has been named by, and a fingerprint of the tuple would name each such set anew.
   * unit TOKENS typed in place of a file (the window's typed units, or a token override given to
     ``make_sim_config``), which name no file: the sha256 of the UTF-8 text ``"units-tokens:"``
     followed by the distinct tokens, sorted and joined with newlines. Sorted, because the order
