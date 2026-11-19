@@ -163,8 +163,8 @@ def _summary_line(s, narrowed: str = "narrowed (TSNPE)") -> str:
     ``narrowed`` is how a row from a narrowing round is said: a list that keeps its selection hands its
     page's words, as its items and their tips say it.
 
-    THE ONE FORMATTER BEHIND THE LINE UNDER EVERY PICKER, so the three tabs cannot word the same
-    facts three ways -- and the tooltip now words amortization the same way this does, "narrowed
+    THE ONE FORMATTER BEHIND THE LINE UNDER EVERY PICKER, so no two pages can word the same
+    facts two ways -- and the tooltip now words amortization the same way this does, "narrowed
     (TSNPE)", which is also what the item text's suffix says: one fact, one wording, wherever it is
     shown. The per-item TOOLTIP is still not BUILT from this function: it leads with the id and keeps
     every fact it carried, while the line needs no id, because the picker's own text already

@@ -213,11 +213,11 @@ class MainWindow(QMainWindow):
     Always opens on Home -- the last place is deliberately not restored -- and is built with Home alone: every
     other part is built the first time it is opened, inside a guard (``_build``). ``place_changed`` gives the part
     and the page in sight after every move. Owns the QSettings write that runs at quit (``_save_state``, reached
-    from closeEvent): the selections of the panels of the parts built in this launch, and the Artifacts screen's
-    own when it was built (called by name, because _all_panels() is panel-typed and that screen is not); a part
-    never opened writes nothing and keeps what it remembered. Two other write sites exist on purpose: appearance
-    settings are written eagerly, as they are applied immediately, and a setting of this computer goes through
-    ``remembered`` as it is changed.
+    from closeEvent): the window's geometry, each step's ``save_settings`` (which writes nothing), and Records' own
+    when it was built (called by name, because _all_panels() is panel-typed and that screen is not); a part never
+    opened writes nothing and keeps what it remembered. The other writes are made on purpose as they happen:
+    appearance settings are written eagerly, as they are applied immediately, and a setting of this computer, and
+    a step's pick as it comes into use, go through ``remembered``.
     """
     place_changed = Signal(str, object)
 
@@ -1149,8 +1149,10 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _save_state(self):
-        """Persist window geometry + the selections of each panel of the parts built in this launch: a part never
-        opened writes nothing and keeps what it remembered. Called only when a close is accepted."""
+        """Persist window geometry, then hand each step of the parts built in this launch its ``save_settings``
+        (which writes nothing: a step writes what it remembers as each pick comes into use) and Records its
+        own; a part never opened writes nothing and keeps what it remembered. Called only when a close is
+        accepted."""
         qs = settings.settings()
         qs.setValue("window/geometry", self.saveGeometry())
         for panel in self._all_panels():

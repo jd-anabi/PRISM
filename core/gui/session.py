@@ -1,4 +1,4 @@
-"""Session state for the SBI panel: the config + the artifacts produced by each stage, held so the
+"""Session state for Parameter inference: the config + the artifacts produced by each stage, held so the
 GUI can drive the pipeline one stage at a time (build prior -> train posterior -> validate -> infer)."""
 from dataclasses import dataclass
 from typing import Any
@@ -6,11 +6,11 @@ from typing import Any
 
 @dataclass
 class ConfigDraft:
-    """The MODEL-level choices made in the Config tab, before a bounds file exists.
+    """The MODEL-level choices made in step 1, Model and options, before a bounds file exists.
 
     A SimConfig cannot be built without bounds -- the bounds file is what declares which parameters are
-    inferred, in what order, and over what range (and hence the observation mode). So Config records
-    intent here, and the Prior tab turns it into a SimConfig once a bounds file is chosen.
+    inferred, in what order, and over what range (and hence the observation mode). So step 1 records
+    intent here, and the Prior step turns it into a SimConfig once a bounds file is chosen.
     """
     model: str
     labels: Any
@@ -25,7 +25,7 @@ class ConfigDraft:
     reparam_rotate: Any = None
 
     def make_config(self, bounds_path: str = None, *, bounds_dicts=None, hw=None):
-        """Turn this draft + a bounds source into a SimConfig (the Prior tab's first act).
+        """Turn this draft + a bounds source into a SimConfig (the Prior step's first act).
 
         Pass either a bounds FILE path or hand-entered ``bounds_dicts`` -- exactly one. ``hw``, the device the
         configuration is made for, None for the one this computer offers, as with no ``hw`` at all."""
@@ -40,12 +40,13 @@ class ConfigDraft:
 
 @dataclass
 class SbiSession:
-    draft: Any = None               # ConfigDraft from the Config tab (model + units + knobs)
+    draft: Any = None               # ConfigDraft from step 1, Model and options (model + units + knobs)
     cfg: Any = None                 # SimConfig (built at the Prior stage, once bounds are chosen)
     inf_prior: Any = None           # artifacts.LoadedPrior -- .prior (ProductPrior), .force_prior, .id, .manifest
     posterior: Any = None           # artifacts.LoadedPosterior -- .posterior (TransformedPosterior, carrying
                                     # .T, .truncation, .x_obs_digest), .latent, .id, .manifest, .diagnostics
-    observation: Any = None         # artifacts.LoadedObservation -- the Infer tab's last product; the TSNPE tab's input
+    observation: Any = None         # artifacts.LoadedObservation -- the Inference step's last product; the
+                                    # Narrowing round's input
 
     def reset_downstream(self, from_stage: str) -> None:
         """Invalidate artifacts that depend on an earlier stage when it is re-run. Everything here is

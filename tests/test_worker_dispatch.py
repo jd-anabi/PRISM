@@ -1337,8 +1337,8 @@ def test_list_dir_returns_and_the_picker_no_longer_swaps_stdout(tmp_path, capsys
 
 def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     """One yellow box, two callers. RunHost._refusal keeps its signature and its log-pane line, but
-    the box itself is core/gui/widgets/refusal_box.show_refusal(parent, exc) -- so the Artifacts
-    screen, which is a plain QWidget and NOT a run host on purpose (a run host enrols in
+    the box itself is core/gui/widgets/refusal_box.show_refusal(parent, exc) -- so Records,
+    which is a plain QWidget and NOT a run host on purpose (a run host enrols in
     _instances, and a run in any panel would then grey out the browser while you were reading a
     log), shows the same title, icon, text, fix sentence and single OK button instead of a lookalike
     that drifts from this one.
@@ -1913,7 +1913,7 @@ def test_cancel_deferred_defers_a_cancel_and_never_discards_it():
 
     token = CancelToken()
     token.arm()                                # redirect_streams does this on the worker thread
-    token.requested.set()                      # Cancel pressed, latch not yet fired
+    token.requested.set()                      # a stop asked for, latch not yet fired
     fake = _FakePump()
     stream = _SignalStream(fake, "out", "info", token)
     handler = _PumpLogHandler(fake, token)
@@ -2017,7 +2017,7 @@ def test_a_cancel_raised_by_anything_the_manifest_refresh_reaches_is_carried_thr
 
     Nothing the refresh reaches logs or prints today, and the source-reading silence test only reads
     ``_refresh_manifest``'s OWN body, so this pins it the way the fault would arrive: the store's
-    manifest writer, which the refresh calls, learns to log. A Cancel is pressed before the second
+    manifest writer, which the refresh calls, learns to log. A stop is asked for before the second
     save; both saves must complete, batches_done must advance, the cache must still load -- and the
     cancel must still be taken at the first record OUTSIDE the section."""
     import logging
@@ -2060,7 +2060,7 @@ def test_a_cancel_raised_by_anything_the_manifest_refresh_reaches_is_carried_thr
                   run_size=run_size, n_runs=n_runs)
         tc.save(d, from_batch=0, batch_k=1, rng={}, x_buf=x, th_buf=th, run_size=run_size)
 
-        token.requested.set()                  # Cancel pressed, latch not yet fired
+        token.requested.set()                  # a stop asked for, latch not yet fired
         try:
             tc.save(d, from_batch=1, batch_k=2, rng={}, x_buf=x, th_buf=th, run_size=run_size)
         except WorkerCancelled:
@@ -2084,13 +2084,13 @@ def test_the_completion_write_runs_inside_the_deferred_cancel_section(tmp_path, 
     """``mark_complete`` is two writes that must both happen: state.pt flips to ``complete`` and the
     manifest follows it. A cancel between them -- or out of anything the manifest refresh reaches,
     whose ``except Exception`` cannot stop a BaseException -- leaves every row committed and the
-    manifest still saying the cache is unfinished, so the Artifacts browser labels a finished
+    manifest still saying the cache is unfinished, so Records labels a finished
     multi-day cache "unfinished" until the next resume happens to rewrite it. So both writes sit in
     one ``runs.cancel_deferred()`` section, as ``save``'s commit does.
 
     Pinned the way the fault would arrive, as the test above pins ``save``: BOTH writes learn to
     speak -- the state write through ``atomic_torch_save`` and the store's manifest writer -- and a
-    Cancel is pressed before the call. Move either write back out of the section and its own record
+    stop is asked for before the call. Move either write back out of the section and its own record
     raises the cancel before that write happens: state.pt or the manifest is left unfinished and this
     fails by name. The cancel must still be taken at the first record OUTSIDE the section."""
     import logging
@@ -2139,7 +2139,7 @@ def test_the_completion_write_runs_inside_the_deferred_cancel_section(tmp_path, 
     core_logger = logging.getLogger("core")
     core_logger.addHandler(handler)
     try:
-        token.requested.set()                  # Cancel pressed, latch not yet fired
+        token.requested.set()                  # a stop asked for, latch not yet fired
         try:
             tc.mark_complete(d, n_runs, rows=(n_runs * run_size, 3))
         except WorkerCancelled:
@@ -2238,7 +2238,7 @@ def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow(
     def rigged():
         token, fake = CancelToken(), _FakePump()
         token.arm()                            # this thread plays the worker
-        token.requested.set()                  # Cancel pressed, latch not yet fired
+        token.requested.set()                  # a stop asked for, latch not yet fired
         return token, fake, _SignalStream(fake, "out", "info", token), _PumpLogHandler(fake, token)
 
     def record(text):
@@ -2391,7 +2391,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     reached by one, an ``__exit__`` leaving by one, a generator's teardown -- or inside an explicit
     ``cancel_deferred()`` section. Normal flow is untouched (leg (c), and the unit test above).
 
-    (a) THE COLLISION -- Cancel pressed in the moment before a crash, in the rescue block's shape: a
+    (a) THE COLLISION -- a stop asked for in the moment before a crash, in the rescue block's shape: a
     record and a print inside the section, then a bare ``raise``. The ORIGINAL exception reaches
     Worker.run's generic handler: the run's page says the failure, its message quoted and its traceback
     behind "Show the full error", no box and nothing among the page's own lines -- and, because the
@@ -2436,7 +2436,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     reached = []
 
     def crash_behind_the_section():
-        controller().request_stop()            # Cancel pressed just before the failure
+        controller().request_stop()            # a stop asked for just before the failure
         try:
             raise RuntimeError("the batch failed")
         except RuntimeError:
@@ -2517,8 +2517,8 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
     next check. ``Worker.run`` asked the token nothing on the SUCCESS path, so a Cancel that arrived
     inside a deferral window nothing re-checked (a stage whose last write happens in a ``finally`` an
     exception entered -- ``core/Solvers/sdeint.py``'s bar teardown is on the graphed solver path) left
-    the run reported as a clean, completed success. The person who pressed Cancel was told nothing at
-    all.
+    the run reported as a clean, completed success. The person who asked for the stop was told nothing
+    at all.
 
     The run really DID finish, so it must not be reported as cancelled: nothing on disk is wrong and
     the payload is correct. It is reported as a SUCCESS with the fact said out loud in the run's text --
@@ -2550,7 +2550,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
         try:
             raise RuntimeError("something the run recovered from")
         except RuntimeError:
-            controller().request_stop()             # Cancel, inside a deferral window
+            controller().request_stop()             # a stop, inside a deferral window
             print("the last thing the run writes")  # deferred: no checkpoint fires here
         return "the payload"                        # ... and nothing checks the token again
 

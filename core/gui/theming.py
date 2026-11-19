@@ -7,8 +7,8 @@ Each choice resolves to light or dark; then an apply does, in order:
   * ``design.set_dark`` -- so every device that paints itself reads the colours of the theme in
     force;
   * ``design.build_palette`` + ``design.build_qss`` -- the palette and the one application style
-    sheet. A widget that paints itself (progress_pane._Sparkline) reads the palette, so the
-    palette -- not only the sheet -- must be right;
+    sheet. A widget that paints itself reads the palette (the run page's lines their ink and their
+    selection's colours, a choice its hint's colour), so the palette -- not only the sheet -- must be right;
   * ``fonts.apply_class_fonts`` (a new sheet puts the system's font back on lists, tables,
     headers, menus and tool tips), ``retheme()`` on each widget that has one, and an update of
     every top-level widget;

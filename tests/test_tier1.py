@@ -435,7 +435,7 @@ def test_the_posterior_summary_marks_the_assumed_parameter_and_the_corner_uses_t
     assert len(pair) == 1
     assert ast.unparse({k.arg: k.value for k in pair[0].keywords}["labels"]) == "cfg.report_labels"
     assert [ast.unparse(c.args[2]) for c in calls if c.func.id == "_posterior_summary"] == ["cfg.assumed_params"]
-    # The summary is also said once, as one info record, so the Infer tab's log pane carries it.
+    # The summary is also said once, as one info record, so the run's text in the window carries it.
     described = [c for c in calls if c.func.id == "_describe_posterior_summary"]
     logged = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "log.info"
               and any(a is d for a in n.args for d in described)]

@@ -61,11 +61,12 @@ _RATE = re.compile(r"(?P<n>\d+(?:\.\d+)?)(?P<unit>it/s|s/it)")
 # sole producer.
 #
 # WHAT THIS IS FOR HAS CHANGED. It used to identify the bar whose rendered `it/s` was scraped for the
-# GUI's Solver Performance meter; that number now comes from core.progress.SOLVER, because a bar
-# shorter than its own mininterval never paints a rate (see progress_pane's module docstring). The
-# prefix survives purely to EXCLUDE this bar from the overall-bar election, and that use
-# is if anything more load-bearing now: the election is by largest total, and the solver's is in the
-# tens of thousands, so it would win outright and sweep the bar 0->100% every second.
+# GUI's Solver Performance meter, which is gone: a bar shorter than its own mininterval never paints a
+# rate, and the window now reads the solver's own count of steps, core.progress.SOLVER, as a sign of
+# life. The prefix survives purely to EXCLUDE this bar from the election of the row that measures the
+# run (``run.model.driving_row``), and that use is if anything more load-bearing now: the election is
+# by largest total, and the solver's is in the tens of thousands, so it would win outright and sweep
+# the run's measure 0->100% every second.
 _SOLVER_PREFIX = f"{SOLVER_BAR_DESC} (batch="
 
 
@@ -93,12 +94,12 @@ class RowState:
 
     @property
     def is_solver(self) -> bool:
-        """The SDE solver's per-step bar, which the pane must never let drive the overall bar.
+        """The SDE solver's per-step bar, which must never be the row that measures the run.
 
-        It used to also mean "this is the row the Solver Performance meter reads". It no longer does:
-        the meter differences core.progress.SOLVER instead, because scraping a rendered bar cannot
-        work for a call shorter than that bar's mininterval. This predicate is now purely an
-        exclusion from the overall-bar election.
+        It used to also mean "this is the row the Solver Performance meter reads". The meter is gone:
+        the window reads the solver's own count of steps, core.progress.SOLVER, because scraping a
+        rendered bar cannot work for a call shorter than that bar's mininterval. This predicate is now
+        purely an exclusion from the election of that row (``run.model.driving_row``).
         """
         return self.desc.startswith(_SOLVER_PREFIX)
 
@@ -210,10 +211,10 @@ class StreamRouter:
         row 0 (tqdm/std.py:1302-1303). Persist the bar's final frame to the log -- which is what a
         terminal shows -- and retire the row.
 
-        Without this a finished leave=True bar (Priors.prior "Constructing latent
-        prior...") would sit in the progress pane at 100% for
-        the rest of the run AND, being `informative`, would peg the overall bar at 100% -- reading as
-        "done" or "hung" while the pipeline is still working.
+        Without this a finished leave=True bar (Priors.prior "Constructing latent prior...") would stay
+        among the run's rows at 100% for the rest of the run AND, being `informative`, could hold the
+        row that measures the run at 100% -- reading as "done" or "hung" while the pipeline is still
+        working.
         """
         row, self._closing = self._closing, None
         if row is not None and row in self.rows:

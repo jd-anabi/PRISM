@@ -5,9 +5,9 @@ the small style over Fusion, and the devices that paint themselves. Pure and imp
 for QColor and QPalette, builds no application object, and asks Windows for its text size only when called to.
 
 ``tokens``, ``build_palette`` and ``build_qss`` give one theme's names, its palette and its style sheet, all
-from the table. Two palette roles stay load-bearing whatever a sheet says, because custom painting reads them
-and a sheet does not feed it: ``QPalette.Mid`` (the sparkline's baseline in widgets/progress_pane.py) and
-``QPalette.Highlight`` (its trace, and the selection colour). The sheet's last rules serve the widgets of the
+from the table. Palette roles stay load-bearing whatever a sheet says, because custom painting reads them
+and a sheet does not feed it: ``QPalette.Highlight`` among them, the selection colour, in which the run page's
+lines (``run.view._Lines``) paint a selection by hand. The sheet's last rules serve the widgets of the
 old layout: ``INTERIM_SELECTORS`` names them, and each leaves with its widget.
 """
 import math
@@ -340,9 +340,9 @@ def build_palette(dark: bool) -> QPalette:
         QPalette.Window: "paper", QPalette.WindowText: "ink", QPalette.Base: "field", QPalette.AlternateBase: "margin",
         QPalette.Text: "ink", QPalette.Button: "paper", QPalette.ButtonText: "ink", QPalette.BrightText: "on_accent",
         QPalette.ToolTipBase: "raised", QPalette.ToolTipText: "ink", QPalette.PlaceholderText: "ink_3",
-        QPalette.Highlight: "accent",                       # load-bearing: the sparkline's trace, and the selection
+        QPalette.Highlight: "accent",                       # load-bearing: the selection the run page paints by hand
         QPalette.HighlightedText: "on_accent", QPalette.Link: "accent", QPalette.LinkVisited: "accent",
-        QPalette.Mid: "rule_light",                         # load-bearing: the sparkline's baseline
+        QPalette.Mid: "rule_light",                         # no device of PRISM's own paints with it
         QPalette.Midlight: "margin", QPalette.Light: "paper", QPalette.Dark: "field_line", QPalette.Shadow: "ink",
         QPalette.Accent: "accent",
     }
@@ -360,8 +360,8 @@ def build_palette(dark: bool) -> QPalette:
 
 
 # ── the one style sheet ──
-# Selectors name widget classes only, never `*` or a bare `QWidget`: either would paint a ground behind the
-# sparkline, the live view, the figure labels and the snapshot overlays. The names are filled in by
+# Selectors name widget classes only, never `*` or a bare `QWidget`: either would paint a ground behind every
+# device that paints itself and behind the labels that hold the figures. The names are filled in by
 # string.Template, so the braces of a rule stay as written. Every size carries the prefix `px_`, because the
 # filler lets a size and a colour of one name silently replace each other; the borders are written as numbers,
 # since a line's weight does not grow with the text. No comment stands inside a template: it would reach the

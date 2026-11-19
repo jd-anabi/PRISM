@@ -1,4 +1,4 @@
-"""The Artifacts screen: read the artifact store from inside the app.
+"""Records: read the artifact store from inside the app.
 
 The window's part Records, and a PLAIN QWidget -- deliberately NOT a run host. A run host enrols itself in
 ``RunHost._instances``, and the run's controller disables every instance's controls column while ANY run
@@ -14,7 +14,7 @@ artifact: a remembered id that has since been deleted is exactly the dangling se
 re-listing the pickers after every change removes from them.
 
 The detail pane is TEXT ONLY: no figure rendering, no open-the-folder button, no "use this" jump
-into a stage tab. All three were considered and declined on 2026-09-17 and are additive on top of
+into a step. All three were considered and declined on 2026-09-17 and are additive on top of
 ``_detail_text`` if they are ever wanted.
 """
 from pathlib import Path

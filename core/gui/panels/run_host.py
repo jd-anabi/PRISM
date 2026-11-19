@@ -227,7 +227,7 @@ class RunHost:
         (_on_error). The same sentence goes to the page's own lines at warning, so it outlives the click
         that dismisses the box.
 
-        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with the Artifacts screen and the
+        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with Records and the
         model builder, which show the same box and are deliberately not run hosts. What stays here
         is the page's own line, because only a page has those -- those two screens record the
         sentence on their own status lines instead.

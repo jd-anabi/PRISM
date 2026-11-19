@@ -287,9 +287,9 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
         except Refusal as e:
             assert field in str(e), f"the message must name {field}, got: {e}"
             assert e.field is None, "two knobs and a science file; no single control answers it"
-            # No front end can produce the mismatch any more: the Config tab shows config.py's band
-            # and drive read-only, and the keys are neither written nor read. Sending an operator to
-            # PRISM.ini or the Config tab would send them to a cause that no longer exists.
+            # No front end can produce the mismatch any more: step 1, Model and options, shows config.py's
+            # band and drive read-only, and the keys are neither written nor read. Sending an operator to
+            # PRISM.ini or to that step would send them to a cause that no longer exists.
             for banned in ("PRISM.ini", "QSettings", "Config tab"):
                 assert banned not in str(e), f"the refusal still points at '{banned}': {e}"
             assert "config.py" in str(e), f"the refusal must say what to do instead, got: {e}"
@@ -325,7 +325,7 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
 
 
 def test_config_build_refusals_name_their_field():
-    """The field keys at the config build, the first thing every subcommand and the Prior tab do.
+    """The field keys at the config build, the first thing every subcommand and the Prior step do.
     Each refusal a bad input can provoke there is a Refusal carrying the key of the ONE control that
     answers it -- the chi knob, the cell, the units -- or None for the exactly-one-of check, which is
     a caller's mistake with no control behind it. The texts are unchanged (the pins on them

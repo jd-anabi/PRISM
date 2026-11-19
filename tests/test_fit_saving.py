@@ -14,7 +14,7 @@ pass and put back in a fresh trainer ends as the fit never stopped, saving after
 nothing the fit computes, the restore refuses a kept fit that differs, and the settings a kept fit
 records are the ones sbi uses. Last, the training stage on a real tiny training: a training whose rows
 are in a kept simulation set is saved after every pass, kept as a record of its own when it stops (by
-a Ctrl-C, the window's Cancel or an error), removed once its posterior is written, and listed with
+a Ctrl-C, a stop asked for in the window or an error), removed once its posterior is written, and listed with
 whether it can be resumed and why not. And resumed: on its own settings, into the very posterior the
 training writes uninterrupted, refused before anything is read when anything it was kept with has
 changed, marked as one that cannot be resumed when its rows read back do not give the kept fit, and
@@ -143,7 +143,7 @@ def test_a_rename_another_program_refuses_for_a_moment_is_tried_again(tmp_path, 
 
 
 def test_a_save_runs_inside_the_deferred_cancel_section(tmp_path, monkeypatch):
-    """A Cancel pressed in the window is taken at the next record the run writes; inside the section it
+    """A stop asked for in the window is taken at the next record the run writes; inside the section it
     waits, so no record can stop a save between its two renames."""
     seen = []
     real_save = fit_state.atomic_torch_save
@@ -834,7 +834,7 @@ def _added_folders(r, before) -> list:
 
 
 def _stop_after(patch, at: int, exc: BaseException) -> None:
-    """Stop the training with ``exc`` right after pass ``at`` is saved, as a Ctrl-C, the window's Cancel
+    """Stop the training with ``exc`` right after pass ``at`` is saved, as a Ctrl-C, a stop asked for in the window
     or an error arriving between two passes would: the pass's save runs whole (its state, its record and
     its line), then ``exc`` is raised where the trainer hands the pass on."""
     real = fit_state.FitSession.save_pass
@@ -967,7 +967,7 @@ def test_a_training_stopped_on_purpose_is_kept_and_says_how_it_stopped(tiny_run,
 
 def test_a_cancel_from_the_window_lands_after_the_pass_is_saved_and_keeps_the_training(
         tiny_run, fits_left, monkeypatch):
-    """The window's Cancel, pressed while a pass is being saved, waits for the save and is taken at the
+    """A stop asked for in the window while a pass is being saved waits for the save and is taken at the
     first record after it: the training is kept, stopped on purpose, after that pass, its state whole in
     ``state.pt``, and the window hears that it is kept. Driven through the window's own channel: its
     handler on the ``core`` logger is then the only place in the process where a cancel is taken."""
@@ -982,7 +982,7 @@ def test_a_cancel_from_the_window_lands_after_the_pass_is_saved_and_keeps_the_tr
     def save_then_cancel(path, state):
         real(path, state)
         if state["passes"] == 2:
-            token.requested.set()                       # Cancel pressed; nothing has taken it yet
+            token.requested.set()                       # a stop asked for; nothing has taken it yet
 
     monkeypatch.setattr(fit_state, "save_state", save_then_cancel)
     core_logger = logging.getLogger("core")
@@ -1988,7 +1988,7 @@ def test_a_window_stop_during_the_fit_keeps_every_pass_saved_before_it(tiny_run,
     saved line. The second epoch's own record, which would have followed that line, is said once the stop
     is taken, from the numbers the pass was saved with, just before the line that says the training is
     kept, so the run's text and the kept training's log hold every epoch it kept. Driven through the
-    window's own channel, as the test of a Cancel pressed during a save is."""
+    window's own channel, as the test of a stop asked for during a save is."""
     from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
     r = tiny_run
     token = CancelToken()

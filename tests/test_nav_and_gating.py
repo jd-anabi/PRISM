@@ -1,4 +1,4 @@
-"""Navigation, the inference tabs' gating/session flow, and the chi probe table. Split from test_gui_progress.py; run directly: pytest tests/test_nav_and_gating.py"""
+"""Navigation, the inference steps' gating/session flow, and the chi probe table. Split from test_gui_progress.py; run directly: pytest tests/test_nav_and_gating.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -45,13 +45,13 @@ _USER_ROLE = _Qt.UserRole
 # the stub the pages read the prior from, named "" unless a test names it: the shared one is named "retrain_prior"
 _prior_stub = functools.partial(prior_stub, name="")
 def _posterior_stub(id_="post1", name="", truncation=None, x_obs_digest=None):
-    """A LoadedPosterior-shaped stub: the tabs now read ``.posterior`` (the TransformedPosterior) off
+    """A LoadedPosterior-shaped stub: the steps now read ``.posterior`` (the TransformedPosterior) off
     session.posterior rather than carrying it directly, so a bare ``object()`` no longer stands in
     wherever a dispatched call actually reaches ``session.posterior.posterior``."""
     post = type("Post", (), {"truncation": truncation, "x_obs_digest": x_obs_digest, "latent": object()})()
     return type("LoadedPosteriorStub", (), {"posterior": post, "id": id_, "name": name})()
 def _chi_cfg(k=3, pad=12):
-    """Stub config that puts the Infer tab on its chi page (mirrors the SimConfig fields it reads)."""
+    """Stub config that puts the Inference step in chi mode (mirrors the SimConfig fields it reads)."""
     from core import config
 
     class Cfg:
@@ -70,7 +70,7 @@ def _chi_cfg(k=3, pad=12):
 
 
 def _chi_built_cfg():
-    """The chi twin of _spont_cfg: _chi_cfg's fields plus the two the Prior tab's post-build path
+    """The chi twin of _spont_cfg: _chi_cfg's fields plus the two the Prior step's post-build path
     reads beyond them -- the drive amplitude its chi line prints and check_unit_consistency."""
     cfg = _chi_cfg()
     type(cfg).chi_f0 = 0.15
@@ -209,7 +209,7 @@ def test_the_narrowing_rounds_button_is_greyed_with_its_reason():
     # The contract, checked against the CODE with docstrings stripped -- those docstrings necessarily
     # contain the word "proposal" while explaining what must not happen, and a naive text search on the
     # whole source flags the very comment that documents the rule. Two halves now: the STAGE builds the
-    # region and hands it to build_posterior as a truncation, and the TAB does nothing but dispatch it.
+    # region and hands it to build_posterior as a truncation, and the STEP does nothing but dispatch it.
     from core import orchestrator
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
     from tests._fixtures import code_only
@@ -370,7 +370,7 @@ def test_inference_pickers_repoint_from_draft_and_config():
 
     class Cfg:
         model = "HOPF"
-        params_dict = {}      # the Infer tab validates a picked cell against these
+        params_dict = {}      # the Inference step validates a picked cell against these
         rescale_params = {}
         force_params_dict = {}
         has_forcing = False   # mirrors SimConfig.has_forcing (empty force_params_dict)
@@ -833,7 +833,7 @@ def test_an_empty_predictive_band_is_annotated_on_the_psd_figure():
     assert not ok_texts, "annotated a perfectly good band"
 
 def test_overlay_figures_render_and_are_picklable():
-    """Each new Infer-tab figure must build and survive pickling (the 'Pop out' path unpickles it)."""
+    """Each new Inference-step figure must build and survive pickling (the 'Pop out' path unpickles it)."""
     import pickle
     import numpy as np
     from core.Helpers import visualizers
@@ -1160,7 +1160,7 @@ def test_a_narrowed_posterior_asks_at_every_run_and_cancel_starts_nothing(tmp_pa
 def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     """The window's half of the refusal contract. A Refusal names its field by a key and never a box,
     tab, button or flag; the yellow "Check your inputs" box gets its "how to fix here" line from ONE
-    table, and the inference tabs build their static rows from the same table's labels (label(key)),
+    table, and the step pages label their rows from the same table (label(key)),
     so a control is named in one place and a renamed one cannot leave a stale sentence behind.
 
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
@@ -1386,7 +1386,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "sup_min", "band_peak_window", "free_min", "captured_max", "drive_peak_window", "clarity_min"}
     assert gui_fields.CONTROL["resume_fit"] == "Look at the kept trainings in step 3, Training."
 
-    # (e) the drive labels, as the Infer tab builds them
+    # (e) the drive labels, as the Inference step builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):
         assert gui_fields.CONTROL[key] == (
             "infer", labels.gui_forcing_label(name, config.FORCING_DISPLAY_UNITS[name])), key
@@ -1403,10 +1403,10 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     the same way, for it is read as the page reads and no box may open then. Nothing is asked, installed on the session
     or dispatched either way, and a press reads again and starts nothing.
 
-    And a source pin, because the routing is a rule for all five inference tabs: none of
+    And a source pin, because the routing is a rule for every inference step: none of
     core/gui/panels/inference/*.py calls _config_error any more. That method was retired altogether
     once the four section panels were converted; the pin stays, because the scan is what stops a new
-    tab reintroducing the call."""
+    step reintroducing the call."""
     import types
     import core.gui.panels.inference as inference_pkg
     from core.gui.session import SbiSession
@@ -3193,7 +3193,7 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
 
 def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     """The private copy at the window, on the SUCCESS path, with nothing stubbed: a real simulated
-    inference on the tiny posterior, dispatched by this tab through the worker, writes its
+    inference on the tiny posterior, dispatched by this step through the worker, writes its
     observation and inference and hands them to the session -- and leaves the session's config
     exactly as ``install_config`` set it: no truth, no cell among its sources, the T_obs it had (1.0 s
     from the fixture) although the run was typed 1.5 s. The box value differs from the session's on

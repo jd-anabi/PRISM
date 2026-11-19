@@ -1,9 +1,10 @@
 """The window's half of the refusal-naming rule: which control answers each refusal field.
 
 A ``Refusal`` names the setting at fault by a key from ``core.refusals.FIELDS`` and never a box,
-tab, button or flag. ``RunHost._refusal`` puts ``fix_sentence(exc.field)`` under the message in
-the yellow "Check your inputs" box, and the inference tabs build their static rows from
-``label(key)`` -- ``add_help_row(form, label("t_obs"), ...)`` -- so a control is named in ONE place
+tab, button or flag. A step's page puts ``fix_sentence(exc.field, here=...)`` beneath the message in the shared
+question (``StepPage._refusal``), Records and the model builder put it in the yellow "Check your inputs" box
+(``widgets/refusal_box.py``), and a step's form labels each row ``label(key)`` (``Form.add``), as the model builder
+labels its scale rows -- ``add_help_row(sform, label("x_scale"), ...)`` -- so a control is named in ONE place
 and a renamed one cannot leave a stale sentence behind. ``add_help_row`` and a form's row apply
 ``labels.pretty_gui`` to whatever they are given (``core/gui/widgets/help_badge.py``), so the strings
 here are the plain forms, a unit standing beside its field and never in its label, and the read-back
@@ -13,7 +14,7 @@ Three shapes of entry:
 
 * ``(place, label)`` for a box or a picker: ``place`` is a place of the window by its key in
   ``core/gui/keys.py`` -- a step ("infer") or a part that has no steps ("models") -- and the label is
-  the row as the panel passes it to ``add_help_row``. A tuple of places is how one input names every
+  the row's own, as its form names it. A tuple of places is how one input names every
   place it appears, in the window's order (the parts as the rail lists them, a part's steps as it
   shows them): the batch count is in three of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
@@ -379,10 +380,10 @@ def difference_lines(fields, *, prior_label, param_keys=None) -> tuple:
 
 
 def label(key: str) -> str:
-    """The row label of a box entry; the inference tabs build their static rows from it.
+    """The row label of a box entry; a form labels its rows from it (``Form.add``).
 
     KeyError for a sentence or None entry (there is no single box to label) and for a key the
-    registry does not know -- loud on purpose: this runs when a tab is BUILT, so a wrong key fails
+    registry does not know -- loud on purpose: this runs when a page is BUILT, so a wrong key fails
     at construction and never inside a refusal."""
     entry = CONTROL.get(key)
     if isinstance(entry, tuple):

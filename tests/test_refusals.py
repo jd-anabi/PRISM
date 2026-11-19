@@ -342,9 +342,9 @@ def test_require_choice_refuses_an_unknown_option_and_lists_the_choices():
 
 def test_require_file_refuses_a_blank_and_a_missing_path_naming_the_input_kind(tmp_path):
     """The bounds and cell files and the three recordings: "given and the file exists". The bounds
-    file is checked where the config is built (cli.make_sim_config: the Prior tab's click and every
-    subcommand's first act), the cell where its truth is read (cli.load_and_validate_gt), at the Infer
-    tab's click and at simulated_inference's entry, and the recordings at the click and again at
+    file is checked where the config is built (cli.make_sim_config: the Prior step's press and every
+    subcommand's first act), the cell where its truth is read (cli.load_and_validate_gt), at the Inference
+    step's press and at simulated_inference's entry, and the recordings at the click and again at
     stage entry, so ``File not found: <path>`` and ``the spont recording was not found: ''`` are
     reached only by a race. (The units file has its own refusal, cli.resolve_units_file.) ``what``
     names the input kind in the blank sentence ("no cell file was given"); without it the field's own

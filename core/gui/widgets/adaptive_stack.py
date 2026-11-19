@@ -4,11 +4,12 @@ Qt's default QStackedWidget size hint is the maximum over all pages, because eve
 size policy while hidden. That is right when the pages are similar and wrong when they are not, and
 in this app they are not:
 
-  * the Infer tab's stack has a two-row "simulated" page and a chi page with K+3 rows -- so the short
-    page reserved the tall page's height and left a large dead gap;
+  * Parameter inference holds its six steps in one stack, and they differ widely in height -- so a short
+    step reserved the tallest step's height and left a large dead gap;
   * the model builder creates one forcing stack PER STATE VARIABLE, whose "None" page is empty and
     whose "exponential" page is three fields plus a radio row;
-  * the bounds/cell SourceToggle switches between a one-row file picker and a 320px-capped grid.
+  * the bounds/cell SourceToggle (which no page builds today) switches between a one-row file picker
+    and a 320px-capped grid.
 
 Setting every hidden page to Ignored means only the current page contributes a size hint, so the
 container collapses to fit what is actually on screen.

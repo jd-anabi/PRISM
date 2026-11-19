@@ -394,7 +394,7 @@ class ModelBuilderScreen(QWidget):
         return None."""
         if controller().is_live():
             # The smoke integration's tqdm writes to the process-wide redirected streams while a
-            # worker runs -- it would interleave into that run's progress pane. Refuse instead.
+            # worker runs -- it would interleave into that run's own lines. Refuse instead.
             self._set_status("A task is running -- wait for it to finish before validating.", error=True)
             return None
         if not self._var_rows:
@@ -578,7 +578,7 @@ class ModelBuilderScreen(QWidget):
         is a plain QWidget: a run host enrols in ``RunHost._instances``, and a run in any panel
         would then grey out the builder's own controls. It has no log pane either, so the status
         line is this screen's record of the sentence -- the same role the pane plays for a panel and
-        the status line plays for the Artifacts screen.
+        the status line plays for Records.
         """
         self._set_status(f"{exc.message} {gui_fields.fix_sentence(exc.field)}".rstrip(), error=True)
         show_refusal(self, exc)

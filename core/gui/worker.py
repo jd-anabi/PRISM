@@ -197,7 +197,7 @@ class Worker(QRunnable):
                         # REQUESTED-but-never-fired token is exactly what a crash mid-unwind of a
                         # pending Cancel leaves behind. Read here, before anything below clears it, and
                         # carried to the panel alongside the failure -- never as a cause, only as a fact
-                        # worth telling the person who clicked Cancel.
+                        # worth telling the person who asked for the stop.
                         cancel_noted = self.cancel is not None and self.cancel.requested.is_set()
                         # The training a failure in the fit kept, read off the exception as the stop's is.
                         kept_fit = getattr(e, "kept_fit", None)

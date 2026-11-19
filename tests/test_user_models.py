@@ -1000,8 +1000,8 @@ def test_the_palette_and_the_sheet_take_the_accent_from_the_table():
         t = design.tokens(dark)
         assert t["accent"] == accent
         pal = design.build_palette(dark)
-        assert pal.color(QPalette.Highlight).name().upper() == accent        # the sparkline's trace
-        assert pal.color(QPalette.Mid).name().upper() == t["rule_light"]      # the sparkline's baseline
+        assert pal.color(QPalette.Highlight).name().upper() == accent        # the selection the run page paints
+        assert pal.color(QPalette.Mid).name().upper() == t["rule_light"]      # the toolkit's mid tone
         assert accent in design.build_qss(dark)
     assert "#56B4E9" not in design.build_qss(False), "the dark accent in the light sheet"
     with pytest.raises(TypeError):

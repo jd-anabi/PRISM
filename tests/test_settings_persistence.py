@@ -1,4 +1,4 @@
-"""QSettings round-trips, layout geometry, and the config-tab hardware fields. Split from test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
+"""QSettings round-trips, layout geometry, and the hardware fields the old Config tab held. Split from test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -1539,7 +1539,7 @@ def test_consents_are_never_persisted(tmp_path):
 def test_get_bool_falls_back_on_an_unparseable_value():
     """settings.get_bool read "1"/"true"/"True" as True and EVERYTHING else as False, so a blank or
     hand-edited value ("maybe", "2") restored as False whatever the caller's default said. For the
-    remembered boolean with a True default that is the Fisher rotation silently OFF (the Config tab's
+    remembered boolean with a True default that is the Fisher rotation silently OFF (the old Config tab's
     reparam_rotate, config.REPARAM_ROTATE). get_int already fell back to its default on text it
     cannot parse; get_bool now does the same."""
     from core import config

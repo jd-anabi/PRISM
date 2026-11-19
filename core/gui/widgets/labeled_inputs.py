@@ -245,10 +245,9 @@ class IntField(_NumberField):
         """The field's value, or None when it does not parse -- the IntField twin of FloatField's.
 
         ``value()`` returns 0 for "" and for "-" mid-typing, and 0 is a legal value for the two
-        "0 = automatic" boxes (the rows-per-batch cap, the candidates per sweep round), so a tab
-        that wants to refuse a blank instead of reading it as zero has to ask this. The inference
-        tabs read every integer box through it at the click, where a blank box is a refusal, never a
-        zero.
+        "0 = automatic" boxes (the rows-per-batch cap, the candidates per sweep round), so a page
+        that wants to refuse a blank instead of reading it as zero has to ask this: a blank box is
+        then a refusal at the press, never a zero.
         """
         return _whole(self.text())
 

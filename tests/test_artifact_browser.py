@@ -1,4 +1,4 @@
-"""The artifact browser: the Artifacts screen, its listing, its detail pane and its actions. The
+"""The artifact browser: Records, its listing, its detail pane and its actions. The
 eighteenth suite. Run directly: pytest tests/test_artifact_browser.py"""
 import os
 import sys

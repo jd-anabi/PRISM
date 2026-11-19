@@ -9133,9 +9133,8 @@ def test_a_kept_training_whose_prior_is_gone_is_offered_nowhere_and_says_why(sto
     """A kept training whose prior is no longer in Records, after a reopening, a run's history naming it: Home offers
     no Resume; its row in the Training step's list offers none and says why before any press, in the words its Resume's
     refusal says, says nothing of what a resume does, and keeps "Delete"; and the past view of the run that kept it
-    offers nothing, neither "Resume the
-    training" nor "Discard", and under the run's own sentence, which says what the run kept when it was stopped, says
-    that it cannot be resumed now, why, and where it can be deleted."""
+    offers nothing, neither "Resume the training" nor "Discard", and under the run's own sentence, which says what
+    the run kept when it was stopped, says that it cannot be resumed now, why, and where it can be deleted."""
     from core.SBI import fit_state
     held = _a_launch_before(store, tmp_path, monkeypatch)
     kept = _a_kept_training(store, held, batches=10_000)

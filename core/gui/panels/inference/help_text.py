@@ -1,5 +1,5 @@
-"""The inference tabs' "?"-badge help copy, keyed by field. Shared: several keys serve two or
-three tabs (tobs, num_runs, run_size), so there is one table rather than one per tab. Also
+"""The inference steps' "?"-badge help copy, keyed by field. Shared: several keys serve two or
+three steps (tobs, num_runs, run_size), so there is one table rather than one per step. Also
 listed in Help, through the inference_tabs module path."""
 
 

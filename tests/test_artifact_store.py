@@ -267,7 +267,7 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
     artifact has been caught in this store before, so the six kinds' remove-on-exception is pinned HERE.
 
     Three exception shapes, because they arrive through the same ``__exit__``: a plain Exception, a
-    BaseException (the shape of gui.streams.WorkerCancelled, which is what a Cancel click raises), and
+    BaseException (the shape of gui.streams.WorkerCancelled, which is what a stop asked for raises), and
     a ``Refusal``. Each is raised both after a payload and with NOTHING written: a kind must remove its
     directory whichever way, so neither "nothing was written" nor "it was a refusal" can be what decides.
     """
@@ -2452,8 +2452,8 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
 
 
 def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypatch):
-    """A LOAD never uses the flow knobs, so it must not be refused over them. The Posterior tab sends one
-    build_posterior call for train and load alike, and its learning-rate field accepts a negative value:
+    """A LOAD never uses the flow knobs, so it must not be refused over them. The old Posterior tab sent one
+    build_posterior call for train and load alike, and its learning-rate field accepted a negative value:
     loading an existing posterior with -0.001 in that field was refused. The same values on a call that
     TRAINS are still refused before any spend (the train side is test_resume_is_validated_...)."""
     from core import orchestrator
@@ -2466,8 +2466,8 @@ def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypat
     monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
     bad = {"learning_rate": -0.001, "max_num_epochs": 0, "hidden_features": 0, "num_transforms": 0,
            "stop_after_epochs": 0, "fisher_m": 0, "fisher_dz": -0.1, "fisher_points": 0}
-    # The budget and the cadence join the exemption: a load reads neither, and the Posterior tab
-    # forwards its budget boxes on a load as well.
+    # The budget and the cadence join the exemption: a load reads neither, and the old Posterior tab
+    # forwarded its budget boxes on a load as well.
     budget = {"num_runs": 0, "run_size_cap": -1, "checkpoint_every": -1}
     loaded = orchestrator.build_posterior(cfg, lp, post.id, False, **bad, **budget)
     assert loaded.id == post.id and spent == []
@@ -2580,7 +2580,7 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
     with pytest.raises(AssertionError, match="Fisher reached"):
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, checkpoint_every=0)
 
-    # (e) THE DETECTOR RESOLVES run_size EXACTLY AS THE STAGE DOES: min(hw, cap). The Posterior tab
+    # (e) THE DETECTOR RESOLVES run_size EXACTLY AS THE STAGE DOES: min(hw, cap). The old Posterior tab
     # used `cap or _hw_batch(cfg)`, so with a cap ABOVE the hardware batch it asked about a directory
     # the run never touches -- two fields would differ and the near miss would vanish.
     rows = orchestrator.fresh_run_near_misses(cfg, lp, num_runs=2, run_size_cap=4096,

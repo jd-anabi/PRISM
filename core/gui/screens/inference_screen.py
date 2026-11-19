@@ -169,8 +169,8 @@ class InferenceScreen(QWidget):
 
     Drives the workflow from a model to a narrowing round and owns its gating: ``refresh_gates`` runs every
     step's own gate after every run of a step, then the steps' states. Remembers the model and the kind of observation
-    when the first step is applied; each other panel saves its own settings group. ``states_changed`` carries the six
-    steps' states each time they are worked out again.
+    when the first step is applied; every other step remembers its own picks as each comes into use, and nothing is
+    written at closing. ``states_changed`` carries the six steps' states each time they are worked out again.
     ``pages`` holds the six steps in their order, its height following the step shown; ``show_step`` shows one
     (``show_page`` is the same) and ``current_step`` (or ``current_page``) names the one shown.
     """
@@ -217,9 +217,8 @@ class InferenceScreen(QWidget):
         # and the Infer step is what records one (an amortized posterior has none at save time).
         self.tsnpe_panel = TSNPEPanel(self)
         # The six steps as pages, in their order and with no tab bar: the rail is the way between them. The
-        # stack's height follows the step shown, because the six pages differ wildly -- Validate is one label
-        # and one button, Infer in chi mode is 10-25 rows -- and a stack sized to the largest left the short
-        # pages a large dead gap.
+        # stack's height follows the step shown, because the six pages differ widely in height, and a stack
+        # sized to the largest left the short pages a large dead gap.
         self.pages = AdaptiveStack()
         for panel in self.panels():
             self.pages.addWidget(panel)

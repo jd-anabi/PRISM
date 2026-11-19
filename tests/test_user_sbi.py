@@ -3002,11 +3002,11 @@ def test_fisher_eigenbasis_can_return_the_eigenvalues_its_columns_are_sorted_by(
 def test_the_training_budget_routes_to_a_different_checkpoint():
     """THE HAZARD THAT MAKES THE GUI's BUDGET FIELDS DANGEROUS, pinned.
 
-    `build_posterior`'s `num_runs` / `run_size_cap` are now user-reachable from the Posterior tab, and
+    `build_posterior`'s `num_runs` / `run_size_cap` are user-reachable from the Training step, and
     BOTH land in the checkpoint identity, which is digested into the checkpoint's DIRECTORY NAME. So
     nudging either does not adjust a running job -- it silently routes to a directory that does not
-    exist yet and starts from zero, with no error anywhere. The Posterior tab states this inline
-    (PosteriorPanel._budget_checkpoint) rather than in a tooltip; this is the premise it rests on.
+    exist yet and starts from zero, with no error anywhere. The old Posterior tab stated this inline
+    (PosteriorPanel._budget_checkpoint) rather than in a tooltip; this is the premise it rested on.
     """
     from core import cli as _cli, registry as _reg
     from core.SBI import training_checkpoint as tc
@@ -3625,8 +3625,8 @@ def test_a_mismatched_sibling_checkpoint_is_reported_by_name():
 
 def test_a_truncated_rounds_checkpoint_is_never_a_near_miss_of_an_amortized_run():
     """A TSNPE round's identity is the amortized run's plus one key, so every truncated checkpoint
-    would be "one setting away" from every amortized run at its budget -- and the Posterior tab's
-    fresh-run modal would tell the user to change a setting that tab does not have, to continue rows
+    would be "one setting away" from every amortized run at its budget -- and the Training step's
+    fresh-run question would tell the user to change a setting that step does not have, to continue rows
     an amortized run must never adopt. near_miss_siblings ignores that key; describe_siblings
     still names the directory, saying why it is not resumable."""
     import tempfile
@@ -5323,7 +5323,7 @@ def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks
     land plain, through the window's logging handler.
 
     The wait line has a second duty: _cancellable_wait LOGS between its 1-s slices precisely so the
-    Cancel button has a checkpoint during a multi-minute pause, and a handler that did not check the
+    stop button has a checkpoint during a multi-minute pause, and a handler that did not check the
     token would have removed that checkpoint without a single test noticing. The window's handler
     checks the token before it sinks the record, as the stream's write() did -- pinned by requesting
     a cancel and asking for an eight-second wait: the raise must come after the first slice, not
@@ -5558,7 +5558,7 @@ def _crash_batch_3_with_a_cancel_pending(monkeypatch, crash):
 
 def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_original(monkeypatch):
     """THE collision no gate can provoke. The run crashes with the cancel token REQUESTED AND NOT YET
-    FIRED -- Cancel pressed in the moment before the failure -- and the rescue block's own
+    FIRED -- a stop asked for in the moment before the failure -- and the rescue block's own
     announcement is then the next cancel checkpoint. Before the repair that announcement raised
     WorkerCancelled from inside the ``except BaseException`` handler: ``_tc.save`` was skipped, the
     re-raise at the end of the block was never reached, and every batch since the last cadence write
@@ -5572,7 +5572,7 @@ def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_origi
     deferral, since the block is an ``except`` clause and a checkpoint reached while an exception is
     being handled does not fire."""
     def crash(token):
-        token.requested.set()                  # Cancel pressed; the latch has NOT fired
+        token.requested.set()                  # a stop asked for; the latch has NOT fired
         raise _KillRun("the batch failed")
 
     _crash_batch_3_with_a_cancel_pending(monkeypatch, crash)

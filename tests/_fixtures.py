@@ -2193,7 +2193,7 @@ def whole_program(*, held_by_another: bool = False):
 
 
 def artifact_screen(store):
-    """The Artifacts screen wired to ``store`` and refreshed once.
+    """Records (``ArtifactScreen``) wired to ``store`` and refreshed once.
 
     ``store`` travels through the screen's own ``_store`` / ``_resolved_store()`` seam -- the one
     ``StorePicker`` already uses and the picker tests already monkeypatch -- so no process default is

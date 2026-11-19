@@ -1147,10 +1147,10 @@ def test_a_tight_hpd_warns_through_the_preflight_channel_and_still_runs():
 def test_a_non_amortized_parent_is_refused_on_another_observation():
     """A narrowed parent around another observation is refused, with no escape hatch. A
     non-amortized parent is valid only near its own observation, so a region drawn from it around
-    another one is drawn where the flow extrapolates rather than where it was trained. Reachable
-    today by loading a round's posterior on the Posterior tab and then picking a different
-    observation on the TSNPE tab; build_truncation_region does not check it. The refusal names the
-    observation as its field: the one pick that answers it is the parent's own observation, and each
+    another one is drawn where the flow extrapolates rather than where it was trained. Reachable,
+    when the steps were tabs, by loading a round's posterior on the Posterior tab and then picking a
+    different observation on the TSNPE tab; build_truncation_region does not check it. The refusal names
+    the observation as its field: the one pick that answers it is the parent's own observation, and each
     front end names where the observation is chosen."""
     from core import orchestrator
     cfg, store = _round_cfg(), _RoundStore()
@@ -1406,11 +1406,11 @@ def test_the_round_announces_the_region_it_drew(caplog):
 
 def test_the_direction_refusal_names_the_width_and_the_default():
     """At the stage: a direction count above THIS posterior's latent width is refused in one sentence
-    carrying the width, the value given and the default, with field "n_directions". The TSNPE tab
-    cannot check it at the click -- it has no posterior to measure the width against -- so this
-    sentence is what the yellow box shows. It used to read "14 directions requested but the latent
-    has 13; ...", naming neither the setting nor its default. The width is the posterior's own: a
-    count equal to it is legal and the round proceeds."""
+    carrying the width, the value given and the default, with field "n_directions". The TSNPE tab, as the
+    Narrowing round step was, could not check it at the click -- it had no posterior to measure the width
+    against -- so this sentence was what the yellow box showed. It used to read "14 directions requested
+    but the latent has 13; ...", naming neither the setting nor its default. The width is the posterior's
+    own: a count equal to it is legal and the round proceeds."""
     from core import orchestrator
     from core.refusals import FIELDS
     drawn, store, cfg, obs = [], _RoundStore(), _round_cfg(), _round_obs()
