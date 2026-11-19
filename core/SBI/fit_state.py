@@ -501,8 +501,8 @@ class FitSession:
     The record's folder is made at the first pass saved, not before, and ``id`` is the record's id once
     a pass is kept (None until then): a training that ends or stops with no pass kept leaves nothing
     behind. Its manifest and its ``log.txt`` are refreshed at every pass. A save that fails (a
-    full disk, a file another program holds) is warned and never stops the training; a Ctrl-C or the
-    window's Cancel is never caught here. The lock taken at the first save is let go on every way out: a
+    full disk, a file another program holds) is warned and never stops the training; a Ctrl-C or a
+    stop asked for in the window is never caught here. The lock taken at the first save is let go on every way out: a
     stop, a finish whose posterior cannot be written, and the end.
 
     ``identity`` holds the parts known before the fit (the rows, the batches, the code, the constants
@@ -738,7 +738,7 @@ class FitSession:
             return
         what = f"{type(failure).__name__}: {failure}"
         if self._kept:
-            # Noted before the warning is said: under the window a Cancel pressed meanwhile is taken at
+            # Noted before the warning is said: under the window a stop asked for meanwhile is taken at
             # that warning, and the record the stop then writes carries the failure too.
             self._save_error = f"the last save failed ({what}); the kept training stands at pass {self.passes}"
         log.warning(f"[fit] the last save failed: {what}; "

@@ -52,7 +52,7 @@ def _step_bar(n: int, batch_size: int):
     It also stays ENABLED under the GUI, deliberately, rather than being quieted the way
     ``config.QUIET_SEGMENT_BAR`` quiets the segment bar: its redraws are the cooperative cancel's
     most frequent checkpoint (trap C) and what feeds the stall detector's heartbeat through a long
-    batch. See core/gui/widgets/progress_pane.py.
+    batch. The checkpoints are in core/gui/streams.py, and the stall detector in core/gui/run/model.py.
     """
     return tqdm(total=n - 1, **_bar_kwargs(n, batch_size))
 

@@ -129,8 +129,8 @@ class _SinkHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         # ``except Exception``, deliberately not BaseException: under the window a library record is
-        # written through ``_SignalStream.write``, which is a cancel checkpoint like every other
-        # write, and the WorkerCancelled it raises must sail through to Worker.run.
+        # handed to ``_SignalStream.record``, which is a cancel checkpoint as every write is, and
+        # the WorkerCancelled it raises must sail through to Worker.run.
         try:
             self._sink(record)
         except Exception:                     # noqa: BLE001 -- logging's contract: emit never raises

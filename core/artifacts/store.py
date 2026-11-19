@@ -48,9 +48,10 @@ NO_MANIFEST_REASON = "no manifest.json (incomplete or interrupted)"
 # How recently a directory's TREE must have been touched for a removal to refuse it as possibly
 # live. ``ArtifactWriter`` creates the directory first and writes the manifest LAST, so for the
 # whole of a run a live directory looks exactly like a leftover -- and a sweep from a SECOND process
-# (`python -m core artifacts sweep` beside a training in the window) has no ``BasePanel._running`` to
-# consult. Not a cross-process lock, which is out of scope: a recency guard plus an honest report
-# cannot itself destroy anything, and it costs a just-abandoned leftover a few minutes' wait.
+# (`python -m core artifacts sweep` beside a training in the window) cannot ask the window's run
+# controller whether a run is live. Not a cross-process lock, which is out of scope: a recency guard
+# plus an honest report cannot itself destroy anything, and it costs a just-abandoned leftover a few
+# minutes' wait.
 RECENT_WRITE_SECONDS = 300.0
 # Directories that may sit BESIDE the kind directories because an older build wrote them. A CLOSED
 # literal, never a scan: the store never walks its own root, and offering to remove whatever happens
@@ -936,8 +937,9 @@ class ArtifactStore:
         age = time.time() - _newest_mtime(sub)
         if age < RECENT_WRITE_SECONDS:
             # The recency guard. The manifest is written LAST, so a run in flight -- possibly in
-            # ANOTHER process, which no _running flag can see -- is indistinguishable from a leftover
-            # by content alone. Age is the one signal available without a cross-process lock.
+            # ANOTHER process, which the window's run controller cannot see -- is indistinguishable
+            # from a leftover by content alone. Age is the one signal available without a
+            # cross-process lock.
             raise StoreError(
                 f"{dir_name!r} under {d} was written {age:.0f} s ago, so something may still be "
                 f"writing it: an artifact's manifest is written last, and a run in flight looks "

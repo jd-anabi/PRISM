@@ -450,10 +450,10 @@ def _cancellable_wait(seconds: float, why: str) -> None:
     A PLAIN time.sleep() CANNOT BE CANCELLED HERE. Cancellation in this app is cooperative and is
     raised from CancelToken.check() on the worker thread -- inside the redirected stream's write() and
     inside the window's logging handler (core/gui/streams.py: _SignalStream.write,
-    _PumpLogHandler.emit) -- so a run that is sleeping is a run that cannot notice the Cancel button
-    until it wakes. Sleeping in ~1 s slices and LOGGING between them gives the latch its chance, and
-    a multi-minute silent pause in a run that has already logged an OOM would otherwise read as a hang
-    at precisely the moment the user is most likely to reach for Cancel.
+    _PumpLogHandler.emit) -- so a run that is sleeping is a run that cannot notice a stop asked for on
+    its page until it wakes. Sleeping in ~1 s slices and LOGGING between them gives the latch its
+    chance, and a multi-minute silent pause in a run that has already logged an OOM would otherwise
+    read as a hang at precisely the moment the user is most likely to reach for the stop button.
 
     The line is an information record (it was once a stderr print, i.e. a warning row in the
     window). The checkpoint moved with it: the window's handler checks the token before it sinks the
@@ -1994,7 +1994,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         # INSIDE A DEFERRED-CANCEL SECTION, because TWO of the calls below can raise, not one: the
         # log.warning is outside the inner try altogether, and the log.info is inside one whose only
         # handler is `except Exception` while WorkerCancelled is a BaseException. Either
-        # would raise under a cancel that is REQUESTED AND NOT YET FIRED -- Cancel pressed in the
+        # would raise under a cancel that is REQUESTED AND NOT YET FIRED -- a stop asked for in the
         # moment before a crash -- skipping _tc.save and the re-raise below and losing every batch
         # since the last cadence write. The comment this replaces claimed the log was safe because the
         # latch is one-shot and "the raise has already happened": true only when the cancel is what
@@ -2008,7 +2008,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                                 f"without a restore point (a resume will draw fresh noise from there)")
                 try:
                     # Announced BEFORE the write, so a multi-second flush is not an unexplained hang
-                    # after Cancel. Nothing is printed or logged BETWEEN the shard fsync and the state
+                    # after a stop. Nothing is printed or logged BETWEEN the shard fsync and the state
                     # replace -- see training_checkpoint, whose commit opens a section of its own.
                     log.info(f"[checkpoint] stopping: saving {batch_k - _ck_from} completed batches "
                              f"({_ck_from} -> {batch_k}) before unwinding…")

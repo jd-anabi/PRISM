@@ -1,6 +1,6 @@
 """``python -m core artifacts <mode>``: read, annotate and tidy the artifact store.
 
-The command-line twin of the Artifacts screen. ONE subcommand with a positional mode -- the
+The command-line twin of the window's Records. ONE subcommand with a positional mode -- the
 ``identifiability {rotation,laplace,jacobian}`` precedent (``_register_identifiability`` in
 core/tool/diagnostics.py), where each mode is a parser of its own, so a flag that means nothing to a
 mode is an argparse error rather than a setting that is silently ignored.

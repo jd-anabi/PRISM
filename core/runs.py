@@ -26,7 +26,7 @@ ends' cancel checkpoints consult:
   (`sys.exc_info()[1] is not None` -- inside every `except`, every `finally` a propagating exception
   entered, every `__exit__` leaving by one, and every generator teardown). A Cancel that would
   otherwise land where a raise skips a write that must happen, or REPLACES a crash that is still
-  unwinding with a clean "Run cancelled.", is deferred rather than taken either way. The token stays
+  unwinding with a clean stop, is deferred rather than taken either way. The token stays
   requested and the next check outside both is what raises.
 
 The `core` logger's level is set to INFO here, ONCE, at import. Python's root logger sits at
@@ -99,8 +99,9 @@ class RunLog:
 
     Detaching relies on there being only ONE RunLog attached to the process at a time -- not on any
     thread-safety of its own. That is the one-run-at-a-time rule the front ends already enforce (the
-    window's `gui.panels.base_panel.BasePanel._running`, `gui.streams._REDIRECT`), so a non-nested
-    `attach`/`detach` pair never races a second one on another thread.
+    window's run controller, `gui.run.controller.RunController`, which starts no run while one is
+    live, and `gui.streams._REDIRECT`), so a non-nested `attach`/`detach` pair never races a second
+    one on another thread.
     """
 
     def __init__(self):
@@ -170,8 +171,8 @@ _deferred = threading.local()                  # _deferred.depth: how many secti
 
 def cancel_is_deferred() -> bool:
     """True inside a ``cancel_deferred()`` block ON THIS THREAD, OR while this thread is handling an
-    exception. Read by the window's two cancel checkpoints
-    (``gui.streams._SignalStream.write`` and ``_PumpLogHandler.emit``) before they call
+    exception. Read by the window's three cancel checkpoints (``gui.streams._SignalStream.write``,
+    ``_SignalStream.record`` and ``_PumpLogHandler.emit``) before they call
     ``CancelToken.check()``.
 
     THE SECOND HALF: ``sys.exc_info()[1] is not None`` is true inside every ``except`` clause, every
@@ -183,7 +184,7 @@ def cancel_is_deferred() -> bool:
     in tests/test_worker_dispatch.py.
 
     A checkpoint reached this way used to fire mid-unwind and REPLACE whatever was propagating with a
-    clean "Run cancelled." -- the residual race the explicit section alone left open, and not a rare
+    clean stop -- the residual race the explicit section alone left open, and not a rare
     one: core/Solvers/sdeint.py's ``try ... finally: bar.close()`` sits on the graphed CUDA solver,
     the likeliest GPU crash site. This rule defers there too, so the ORIGINAL failure reaches
     ``Worker.run``'s generic handler and is reported as the crash it is, with the cancel noted rather

@@ -5584,8 +5584,8 @@ def test_a_crash_unwinding_through_a_finally_that_speaks_still_saves_and_raises_
     crash -- in ``try ... finally: bar.close()``, and the bar's closing write is a cancel checkpoint
     reached while the crash unwinds. With a cancel requested and not yet fired, that checkpoint used to
     raise: WorkerCancelled REPLACED the crash (chained to it as ``__context__``), the rescue block saved
-    the rows and re-raised the cancel, and the window said "Run cancelled." about a run that had
-    crashed, with the crash only in the log pane.
+    the rows and re-raised the cancel, and the window called a run that had crashed a stopped one,
+    with the crash only in the log pane.
 
     The raise-time deferral (``core.runs.cancel_is_deferred``: no checkpoint fires while this thread is
     handling an exception) keeps the crash the crash: the ``finally``'s record is carried, the ORIGINAL

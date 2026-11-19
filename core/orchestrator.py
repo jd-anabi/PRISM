@@ -1674,7 +1674,7 @@ def build_posterior(
 
     # THE FIT, SAVED AS IT GOES. With its rows in a kept simulation set, the fit is kept at the end of
     # every pass as a record of its own (core.SBI.fit_state), so a training stopped partway -- by a
-    # Ctrl-C, the window's Cancel, a crash -- can be resumed in a new process instead of started again.
+    # Ctrl-C, a stop asked for in the window, a crash -- can be resumed in a new process instead of started again.
     # Its identity is made here, before the fit: the rows and their batches, the code this process
     # loaded, the constants and the libraries; the fit adds its settings and the network's shape at its
     # first save. Without kept rows there is nothing to resume on (the run said so before its rotation).

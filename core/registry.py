@@ -43,7 +43,7 @@ _SPECS: dict = {
     "HOPF":      ModelSpec("HOPF", config.HOPF_LABELS, state_dep_drift=False, n_vars=2),
 }
 
-# (path, message) per model file that failed to load -- shown on the Settings screen, never raised.
+# (path, message) per model file that failed to load -- listed under Your own models, never raised.
 load_errors: list = []
 
 

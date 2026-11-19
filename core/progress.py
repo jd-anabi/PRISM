@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS -- and why it is a COUNTER rather than anything cleverer.
     The GUI's "Solver Performance" meter used to be obtained by PARSING THE RENDERED TEXT of the
-    solver's tqdm bar (core/Solvers/sdeint.py -> core/gui/vt.py -> widgets/progress_pane.py). That
+    solver's tqdm bar (core/Solvers/sdeint.py -> core/gui/vt.py -> the old progress pane). That
     coupling has one failure mode and it fired: tqdm only paints a frame carrying a rate once
     `mininterval` has elapsed, so a solver call SHORTER than its own bar's mininterval renders
     "?it/s" and nothing else, forever. When CUDA graphs took a 100k-step call from ~10 s to ~0.7 s
@@ -16,14 +16,16 @@ WHY THIS EXISTS -- and why it is a COUNTER rather than anything cleverer.
 
 THREAD MODEL -- ONE WRITER, MANY READERS. DO NOT ADD A SECOND WRITER.
     `add()` is called only from the thread running the solver: the CLI's main thread, or the GUI's
-    QThreadPool worker thread. Readers (the GUI thread's 100 ms tick) only ever read. `steps += n`
+    QThreadPool worker thread. Readers (the window's run controller, at a run's start and once a
+    second while it is live) only ever read. `steps += n`
     is NOT atomic under the GIL -- it is LOAD_ATTR / BINARY_OP / STORE_ATTR -- but with a single
     writer no update can be lost, and a reader that catches a stale value simply attributes those
     steps to its next sample. A second writer would silently drop steps, and no test would see it.
 
 NEVER RESET IT. Readers take DIFFERENCES between successive samples, so a reset would present as a
-    large negative delta -- i.e. a negative rate -- at whatever moment it happened. `ProgressPane`
-    snapshots the current value when a run begins instead, which is the same thing without the race.
+    large negative delta -- i.e. a negative rate -- at whatever moment it happened. The window's run
+    controller notes the current value when a run begins instead (``RunController.dispatch``), which
+    is the same thing without the race.
     Python ints are arbitrary precision, so there is nothing to overflow.
 """
 

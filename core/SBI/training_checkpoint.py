@@ -316,13 +316,16 @@ def describe_siblings(identity: dict, root=None) -> str:
 
 
 def checkpoints_using_prior(fingerprint: str, root=None) -> list:
-    """``[(name, batches_done)]`` for every committed checkpoint whose prior has ``fingerprint``.
+    """``[(name, batches_done)]`` for every simulation set under ``root`` (the default store's
+    simulation sets when None) that holds at least one committed batch and was simulated against a
+    prior whose fitted GMM has ``fingerprint``, the largest first; ``[]`` for no fingerprint. A set
+    whose header cannot be read is left out. ``name`` is the set's folder name.
 
-    A checkpoint is keyed on the prior's fitted GMM, so the prior FILE is the only thing that can
-    reproduce its directory name. Overwrite that file and the checkpoint becomes unresumable -- there
-    is no error and no warning, and several GiB of simulation simply stop being reachable. That has
-    now happened twice: 884 batches on 2026-08-27 (a prior built and never saved) and 3989 batches on
-    2026-08-28 (prior_08282026.pt overwritten with a different distribution under the same name).
+    The Prior step reads it to say, of the saved prior chosen, how many saved simulation sets were
+    made with that prior and how many batches the largest holds. A set's identity holds its prior's
+    fingerprint (``prior_fingerprint``), so its rows can be continued only with the prior they were
+    drawn from: the store keeps each prior in a record of its own, which a later save cannot replace,
+    and refuses to delete, unless forced, a prior a set was made with (``ArtifactStore.dependents``).
     """
     root = Path(root) if root is not None else _default_root()
     if not fingerprint:
@@ -448,7 +451,7 @@ def mark_complete(path, batch_k: int, rows=None) -> None:
     # ONE deferred-cancel section around both writes, for the reason save() gives:
     # a cancel between the state flip and the manifest refresh -- or out of anything the refresh
     # reaches, whose `except Exception` cannot stop a BaseException -- leaves every row committed and
-    # the manifest still saying the cache is unfinished, so the Artifacts browser labels a finished
+    # the manifest still saying the cache is unfinished, so Records labels a finished
     # cache "unfinished" until the next resume rewrites it.
     with cancel_deferred():
         atomic_torch_save(state, path / _STATE)
