@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit 0ed7262.
+Checked against commit 96f756e8.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -153,12 +153,15 @@ setting not given from the kept training's own record, the name and the note inc
 cache back without simulating again, and goes on from the last saved pass. Before anything is read,
 a setting given that differs from the kept training's is refused, naming its flag; so is a difference
 in its rows that a flag answers (`--prior`, `--num-runs`, `--run-size`, `--model`, `--device` or
-`--bounds`; a units file that differs is named with no flag, as the tool has none). Any other
-difference in its rows, such as the observation mode (`--chi` or `--no-chi`),
-and a change since it was kept in the code that builds or trains the network, in a configuration
-constant that code reads or in the libraries, is refused too, naming what differs and ending
-`(--resume-fit)`: the first is answered by giving the command what the training was kept with, the
-others by nothing while the change stands. Once the rows are read back, a kept
+`--bounds`; a units file that differs is named with no flag, as the tool has none), and so is a
+training kept in the other kind of observation, a frequency response or not, which is named as the
+kind of observation and ends `(--chi)`: give `--chi` or `--no-chi` as it was kept. Any other
+difference in its rows and a change since it was kept in the code that builds or trains the network,
+in a configuration constant that code reads or in the libraries, is refused too, naming what differs
+and ending `(--resume-fit)`: the first is answered by giving the command what the training was kept
+with, the others by nothing while the change stands. A kept narrowing round resumes only through
+`tsnpe`, in its own region: `train --resume-fit` refuses it at once, ending `(--resume-fit)`. Once
+the rows are read back, a kept
 training whose split, network shape or fitted standardisers no longer come out as they were kept is
 refused and marked as one that cannot be resumed, saying why. Once the posterior is written, the kept
 training is removed; `artifacts rm fit <id>` removes one by hand, and refuses one a process is
@@ -233,9 +236,11 @@ Two more are set rather than read as settings:
 - **1, a refusal.** A refusal prints one line, `prism <subcommand>: refused: <message> (<flag>)`,
   ending with the flag that answers it, for example `(--n-cal)` (`core.tool.fields.FLAG`). A missing
   or blank `--bounds`, `--cell`, `--spont` or `--forced` file is such a refusal, and names its flag
-  (`core.refusals.require_file`), once the model is known. Without `--model`, the model is read from
+  (`core.refusals.require_file`), once the model is known, and so is a line of a bounds file's three
+  sections that is not a parameter with its two limits, named by its number, ending `(--bounds)`
+  (`core.Helpers.file_manager.parse_bounds_file`). Without `--model`, the model is read from
   the file's parent folder. So a `--bounds` that is blank or outside a `Bounds/<model>/` folder is
-  refused first as an unsupported model, in the `ValueError` form below. A refusal that carries no
+  refused first as an unsupported model, ending `(--model)`. A refusal that carries no
   flag ends at the message: a record
   reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
   mode's `<ref>`), `--resume require` with no cache to resume, a missing units file (the tool has no
@@ -245,25 +250,25 @@ Two more are set rather than read as settings:
   be resumed for a reason no setting of the command
   answers (its code, a constant, a library or its cache changed, or its rows read back do not give its
   fit; [Training-cache flags](#training-cache-flags)) is refused ending `(--resume-fit)`, the flag that
-  named it. An error raised as a plain `ValueError`, such as an unsupported `--model`
-  (`core.tool.config_args.make_cfg`) or a failed probe measurement that
+  named it. An error raised as a plain `ValueError`, such as a failed probe measurement that
   [identifiability](#identifiability) finds after simulating, prints
   `prism <subcommand>: refused: <error class>: <message> [raised at <file>:<line>]`, and so does a
   missing file that no check covers. Anything else is a bug: the traceback, then
   `prism <subcommand>: *** FAILED ***`. An `artifacts sweep` that could not read or remove something
   exits 1 too.
 - **130, Ctrl-C.** `prism <subcommand>: interrupted: ` and advice for what was cut short: the
-  `interrupt_note` a family's parser sets, where it sets one (`core.tool.probes`), else the generic
-  advice.
+  `interrupt_note` a family's parser sets, where it sets one (`core.tool.probes`, `core.tool.browse`),
+  else the generic advice.
   - `smoke`: for the case where a `[checkpoint]` line said batches were saved, the flags to re-run
     with to continue them ([smoke](#smoke), `core.tool._smoke_interrupt_advice`);
   - the `probes` modes: a check writes its record only when it finishes, so nothing is left, and the
     same command starts it again;
+  - the `artifacts` modes: they keep no batches and nothing resumes them, and `artifacts list` shows
+    the store as the interrupted command left it ([artifacts](#artifacts));
   - every other command: the generic advice, that the record being written was removed and, if a
     `[checkpoint]` line said batches were saved, the same command with `--resume require` continues
     them, and, if a `[fit]` line said the training is kept as fit `<id>`, the same command with
-    `--resume-fit <id>` continues it. The `artifacts` family prints it too, although it fits none of
-    its modes ([artifacts](#artifacts)).
+    `--resume-fit <id>` continues it.
 
 ## prior
 
@@ -299,7 +304,9 @@ both also in the record's `log.txt`
 
 **Refuses**, before the sweep starts, a taken name and any setting out of range, naming its flag: a
 count below 1, a `--min-cluster-size` below 2, a negative `--sweep-batch`, a `--walk-step` or
-`--stability-units` that is not positive.
+`--stability-units` that is not positive. On a box that declares the temperature `T` in place of the
+force scale it refuses, there too, units that name no force unit or no length unit, which the force
+scale is derived with; the line ends at the message, as the tool has no units flag.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -377,7 +384,9 @@ run goes and keeps no `log.txt`. On the way it prints:
   process holds it, its cache is gone, or its code, a constant or a library changed since it was kept,
   naming which), `--checkpoint-every 0` and `--resume never` are refused, and so is a setting given
   that differs from the kept training's, naming its flag, or a change in its rows (the prior, the box,
-  the batch count). A kept training whose saved header or passes cannot be read at that moment (a
+  the batch count, the kind of observation `(--chi)`). A kept narrowing round is refused at once
+  `(--resume-fit)`: `tsnpe --resume-fit` resumes it. A kept training whose saved header or passes
+  cannot be read at that moment (a
   file another program holds reads so too) is refused before the cache is read and left as it was, to
   be tried again; one saved in another format is refused and marked as one that cannot be resumed.
   After the cache is read back, a kept training whose rows do not give the kept fit is refused, and
@@ -510,7 +519,9 @@ multiples of its own peak frequency, and the drive in its cell file is ignored.
 **Refuses** a taken name, a `--t-obs` of 0 or less, an `--n-samples` below 1, a posterior that does
 not match `--bounds`, a narrowed posterior without `--accept-truncated`, and a narrowed posterior run
 on any observation but its region's own without `--accept-other-observation`, which a simulated cell
-always is.
+always is. Every recording file is checked before any is read, and recordings that build another
+observation than a narrowed posterior's own are refused once they are built, before their
+observation is written.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -571,7 +582,8 @@ inside it, then `[prism] posterior <name>__<id>  <path>`.
 - The observation is checked against the configuration's mode and conditioning width when it loads,
   and the cache rules are those of [train](#train).
 - A kept round resumes with `--resume-fit` in the region read from its record, never drawn again:
-  `--directions` and `--level` are refused beside it, and `--posterior` and `--observation` must name
+  `--directions` and `--level` are refused beside it, ending with the one given, `(--directions)` or
+  `(--level)`, and `--posterior` and `--observation` must name
   the parent and the observation it was drawn with. Its other rules are those of [train](#train).
 
 **Refuses**, before any simulation: a taken name; a `--directions` below 1 or above the posterior's
@@ -619,7 +631,8 @@ number of parameters. The record keeps each repeat's answer and the fraction tha
   not reproduce repeat r of a longer run.
 
 **Refuses** a taken name, a count below 1, a `--chi-k-fixed` outside chi mode or outside its range
-`(--chi-k-fixed)`, a posterior that does not match `--bounds`, and a narrowed posterior without
+`(--chi-k-fixed)`, a `--seed` whose last repeat's seed, the seed plus `--repeats` − 1, is above
+2^64 − 1 `(--seed)`, a posterior that does not match `--bounds`, and a narrowed posterior without
 `--accept-truncated`.
 
 **Exit codes** as in [Exit codes](#exit-codes).
@@ -1025,9 +1038,9 @@ screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two
   usage error. `<ref>` is a record's name or its id.
 - Its output is plain aligned text on stdout, meant for a person or a script. It is not a record and
   reaches no `log.txt`.
-- After Ctrl-C the family prints the generic advice of [Exit codes](#exit-codes), about a removed
-  record and `--resume require`. It does not apply here: these modes write no record and keep no
-  cache, so there is nothing to resume.
+- After Ctrl-C the family prints its own sentence ([Exit codes](#exit-codes)): these modes keep no
+  batches and nothing resumes them, and `artifacts list` shows the store as the interrupted command
+  left it.
 
 ### artifacts list
 
@@ -1061,8 +1074,9 @@ prints `[prism] <kind> <label>: note = '<text>'` or `note cleared`.
 
 - `--note TEXT` — required: one line of at most 200 characters; `''` clears the note. A note with a newline, or a longer one, is refused `(--note)` rather than trimmed. It is required rather than defaulted, so leaving it off can never clear a note.
 
-A reference that names a leftover directory, rather than a record, is refused with a pointer to
-[artifacts sweep](#artifacts-sweep).
+A reference that names a leftover directory with no manifest at all, rather than a record, is refused
+with a pointer to [artifacts sweep](#artifacts-sweep); one whose manifest does not parse, or declares
+another kind, which `sweep` keeps, is refused with none. `artifacts rm` does the same.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 

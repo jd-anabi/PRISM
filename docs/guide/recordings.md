@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit 98882115.
+Checked against commit d1d8bbfb.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, which bounds file a cell is checked against, the three observation modes and
@@ -56,10 +56,14 @@ offset in (-50, 50)
 - The Forcing section declares a drive. It is not inferred: it names the drive a recording was made
   at, and its box is the range training draws drives from in forced mode. Whether a bounds file has
   one decides the observation mode ([Observation modes](#observation-modes)).
-- A line of any other shape is skipped without a word. A `#` line is always read as a header, by
+- A line of any other shape in one of the three sections, or one whose brackets hold other than two
+  numbers, is refused, naming its line by its number and its words
+  (`core.Helpers.file_manager.parse_bounds_file`): the command line ends the refusal `(--bounds)`, and
+  the Prior step says it under its list of bounds files. A `#` line is always read as a header, by
   the words it contains: one that names no section ends the current one, so the lines under it are
-  skipped, and a misspelt header can file the lines under it in the wrong section. A typo or a
-  comment line can therefore drop parameters or misfile them silently: write no comments, and
+  skipped without a word, and a misspelt header can file the lines under it in the wrong section. A
+  comment line or a misspelt header can therefore drop parameters or misfile them silently: write no
+  comments, and
   compare the order the `[cfg]` lines print with the file.
 - No units are written here. The model's units file declares them once for all its files; a unit
   written after a name, as in `x_scale (nm) in (10, 100)`, is read and ignored.
@@ -187,8 +191,9 @@ hidden_features = 256          # Network width
   digits alone (10000, never 10000.0 or 1e4), and a number takes a point as its decimal mark,
   whatever Windows' number format is (0.0005, or 5e-4). A value
   that breaks the setting's own rule is refused with that rule's sentence.
-- **Strict.** The readers of the cell and bounds files skip what they do not know; the plan's reader
-  does not, because a plan decides days of work on the card. Every line is understood or named as a
+- **Strict.** The cell file's reader skips what it does not know, and the bounds file's skips the lines
+  under a header it does not know; the plan's reader does
+  not, because a plan decides days of work on the card. Every line is understood or named as a
   problem with its line number, all of them at once, with the nearest known name when one is close, and
   a plan with any problem is refused whole. A setting no plan can hold is refused with the reason: it
   is fixed by measurement (the chi band and drive), belongs to this computer (the device), to one

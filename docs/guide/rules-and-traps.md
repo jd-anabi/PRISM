@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 98882115.
+Checked against commit d1d8bbfb.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -125,8 +125,7 @@ tab, flag or button; each front end appends the control or flag that answers the
 table (`core/gui/fields.py`, and `FLAG` in `core/tool/fields.py`). A programming error is a plain
 exception, never a refusal. Known gaps, which are not the rule, include:
 
-- plain `ValueError`s: the command-line tool's refusal of an unsupported model
-  (`core.tool.config_args.make_cfg`) and a narrowing round's refusal when every direction loads on
+- plain `ValueError`s: a narrowing round's refusal when every direction loads on
   t_scale (`core.SBI.truncate.region_from_posterior`, reached before any simulation), and the
   simulation cache reader's refusals that the `ablation` diagnostic reaches (two shards that overlap,
   a shard of the wrong size, fewer batches than committed: `core.SBI.training_checkpoint.load_rows`).
@@ -136,7 +135,10 @@ exception, never a refusal. Known gaps, which are not the rule, include:
   than one evaluation point) are each a `Refusal` with the field `posterior`, so the window names the
   control and the tool ends the line with `(--posterior)`. A narrowing round's
   refusal of a narrowed parent drawn around another observation is a `Refusal` with the field
-  `observation`, and ends with `(--observation)`. Pinned by
+  `observation`, and ends with `(--observation)`. The command-line tool's refusal of an unsupported
+  model (`core.tool.config_args.make_cfg`) is a `Refusal` with the field `model`, and ends with
+  `(--model)`. Pinned by
+  `tests/test_tool.py::test_an_unsupported_model_is_a_refusal_naming_the_model_flag`,
   `tests/test_diagnostics.py::test_the_input_use_check_refuses_with_the_posterior_field_before_anything_is_spent`,
   `tests/test_diagnostics.py::test_the_input_use_check_holds_no_plain_value_error`,
   `tests/test_diagnostics.py::test_identifiability_across_the_prior_refuses_a_posterior_with_no_training_prior`
