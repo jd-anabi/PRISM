@@ -315,6 +315,57 @@ simulated once.
 - [ ] Its numbers to the owner as one plain question with a recommendation. A yes opens `core/Solvers` in a task of its
   own, planned then; a no leaves A9's solver as built.
 
+## Task A11: The corrected step (added 2026-11-18, on the owner's yes; after A8, before the review)
+
+**Items:**
+- A10's measurement (`reports/a10-builder.md`): stochastic Heun at A9's step removes nearly all the step error that M1
+  measured.
+  - A-F FAIL 78 to 14 of 360, and G 22 to 8 of 132.
+  - The worst pooled bias falls from 0.53 to 0.04 of a spread; the stiff cell's from 2.9 to 0.003.
+  - It does not strictly pass M1's bar.
+  - It costs about 1.7 times the step on the card: about 46 card hours for a 10,000-batch set instead of 29, with the
+    same memory, batch sizes and recording lengths.
+- **The owner's answer (2026-11-18, 22:50 PST):** "Adopt it in the audit". It is its own task after A8 and before the
+  review, so the retrain's set is simulated once, with it.
+
+**What moves, by the owner's yes:**
+- every simulated row;
+- the simulation set's identity (a new token for the rule, so the retrain's set id leaves `d7002cdb4be8`);
+- the golden amortized digest;
+- `core/Solvers`, `core/Simulator` and the models' compiled steps under `core/Models`.
+
+**What does not move:**
+- `core/config.py`;
+- the seventeen fit-code digests;
+- what an uninterrupted fit computes;
+- anything under `Artifacts/`.
+
+**The steps:**
+- [ ] **A design note first** (the builder's, ruled by the controller, any point that moves what a stage refuses or a
+  record holds to the owner):
+  - which models take the rule: those whose noise's Ito-to-Stratonovich correction is zero, which the Nadrowski model
+    meets. The Hopf model and a user model are checked. A user model whose noise depends on its own variable keeps
+    today's rule, or is refused, since averaging its noise integrates another equation. How that is decided (from the
+    model's declared form, or checked) and what a person sees;
+  - the prior's stability screen keeps today's rule (Heun's stable region holds Euler's, so the screen stays
+    conservative, and the prior is unchanged);
+  - the identity's token for the rule, and the refusal of a set or posterior made under the other rule;
+  - the graph drive buffer one point longer, and the drive at each step's end across a seam.
+- [ ] **The build:**
+  - the rule in `core/Solvers/sdeint.py`'s loops (both), the simulator's drive slice and the models' compiled steps;
+  - the identity token;
+  - every pin the rule moves;
+  - tests: the noise-off order 2 on the built solver; the predictor equal to today's step bit for bit; a segmented
+    run equal to one long run; the drive at a step's end across a seam; the rule's choice per model; the refusal of the
+    other rule's set and posterior.
+- [ ] **Measured again on the card:**
+  - A9's chi checks (`probes band`, `drive`, `mask` on the tier-1 cell and the retrain prior);
+  - the lock-in ceiling's sweep (64 still free of a wall);
+  - M1's ensemble at K = 1 on the BUILT solver against A10's scratch Heun (equal, or within the card's one ulp).
+- [ ] **The guide:** `science.md`'s step error with A10's numbers, and `architecture.md`'s solver.
+- [ ] **The new retrain set id** reported.
+- [ ] **Gate:** fast + real-screen, the card smoke gate with its resume drill, the diagnostic card.
+
 ## The review and the exit
 
 - [ ] The three-reader review of `b245f20b..HEAD` (seats as `stage-5/briefs/review-seats.md`, re-pointed to this plan),
