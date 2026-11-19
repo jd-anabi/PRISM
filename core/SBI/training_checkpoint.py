@@ -60,12 +60,12 @@ Shards are durable before the state that references them, so no commit can point
 the page cache.
 
 Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
-``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
-both of which call ``CancelToken.check()`` and would raise mid-commit. ``save`` now runs steps 1-3
--- and the manifest refresh after them -- inside a deferred-cancel section
-(``core.runs.cancel_deferred()``), and ``mark_complete`` runs its state flip and manifest refresh
-inside one too, so both checkpoints carry such a line instead of raising on it -- the rule is still
-the rule, and the section is what enforces it.
+``gui.streams._SignalStream.write``, a library's record through ``gui.streams._SignalStream.record`` and a
+``core`` record through ``gui.streams._PumpLogHandler.emit``, all three of which call ``CancelToken.check()``
+and would raise mid-commit. ``save`` now runs steps 1-3 -- and the manifest refresh after them -- inside a
+deferred-cancel section (``core.runs.cancel_deferred()``), and ``mark_complete`` runs its state flip and
+manifest refresh inside one too, so both checkpoints carry such a line instead of raising on it -- the
+rule is still the rule, and the section is what enforces it.
 """
 import hashlib
 import json
@@ -359,7 +359,7 @@ def near_miss_siblings(identity: dict, root=None) -> list:
 
     ``truncation`` alone is never a near miss. A TSNPE round's identity is the amortized run's plus
     that one key, so every truncated checkpoint would otherwise be "one setting away" from every
-    amortized run at its budget -- and the Posterior tab would tell the user to change a setting it
+    amortized run at its budget -- and the Training step would tell the user to change a setting it
     does not have, to continue rows an amortized run must never adopt.
     """
     out = [{"name": d.name, "batches": done, "field": diff[0],

@@ -49,7 +49,7 @@ def rescale_axis_label(name: str, *, length_unit: str | None = None, time_unit: 
 # passes today needs one: every label is passthrough, and an entry here is the place for the first that does.
 GUI_HTML: dict[str, str] = {}
 
-# Pretty symbols for the (dynamically built) forcing-parameter labels in the Infer tab.
+# Pretty symbols for the (dynamically built) forcing-parameter labels of the Inference step's drive.
 GUI_FORCING = {"amp": "A", "amp_y": "A<sub>y</sub>", "freq": "f", "phase": "φ", "offset": "offset"}
 
 

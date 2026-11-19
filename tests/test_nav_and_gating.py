@@ -1,4 +1,5 @@
-"""Navigation, the inference steps' gating/session flow, and the chi probe table. Split from test_gui_progress.py; run directly: pytest tests/test_nav_and_gating.py"""
+"""Navigation, the inference steps' gating/session flow, and the chi probe table. Split from test_gui_progress.py; run
+directly: pytest tests/test_nav_and_gating.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN

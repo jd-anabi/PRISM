@@ -160,7 +160,7 @@ def parse_bounds_file(file_name: str) -> tuple:
     NOTE on ``collected_units``: inline ``(units)`` annotations are parsed but BOTH callers
     (``cli.make_sim_config`` and the Prior step's reading of a bounds file) discard the
     result, and no shipped bounds file carries them -- units are declared centrally (the per-model units
-    file, or the Config tab's units control) precisely so one declaration governs every file. It is
+    file, or the units row of step 1, Model and options) precisely so one declaration governs every file. It is
     returned for backward compatibility; do not start relying on per-line units here, or a bounds file
     could silently disagree with the config's declared units.
     """

@@ -13,9 +13,9 @@ it is the core API's own word). Each front end appends its own "how to fix here"
 by ``field`` (core/gui/fields.py, core/tool/fields.py), so a renamed control is renamed in one place
 and a core message can never go stale about it.
 
-WHY BLANK IS A REFUSAL. ``FloatField.value()`` returned 0 on a blank box and the tabs clamped,
+WHY BLANK IS A REFUSAL. ``FloatField.value()`` returned 0 on a blank box and the old tabs clamped,
 defaulted or forwarded the zero: a blank observation length reached ``math.log(0.0)`` AFTER the
-simulation was spent, and the TSNPE tab's blank direction count was refused with a sentence naming
+simulation was spent, and the old TSNPE tab's blank direction count was refused with a sentence naming
 neither the box nor the default. Here ``None`` is the blank and is refused as one, with the default
 in the sentence; the two "0 = automatic" fields accept a typed 0 only.
 
@@ -200,7 +200,7 @@ def missing_values_phrase(label: str, missing) -> str:
     that does not supply something the bounds file declares.
 
     A fragment, deliberately: ``cli.validate_gt_file`` returns it as one of its problem strings,
-    which the Infer tab joins with "; ", while ``SimConfig._fill_checked`` puts "Cell file is " in
+    which the Inference step joins with "; ", while ``SimConfig._fill_checked`` puts "Cell file is " in
     front and a period after -- so the dry run and the refusal say the same words. ``label`` is used
     AS GIVEN (the callers pass the plural, "ND parameters") and is never pluralised here. Here rather
     than in ``core/cli.py`` because ``core/sim_config.py`` cannot import ``core/cli.py``.

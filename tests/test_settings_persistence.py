@@ -1,4 +1,5 @@
-"""QSettings round-trips, layout geometry, and the hardware fields the old Config tab held. Split from test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
+"""QSettings round-trips, layout geometry, and the hardware fields the old Config tab held. Split from
+test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN

@@ -449,11 +449,12 @@ def _cancellable_wait(seconds: float, why: str) -> None:
 
     A PLAIN time.sleep() CANNOT BE CANCELLED HERE. Cancellation in this app is cooperative and is
     raised from CancelToken.check() on the worker thread -- inside the redirected stream's write() and
-    inside the window's logging handler (core/gui/streams.py: _SignalStream.write,
-    _PumpLogHandler.emit) -- so a run that is sleeping is a run that cannot notice a stop asked for on
-    its page until it wakes. Sleeping in ~1 s slices and LOGGING between them gives the latch its
-    chance, and a multi-minute silent pause in a run that has already logged an OOM would otherwise
-    read as a hang at precisely the moment the user is most likely to reach for the stop button.
+    record() and inside the window's logging handler (core/gui/streams.py: _SignalStream.write,
+    _SignalStream.record for a library's records, _PumpLogHandler.emit) -- so a run that is sleeping is a
+    run that cannot notice a stop asked for on its page until it wakes. Sleeping in ~1 s slices and
+    LOGGING between them gives the latch its chance, and a multi-minute silent pause in a run that has
+    already logged an OOM would otherwise read as a hang at precisely the moment the user is most
+    likely to reach for the stop button.
 
     The line is an information record (it was once a stderr print, i.e. a warning row in the
     window). The checkpoint moved with it: the window's handler checks the token before it sinks the
@@ -1898,7 +1899,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                     # Waiting cannot help: we are what is full. Go straight back to the retry, where
                     # the two halving ladders will shrink the work instead.
                     # The tail names the core's own settings, never a window control: the tool has no
-                    # Config tab, and the window's field writes config.SIM_VRAM_CEILING_GIB.
+                    # Settings page, and the window's memory limit (Settings, "This computer") is
+                    # assigned to config.SIM_VRAM_CEILING_GIB (core.gui.memory_limit).
                     log.warning(f"{_batch_tag()}: THIS process holds most of the card, so waiting cannot "
                                 f"free anything -- retrying immediately at a smaller size instead of "
                                 f"pausing {_delay:.0f}s. If this repeats, the allocator is fragmented: "

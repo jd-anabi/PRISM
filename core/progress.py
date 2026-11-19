@@ -16,16 +16,17 @@ WHY THIS EXISTS -- and why it is a COUNTER rather than anything cleverer.
 
 THREAD MODEL -- ONE WRITER, MANY READERS. DO NOT ADD A SECOND WRITER.
     `add()` is called only from the thread running the solver: the CLI's main thread, or the GUI's
-    QThreadPool worker thread. Readers (the window's run controller, at a run's start and once a
-    second while it is live) only ever read. `steps += n`
+    QThreadPool worker thread. Readers (the window's run controller: at a run's start, once a second
+    while it is live, and at its end, ``RunController._spent``) only ever read. `steps += n`
     is NOT atomic under the GIL -- it is LOAD_ATTR / BINARY_OP / STORE_ATTR -- but with a single
     writer no update can be lost, and a reader that catches a stale value simply attributes those
     steps to its next sample. A second writer would silently drop steps, and no test would see it.
 
-NEVER RESET IT. Readers take DIFFERENCES between successive samples, so a reset would present as a
-    large negative delta -- i.e. a negative rate -- at whatever moment it happened. The window's run
-    controller notes the current value when a run begins instead (``RunController.dispatch``), which
-    is the same thing without the race.
+NEVER RESET IT. Readers ask whether the count grew since an earlier reading (``run.model.moved``), so
+    a reset would read as no step taken: a silence growing on the run's page while the solver works,
+    and at the run's end a refusal that came after the solver had stepped told as one made before
+    anything was spent. The window's run controller notes the current value when a run begins instead
+    (``RunController.dispatch``), which is the same thing without the race.
     Python ints are arbitrary precision, so there is nothing to overflow.
 """
 

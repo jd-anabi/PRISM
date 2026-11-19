@@ -320,7 +320,7 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
     refs = []
     for p, role, f in named:
         # "is blank" for an empty path, "was not found" for a path with no file behind it: the same rule
-        # and the same sentence the Infer tab runs at the click.
+        # and the same sentence the Inference step runs at the press.
         require_file(role_field[role], p, "recording")
         # Every driven chi recording states the frequency it was driven at, in Hz. Role-scoped on
         # purpose: `named`'s FIRST element is the passive recording, whose frequency is None BY
@@ -409,9 +409,9 @@ def _write_observation(store, cfg, name, note, fig_sink, x_obs, obs_data, t_dim,
 
 def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int, truncation=None) -> dict:
     """The simulation identity, as the dict training_checkpoint digests. A delegate to
-    core.artifacts.identity.SimulationIdentity, kept under this name for the GUI's Posterior tab,
-    which computes it before Train is pressed (the checkpoint line and the near-miss modal) and passes
-    whatever it holds for a prior -- a LoadedPrior, or a stub that must fail open."""
+    core.artifacts.identity.SimulationIdentity, kept under this name for this module's readings, which
+    compute it before a training starts (``training_reading``, ``matching_fits``, ``fresh_run_near_misses``)
+    and pass whatever they hold for a prior -- a LoadedPrior, or a stub that must fail open."""
     from .artifacts.identity import SimulationIdentity
     return SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
 
@@ -421,7 +421,7 @@ def _training_run_size(cfg: SimConfig, size_cap: int) -> int:
 
     THE one resolution, because build_posterior and fresh_run_near_misses must agree to the row: the
     run size is part of the simulation identity, so a detector that resolved it differently would look
-    in a directory the run never touches. The Posterior tab did exactly that -- `cap or _hw_batch(cfg)`
+    in a directory the run never touches. The old Posterior tab did exactly that -- `cap or _hw_batch(cfg)`
     against the stage's `min(hw, cap)` -- and with a cap above the hardware batch it asked about the
     wrong cache. Pure; the announcements stay in build_posterior.
     """
@@ -442,10 +442,11 @@ def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=
     no committed sibling is one field away. Pure; fails open for a stub prior
     (``SimulationIdentity.from_cfg`` records its fingerprint as None).
 
-    The Posterior tab's detector. build_posterior asks ``training_checkpoint.near_miss_siblings`` the
-    same question itself, of the same identity at the same run size (``_training_run_size``) under the
-    same store root, so the question the user is asked and the refusal that follows can never disagree
-    about which directory this run will touch. This answer is advisory; the stage's own is binding.
+    Once the old Posterior tab's detector; no page calls it today. build_posterior asks
+    ``training_checkpoint.near_miss_siblings`` the same question itself, of the same identity at the same
+    run size (``_training_run_size``) under the same store root, so the question the user is asked and
+    the refusal that follows can never disagree about which directory this run will touch. This answer
+    is advisory; the stage's own is binding.
     """
     ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
     if not ck_every:
@@ -625,7 +626,7 @@ def training_preview(cfg, prior, *, num_runs: int, run_size_cap: int, truncation
     and writes nothing; copies nothing (a reader, not a public entry); NEVER RAISES.
 
     ONE RESOLUTION, THE STAGE'S. The lines used to derive their own answers: the width through a helper
-    of the tab's, the cache directory under the process-default root instead of the store the run
+    of the old Posterior tab's, the cache directory under the process-default root instead of the store the run
     writes to, and the cadence from config.TRAINING_CHECKPOINT_EVERY -- the LIVE module copy, where the
     stage reads this module's import-time binding. Each was a way for the line to say one thing and the
     run to do another. Here, as build_posterior and fresh_run_near_misses resolve them: the width is
@@ -637,10 +638,10 @@ def training_preview(cfg, prior, *, num_runs: int, run_size_cap: int, truncation
     training batch is simulated from -- len(cfg.inits_dict) is 0 on a config with no cell).
 
     INTS ONLY: ``num_runs`` and ``run_size_cap`` are what the boxes hold after their rules passed. The
-    tab does not call this while a box is blank or out of rule.
+    Narrowing round step does not call this while a box is blank or out of rule.
 
     THE NO-CONFIG BRANCH IS EXPLICIT, because the budget group is on screen at launch with no config.
-    The hardware is ``cfg.hw``, else ``hw`` (the tab's memoised detect_device()), else detect_device(),
+    The hardware is ``cfg.hw``, else ``hw`` (a device a caller hands in), else detect_device(),
     so ``width`` and ``hw_batch`` always resolve. With ``cfg is None`` the memory geometry is the
     hardware defaults (n_fine = N_ND_MAX, 3 state variables, no steady-state cut, one force channel),
     and ``checkpoint`` is "needs_config" when the config or the prior is None (the prior is part of the
@@ -649,7 +650,7 @@ def training_preview(cfg, prior, *, num_runs: int, run_size_cap: int, truncation
     FAIL-SOFT. A config it cannot read (the gate tests' object() sentinel, a stub) or a planner that
     raises lands in ``estimate_error``; a failure building the identity, resolving the store, peeking
     the state or describing the siblings lands in ``checkpoint_error``. A status line that raised
-    would take the whole tab down with it.
+    would take the whole page down with it.
     """
     hw = getattr(cfg, "hw", None) or hw or config.detect_device()
     n_runs, size_cap = int(num_runs), int(run_size_cap)
@@ -999,7 +1000,7 @@ def build_posterior(
                      acceptances the parent was loaded under (``parent_posterior.accepted``) are
                      recorded in ``training.accepted``, which is empty without a parent.
     :param accept: LOAD path only. An ``artifacts.Accept``; a NON-AMORTIZED artifact is refused unless
-                     ``accept.truncated`` (the Posterior tab passes it), and the flag is recorded.
+                     ``accept.truncated`` (the Training step passes it), and the flag is recorded.
     :param hidden_features: flow width per transform; None = config.NSF_HIDDEN_FEATURES.
     :param num_transforms: flow depth; None = config.NSF_NUM_TRANSFORMS.
     :param learning_rate: Adam LR; None = config.TRAINING_LEARNING_RATE.
@@ -1138,8 +1139,8 @@ def build_posterior(
     # manifest records these same resolved names.
     # Refused only on a call that TRAINS: the branch below
     # loads exactly when `not train_new and ref is not None`, decided from the arguments alone, and a
-    # load reads none of the budget, cadence, flow or Fisher knobs. The Posterior tab sends its boxes on
-    # a load too, and refusing a load over a box the load never reads is the defect the flow knobs'
+    # load reads none of the budget, cadence, flow or Fisher knobs. The old Posterior tab sent its boxes
+    # on a load too, and refusing a load over a box the load never reads is the defect the flow knobs'
     # exemption fixed first; the budget and the cadence now follow it. The resume POLICY is checked on
     # both branches.
     trains = train_new or ref is None
@@ -2887,7 +2888,7 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     :param if_name_taken: the observation's (``generate_observations``'s own), handed on only when it
                       is given, and checked here before anything is simulated. The inference's own name
                       is checked again once the observation is written, and refused there as before.
-    :return: ``(observation, inference)`` -- the payload shape the Infer tab unpacks.
+    :return: ``(observation, inference)`` -- the payload shape the Inference step unpacks.
     """
     from .artifacts import Accept
     store = resolve_store(store)
@@ -2914,7 +2915,8 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     accept = accept or Accept()
     # THE NARROWED-MODEL RULE, hoisted ahead of the spend. x_obs_digest, truncation and
     # amortized=False are written together by build_posterior and never set independently, so this
-    # predicate, the Infer tab's gate and the store's load refusal all pick out the same posteriors.
+    # predicate, the Inference step's question and the store's load refusal all pick out the same
+    # posteriors.
     if posterior.posterior.x_obs_digest is not None and not accept.other_observation:
         raise Refusal(
             f"[tsnpe] this posterior is NOT AMORTIZED: it was trained on a prior restricted to a region "
@@ -3054,8 +3056,9 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     # region_from_posterior CLAMPS both ends silently (max(1, min(n, p))). Clamping a 0 up to 1 hides a
     # miskeyed setting; clamping down to P truncates EVERY direction, including the flat ones the
     # eigenbasis rule leaves at full width. Both are refusals here instead, with the default in the
-    # sentence; the width's is built here because only the stage knows the width (the TSNPE tab has
-    # no posterior to measure it against at the click). A resumed round draws nothing, so neither is
+    # sentence; the width's is built here because only the stage knows the width (the Narrowing round
+    # step checks the count against the model's parameters at the press, not against the posterior's
+    # latent width). A resumed round draws nothing, so neither is
     # checked for it: its region is the kept one.
     if kept is None:
         n = require_at_least("n_directions",

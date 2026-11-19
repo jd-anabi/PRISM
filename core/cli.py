@@ -102,7 +102,8 @@ INFERENCE_PROMPT_UNITS = config.FORCING_DISPLAY_UNITS
 def units_to_factors(units: tuple) -> tuple[list[float], float]:
     """
     From a set of unit strings compute (si_factors, s_to_cell). Called by ``make_sim_config``, and by the
-    Config tab to refuse a typed unit token it cannot resolve before a run starts.
+    window (step 1, Model and options, and the reading of a plan's units) to refuse a typed unit token
+    it cannot resolve before a run starts.
     """
     ureg = config.unit_registry()      # shared singleton: building one parses pint's full unit file
     try:
