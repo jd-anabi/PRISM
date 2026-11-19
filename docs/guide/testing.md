@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit cfcf9d61.
+Checked against commit 76af6d46.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -411,7 +411,7 @@ It ran again at commit cfcf9d61, on 18 November 2026, the first card run on the 
 ([The record clock](architecture.md#the-record-clock)), and every check held: run 1 139 / 156 / 25 /
 61 s with 229 of 704 probes masked (32.5 %), run 3 133 / 48 / 13 / 22 s and run 4 136 / 253 / 32 /
 66 s with 198 of 704 masked (28.1 %). The masked-probe counts moved with the rows, run 1's from 230
-and run 4's from 227 (32.2 %), both inside the criterion's band, and the posterior stage ran 14 to
+and run 4's from 227 (32.2 %), both inside the criterion's band, and the posterior stage ran 5 to
 20 s longer than at the run before. Run 2 exited 0 in 10 s and run 2b exited 1 in 7 s; run 5's drill
 ran 438 s to its cut after pass 3, and its resume exited 0 in 14 s; each prior logged the same
 stability sweep (101779 of 102400) and fill (73939) as above. The diagnostic card's eight commands

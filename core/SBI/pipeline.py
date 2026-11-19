@@ -1371,11 +1371,13 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     :param prior: Prior distribution over inferred parameters (ND x rescale product prior).
     :param forcing_prior: Prior distribution over dimensional forcing parameters, sampled
                           independently every batch regardless of SNPE round.
-    :param t: Pre-simulated ND time tensor at finest resolution (dt_nd_min), shape (T_full,).
+    :param t: The pre-simulated ND time grid, dt_nd_min apart, shape (T_full,): its length caps the
+              schedule's fine steps; each batch builds its own grid on its record clock.
     :param run_size: Number of simulations per batch.
     :param n_runs: Number of batches to generate.
     :param steady_idx: Index where transient ends and steady-state begins (at full resolution).
-    :param dt_nd_min: Finest ND time step of the pre-simulated trajectory.
+    :param dt_nd_min: The largest ND step the solver takes: the transient's step and the recorded
+                      step's ceiling.
     :param nd_dim: Number of ND model parameters; used to split inferred params into
                    theta_nd [:nd_dim] and theta_rescale [nd_dim:].
     :param forcing_idx: Maps forcing param names to column indices,

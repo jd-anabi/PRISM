@@ -129,7 +129,8 @@ class Simulator(ABC):
             sol[:, :, a + 1:b + 1] = torch.transpose(results[1:], 0, 2)  # (n_vars, batch, b - a)
             del results          # release the segment buffer BEFORE the next __sols allocates its own
         self.sde.force = full_force
-        sol = sol.reshape(n_vars, self.freqs_per_batch, ensemble_size, n_t)  # shape: (number of variables, frequencies per batch, ensemble size, length of time series)
+        # shape: (number of variables, frequencies per batch, ensemble size, length of time series)
+        sol = sol.reshape(n_vars, self.freqs_per_batch, ensemble_size, n_t)
         return sol
 
     def legacy_plan(self) -> list:

@@ -142,7 +142,8 @@ class SimConfig:
 
     @property
     def dt_nd_min(self) -> float:
-        """Finest ND time step needed: dt_exp / t_scale_max."""
+        """The largest ND step the solver takes: dt_exp / t_scale_max, the transient's step and the recorded
+        step's ceiling (the step the prior's stability screen certifies)."""
         _, t_scale_hi = self.t_scale_bounds
         return self.dt_exp / t_scale_hi
 
@@ -155,7 +156,8 @@ class SimConfig:
     @cached_property
     def t(self) -> torch.Tensor:
         """
-        Pre-simulated ND time vector at finest resolution and longest duration.
+        Pre-simulated ND time vector, dt_nd_min apart, over the longest duration: its length is the
+        training schedule's ceiling, and the prior's stability screens integrate on it.
 
         Cached: SimConfig is effectively immutable once built, so we
         allocate the 2.4M-point tensor once per config lifetime.

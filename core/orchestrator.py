@@ -134,9 +134,10 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     observation artifact (the trace figure, the payload, and a manifest carrying the source cell,
     its ground truth and its inits) so a fresh session can put itself back where inference ran.
 
-    Simulates at fine ND resolution (dt_nd_min, stable for EM), then downsamples
-    to match the physical sampling rate dt_exp and duration T_obs — exactly
-    mirroring what the training loop produces.
+    Simulates on the record clock (core/SBI/clock.py): the transient at dt_nd_min, the step the prior's
+    stability screen certified, then a whole number of fine steps per frame, none coarser than dt_nd_min,
+    keeping one point per frame at the physical sampling rate dt_exp over T_obs — exactly mirroring what
+    the training loop produces.
 
     ``if_name_taken``: "refuse" (the default) or "unnamed", what the write at the end does with a name
     another observation took while this one was simulated (the entry found it free): refused, as the
@@ -2643,8 +2644,9 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         sink("Posterior corner", fig)
 
         # PPC - Option B: sort posterior samples by t_scale, process in mini-batches
-        # Each sample gets its own subsample_factor based on its t_scale; all samples
-        # share physical duration T_obs at dt_exp sampling (matching the observation).
+        # Each bin shares one stride, from its smallest t_scale, and each sample keeps its own step (the
+        # record clock's rows_clock); all samples share physical duration T_obs at dt_exp sampling
+        # (matching the observation).
         nd_dim = len(cfg.params_dict)
         samples_nd = samples[:, :nd_dim]
         samples_rescale = samples[:, nd_dim:]

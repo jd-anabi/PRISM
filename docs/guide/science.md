@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit cfcf9d61.
+Checked against commit 76af6d46.
 
 ## Nondimensionalisation
 
@@ -72,8 +72,9 @@ records a cell at the bench:
   clock; the drive's clock had started at the beginning of the settling, 100 model time units before
   the first frame, which scrambled the phase every lock-in reads, the probes' and the forced
   response's; and every stretch of a long simulation after the first ran at a step a little off
-  `dt_nd_min` (up to 0.4 %) and repeated one sample where two stretches met. A simulation set made then is kept but never continued or trained
-  on as one of today's ([The artifact store](architecture.md#the-artifact-store)).
+  `dt_nd_min` (up to 0.4 %) and repeated one sample where two stretches met. A simulation set made
+  then is kept but never continued or trained on as one of today's
+  ([The artifact store](architecture.md#the-artifact-store)).
 
 **The step's error, measured.** The recorded step now changes with t_scale, which this page once
 warned against: an integration error that is a function of t_scale, an inferred parameter, is a
@@ -89,11 +90,11 @@ of its spread over a training set. A difference larger than 0.05 of a spread cou
 - **The passive features do, on stiff cells.** 71 of the 360 (feature, time scale) pairs carried a
   bias, of either sign: `F2_corr_omega_A2` up to 0.57 of a spread at 30 ms, `B6_low_freq_frac` −0.28,
   `C3_env_onset` 0.27, `B7_log_sec_freq_ratio` 0.19, `C4_mode_ratio` 0.17. It is the cells with a
-  stiff gating nonlinearity (high beta) that carry it: up to 3 spreads in the stiffest cell (beta 90),
+  stiff gating nonlinearity (high beta) that carry it: up to 3 spreads in one stiff cell (beta 90),
   at most a third of one on the master cell. The four anchors `A1_mean` to `A4_log_acf_decay` stayed
   inside the bound (`A3_log_fpeak` within 0.04). The bias repeated on independent noise, and it lives
-  at h: between a quarter and a sixteenth of h most features moved by less than 0.05 of a spread,
-  `F2_corr_omega_A2` by 0.13 at 30 ms.
+  at h: between a quarter and a sixteenth of h the features moved mostly within 0.05 to 0.13 of a
+  spread, `F2_corr_omega_A2` (0.13 at 30 ms) and `B6_low_freq_frac` (0.07 at 20 ms) the largest.
 - **The forced response's phase** (`G2_sin`) lagged by 0.06 to 0.18 of its spread at ten of the
   twelve time scales, by up to a quarter of a radian at the fastest drives on the slowest cells.
 - **A change of stride does not stand out.** Just below and just above a whole r, where s changes by
@@ -119,9 +120,8 @@ of its spread over a training set. A difference larger than 0.05 of a spread cou
   spread off the reference at every step tried, the old one included: one 156-Hz cell, whose third
   harmonic sits at 0.93 of the frames' Nyquist frequency, carries it.
 
-The owner kept the clock's step as it was designed, h = Δ / s, with these numbers in hand (17
-November 2026): no finer step and no new setting. A step-correcting scheme is the open question
-([Open questions](#open-questions)).
+The recorded step is h = Δ / s, with no finer step and no setting for it. A scheme that corrects for
+the step is an open question ([Open questions](#open-questions)).
 
 ## Conditioning features
 
