@@ -579,7 +579,8 @@ def matching_fits(cfg, prior, *, num_runs, run_size_cap, hidden_features, num_tr
             device=cfg.hw.device, dtype=cfg.hw.dtype, num_rounds=TRAINING_NUM_ROUNDS)
         simulation = training_identity(_cfg_for_a_reading(cfg), prior, _training_run_size(cfg, size_cap), n_runs)
         identity = {"simulation": simulation, "batches": n_runs, "code": fit_state.loaded_code(),
-                    "constants": fit_state.constants(), "libraries": fit_state.libraries(), "settings": settings}
+                    "constants": fit_state.constants(), "libraries": fit_state.loaded_libraries(),
+                    "settings": settings}
         return tuple(fit_state.matching_kept_fits(resolve_store(store), identity))
     except Exception:                        # noqa: BLE001 -- a page's fact must never raise
         return ()
@@ -1676,14 +1677,14 @@ def build_posterior(
     # THE FIT, SAVED AS IT GOES. With its rows in a kept simulation set, the fit is kept at the end of
     # every pass as a record of its own (core.SBI.fit_state), so a training stopped partway -- by a
     # Ctrl-C, a stop asked for in the window, a crash -- can be resumed in a new process instead of started again.
-    # Its identity is made here, before the fit: the rows and their batches, the code this process
-    # loaded, the constants and the libraries; the fit adds its settings and the network's shape at its
+    # Its identity is made here, before the fit: the rows and their batches, the code and the libraries
+    # this process loaded, and the constants; the fit adds its settings and the network's shape at its
     # first save. Without kept rows there is nothing to resume on (the run said so before its rotation).
     # A resumed training's session is the kept record's own, reopened as the first step of the fit below.
     session = None
     if kept is None and save_fit is not False and ckpt_dir is not None:
         fit_identity = {"simulation": ident, "batches": n_runs, "code": fit_state.loaded_code(),
-                        "constants": fit_state.constants(), "libraries": fit_state.libraries()}
+                        "constants": fit_state.constants(), "libraries": fit_state.loaded_libraries()}
         # The kept trainings this one could have resumed instead, named before its fit: the settings
         # are the ones the fit itself records, as sbi will use them.
         _settings = pipeline.fit_settings(
@@ -3126,6 +3127,6 @@ from .SBI.observations import (build_experiment_obs, build_experiment_obs_sponta
                                build_experiment_obs_chi, RecordingSet)
 
 # Last, once everything the named code needs has loaded: its digests are taken now and kept for the
-# process, so a fit records the code this process runs, even when a file is edited while the window
-# stays open. Nothing may follow this line.
+# process, with the libraries, so a fit records the code and the libraries this process runs, even when
+# a file is edited or a library reinstalled while the window stays open. Nothing may follow this line.
 fit_state.remember_loaded_code()

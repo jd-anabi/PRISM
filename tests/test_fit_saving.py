@@ -965,6 +965,68 @@ def test_a_training_stopped_on_purpose_is_kept_and_says_how_it_stopped(tiny_run,
     assert refused.value.field == "artifact" and row.id in str(refused.value)
 
 
+def test_a_training_records_the_libraries_its_process_loaded_not_ones_installed_since(tiny_run, fits_left,
+                                                                                    monkeypatch):
+    """A process trains with the libraries it imported, while their files can be replaced under an open window: an sbi
+    reinstalled meanwhile is read from its new files. A training records the libraries as its process loaded them, as
+    it records its code, and the kept trainings are held to those: with the files on disk saying another version, the
+    training records the one this process runs, the listing keeps it as one that can be resumed, and both the reading
+    the Training step asks for and the next training name it as one to resume."""
+    from core import orchestrator
+    r = tiny_run
+    loaded = fit_state.libraries()
+    real = fit_state.libraries
+    monkeypatch.setattr(fit_state, "libraries", lambda: {**real(), "sbi": "0.27.0"})
+    row = _keep(r, 7, 6, name="fit_libraries")
+    assert fit_state.read_header(row.path)["identity"]["libraries"] == loaded
+    assert r.store.get("fit", row.id).body["identity"]["libraries"] == loaded
+    assert fit_state.loaded_libraries() == loaded
+    listed, = [k for k in fit_state.kept_fits(r.store) if k.id == row.id]
+    assert (listed.can_resume, listed.why_not) == (True, None)
+    reading = orchestrator.matching_fits(r.cfg, r.prior, num_runs=7, run_size_cap=6, hidden_features=8,
+                                         num_transforms=1, learning_rate=None, stop_after_epochs=3,
+                                         max_num_epochs=8, checkpoint_every=1, store=r.store)
+    assert row.id in [k.id for k in reading], reading
+    again = _train(r, 7, 6, name="fit_libraries_again")
+    assert _said(_log(again), "info", "[fit] 1 kept") == [
+        f"[fit] 1 kept training(s) match these settings and can be resumed: {row.id} (kept when stopped, after "
+        f"pass 1); this run starts a new one."]
+
+
+def test_a_failed_saves_words_are_on_its_record_before_its_warning_is_said(tiny_run, fits_left, monkeypatch):
+    """Under the window a stop asked for while a pass is being saved is taken at the first record after the save, and
+    after a save that failed that record is its warning. The failure's words are kept for the record before the
+    warning is said, so the record the stop writes, and the note it leaves, say that the last save failed and the pass
+    the kept training stands at."""
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
+    r = tiny_run
+    token = CancelToken()
+    token.arm()
+    handler = _PumpLogHandler(types.SimpleNamespace(sink=lambda kind, payload: None), token)
+    real = fit_state.save_state
+
+    def full_disk_as_the_stop_is_asked(path, state):
+        if state["passes"] == 2:
+            token.requested.set()                       # a stop asked for while the second pass is saved
+            raise OSError("No space left on device")
+        real(path, state)
+
+    monkeypatch.setattr(fit_state, "save_state", full_disk_as_the_stop_is_asked)
+    core_logger = logging.getLogger("core")
+    core_logger.addHandler(handler)
+    try:
+        with pytest.raises(WorkerCancelled) as stopped:
+            _train(r, 8, 2, name="fit_failed_then_stopped")
+    finally:
+        core_logger.removeHandler(handler)
+    assert token.fired is True
+    failure = "the last save failed (OSError: No space left on device); the kept training stands at pass 1"
+    row, = _new_fits(r, fits_left)
+    body = r.store.get("fit", row.id).body
+    assert (row.fit_passes, body["stopped"]["on_purpose"]) == (1, True)
+    assert (body["save_error"], stopped.value.kept_fit.save_error) == (failure, failure)
+
+
 def test_a_cancel_from_the_window_lands_after_the_pass_is_saved_and_keeps_the_training(
         tiny_run, fits_left, monkeypatch):
     """A stop asked for in the window while a pass is being saved waits for the save and is taken at the
@@ -1138,6 +1200,58 @@ def test_a_stop_before_any_pass_is_kept_removes_the_folder_through_the_stores_pa
     assert not running(folder)
     said = [rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"]
     assert said == [], said
+
+
+def test_a_log_that_cannot_be_written_leaves_each_pass_saved_and_is_warned_once(tiny_run, fits_left, monkeypatch,
+                                                                                caplog):
+    """The kept training's log is the record's account of the processes that trained it, never what keeps a pass: a
+    log that cannot be written (another program holds the file) leaves each pass saved whole, its state, its record and
+    its line, and is warned of once, not at every pass. The training goes on, and a stop after its third pass keeps it
+    at that pass, saying as it stops that the log could not be written then either."""
+    r = tiny_run
+    real = fit_state.FitSession._write_log
+    held = "[Errno 13] The process cannot access the file because another process is using it"
+
+    def held_by_another_program(self):
+        if self._kept:                                  # every pass after the first
+            raise PermissionError(13, "The process cannot access the file because another process is using it")
+        real(self)
+
+    monkeypatch.setattr(fit_state.FitSession, "_write_log", held_by_another_program)
+    _stop_after(monkeypatch, 3, KeyboardInterrupt())
+    caplog.set_level(logging.INFO, logger="core")
+    with pytest.raises(KeyboardInterrupt) as stopped:
+        _train(r, 7, 2, name="fit_log_held")
+    row, = _new_fits(r, fits_left)
+    body = r.store.get("fit", row.id).body
+    assert (row.fit_passes, stopped.value.kept_fit.passes, load_state(row.path)["passes"]) == (3, 3, 3)
+    assert (body["progress"]["passes"], body["save_error"]) == (3, None)
+    said = [rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("[fit] ")]
+    assert [s for s in said if s.startswith("[fit] saved")] == [f"[fit] saved after pass {n}." for n in (1, 2, 3)]
+    assert [s for s in said if s.startswith("[fit] could not write")] == [
+        f"[fit] could not write the kept training's log after pass 2 (PermissionError: {held}); the pass is saved, "
+        f"and the next pass tries the log again.",
+        f"[fit] could not write the kept training's log as it stopped (PermissionError: {held})."], said
+    assert not any("the last save failed" in s for s in said), said
+
+
+def test_the_kept_trainings_log_is_written_whole_or_not_at_all(store, tmp_path):
+    """The log is written as every other file of a kept training is, to a file beside it that then replaces it, so a
+    write that fails partway (here a record no encoding can write, as a file's name read from another system can be)
+    leaves the log as it stood, never torn or emptied, and no file beside it."""
+    session = fit_state.FitSession(store, identity={}, region=None, posterior_name="", note="", cfg=None, config={},
+                                   parents={}, fingerprints={})
+    session.path = tmp_path
+    with runs.capture_run() as run_log:
+        session.log_before = "12:00:00 info the first process\n"
+        session._write_log()
+        whole = (tmp_path / "log.txt").read_bytes()
+        assert whole == (session.log_before + run_log.text()).encode("utf-8")
+        session.log_before = "12:00:00 info a record no encoding can write \ud800\n"
+        with pytest.raises(UnicodeEncodeError):
+            session._write_log()
+    assert (tmp_path / "log.txt").read_bytes() == whole, "a write that failed tore the log or emptied it"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["log.txt"]
 
 
 def test_without_a_kept_simulation_set_nothing_is_saved_and_the_run_says_so(tiny_run, fits_left, monkeypatch):
@@ -1477,8 +1591,8 @@ def _constant(r, patch):
 
 
 def _library(r, patch):
-    real = fit_state.libraries
-    patch.setattr(fit_state, "libraries", lambda: {**real(), "sbi": "0.27.0"})
+    real = fit_state.loaded_libraries
+    patch.setattr(fit_state, "loaded_libraries", lambda: {**real(), "sbi": "0.27.0"})
     return {}
 
 
@@ -1764,6 +1878,36 @@ def test_a_kept_training_another_process_holds_is_refused_and_listed_as_running(
     finally:
         other.release()
     assert not running(row.path)
+
+
+def test_a_resume_reads_its_record_again_under_the_lock_and_refuses_one_marked_or_gone_since_it_was_listed(store):
+    """A resume finds its kept training in the listing, then takes the training's lock, and between the two another
+    process may have marked the record as one that cannot be resumed (its own resume found that the rows no longer give
+    the kept fit) or deleted it. The record is read again once the lock is held, so each is refused in the words a
+    resume refused at the listing has, the lock let go and the record left as it was; a kept training whose folder has
+    gone with its record is refused in those words too, never as a missing file, and its folder is not made again."""
+    from core.artifacts import write_fit_manifest
+    marked = fit_state.kept_fit(store, build_fit_record(store))
+    m = store.get("fit", marked.id)
+    write_fit_manifest(marked.path, body={**m.body, "unresumable": "its rows no longer give the kept fit"})
+    record = (marked.path / "manifest.json").read_bytes()
+    with pytest.raises(Refusal) as refused:
+        fit_state.FitSession.reopen(store, marked, cfg=None)
+    assert (refused.value.field, str(refused.value)) == (
+        "resume_fit", f"The kept training {marked.id} cannot be resumed: its rows no longer give the kept fit.")
+    assert (marked.path / "manifest.json").read_bytes() == record and not running(marked.path)
+
+    leaving = fit_state.kept_fit(store, build_fit_record(store))
+    (leaving.path / "manifest.json").unlink()           # a removal under way: the record goes first
+    gone = fit_state.kept_fit(store, build_fit_record(store))
+    shutil.rmtree(gone.path)
+    for kept in (leaving, gone):
+        with pytest.raises(Refusal) as refused:
+            fit_state.FitSession.reopen(store, kept, cfg=None)
+        assert (refused.value.field, str(refused.value)) == (
+            "resume_fit", f"There is no kept training with the id {kept.id!r} in the store."), kept.id
+        assert not running(kept.path)
+    assert not gone.path.exists(), "the resume made the folder of a kept training that is gone"
 
 
 def test_a_kept_training_whose_newest_state_is_unreadable_resumes_from_the_pass_before_it(
@@ -2388,12 +2532,16 @@ def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_le
         raise KeyboardInterrupt
 
     class Later:
-        """The record's clock, moved on by hand between the save and the stop."""
+        """The record's clocks, moved on by hand between the save and the stop."""
         ahead = 0.0
 
         @classmethod
         def time(cls):
             return time.time() + cls.ahead
+
+        @classmethod
+        def monotonic(cls):
+            return time.monotonic() + cls.ahead
 
     save_it = fit_state.FitSession.save_pass
 
@@ -2455,6 +2603,45 @@ def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_le
     silent = listed(build_fit_record(r.store, stopped=None))
     assert (silent.stopped_on_purpose, silent.stopped_at, silent.stop_reason) == (None, None, None)
     assert (silent.processes, silent.wall_seconds, silent.save_error) == (1, 12.0, None)
+
+
+def test_a_kept_trainings_time_is_read_off_a_clock_no_setting_of_the_computers_clock_moves(tiny_run, fits_left,
+                                                                                         monkeypatch):
+    """The time a kept training records it has run is read off the monotonic clock: the computer's clock set an hour
+    forward after the first pass (a time zone put right, a clock synchronised) moves neither the time its saved state
+    and its record keep nor the time its stop's note gives."""
+    r = tiny_run
+
+    class SetForward:
+        """The computer's clock, set an hour forward by hand after the first pass; the monotonic clock runs on."""
+        ahead = 0.0
+
+        @classmethod
+        def time(cls):
+            return time.time() + cls.ahead
+
+        @staticmethod
+        def monotonic():
+            return time.monotonic()
+
+    save_it = fit_state.FitSession.save_pass
+
+    def set_forward_after_the_first_save(self, take):
+        save_it(self, take)
+        if self.passes == 1:
+            SetForward.ahead = 3600.0
+        if self.passes == 3:
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fit_state, "time", SetForward)
+        patch.setattr(fit_state.FitSession, "save_pass", set_forward_after_the_first_save)
+        with pytest.raises(KeyboardInterrupt) as stopped:
+            _train(r, 7, 7, name="fit_clock_set_forward")
+    note = stopped.value.kept_fit
+    kept = r.store.get("fit", note.id).body["progress"]["wall_seconds"]
+    assert 0 < kept <= note.wall_seconds < 600, (kept, note.wall_seconds)
+    assert load_state(r.store.path("fit", note.id))["wall_seconds"] == kept
 
 
 @pytest.mark.parametrize("edited, stop, sums", [

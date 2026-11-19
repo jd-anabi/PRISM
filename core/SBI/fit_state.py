@@ -30,6 +30,8 @@ that code reads (``FIT_CONSTANTS``), the libraries with a digest of the files of
 shape of the network. Only the digests are made here; what fills each part is the trainer's. The code's
 digests are the ones kept when that code was loaded (``loaded_code``): a process runs the code it
 imported, and a window left open across an edit must not record the edited file as what it trains with.
+The libraries are kept with them (``loaded_libraries``), for the same reason: a library reinstalled under
+an open window is read from its new files, while the process runs the ones it imported.
 
 THE RECORD. A kept fit is a record of the store's kind ``fit``, with no writer: ``FitSession`` makes
 its folder at the first saved pass, refreshes its manifest and its ``log.txt`` at every pass, records
@@ -63,7 +65,7 @@ from pathlib import Path
 import torch
 
 from core import runs
-from core.Helpers.file_manager import atomic_torch_save
+from core.Helpers.file_manager import _atomic_write, atomic_torch_save
 from core.refusals import Refusal
 
 if os.name == "nt":
@@ -143,22 +145,34 @@ def code_digests(names: tuple[str, ...] = FIT_CODE) -> dict[str, str]:
 
 # The digests of the named code as this process loaded it, by dotted name (``remember_loaded_code``).
 _LOADED: dict[str, str] = {}
+# The libraries as this process loaded them (``remember_loaded_code``); empty until they are kept.
+_LOADED_LIBRARIES: dict[str, str] = {}
 
 
 def remember_loaded_code(names: tuple[str, ...] = FIT_CODE) -> None:
     """Keep, for the rest of the process, the digest of each named function or class as its file
-    stands now; a name already kept keeps its first digest.
+    stands now; a name already kept keeps its first digest. The libraries (``libraries``) are kept
+    with the first call too, and keep their first reading.
 
     Called as the last statement of the module that builds and trains the network, when the named code
     has just been loaded. A process runs the code it imported, while ``inspect.getsource`` reads the
     file as it stands when asked: a window left open across an edit would otherwise record, for a fit
     it starts, the edited text while it trains the code it loaded, and a resume in a new window,
-    running the edited code, would match it. A name that does not resolve raises, as in
-    ``code_digests``, so a list out of step with the code fails the import at once.
+    running the edited code, would match it. The libraries are read from their installed files, so a
+    library reinstalled under an open window would be recorded in the same way. A name that does not
+    resolve raises, as in ``code_digests``, so a list out of step with the code fails the import at
+    once. Libraries that cannot be read now (a file of sbi's trainer that another program holds for a
+    moment) are read at their first use instead (``loaded_libraries``), so reading them never fails
+    the import.
     """
     missing = tuple(name for name in names if name not in _LOADED)
     if missing:
         _LOADED.update(code_digests(missing))
+    if not _LOADED_LIBRARIES:
+        try:
+            _LOADED_LIBRARIES.update(libraries())
+        except Exception:                           # noqa: BLE001 -- read again at first use, which says why
+            pass
 
 
 def loaded_code(names: tuple[str, ...] = FIT_CODE) -> dict[str, str]:
@@ -202,6 +216,14 @@ def libraries() -> dict[str, str]:
             "sbi": importlib.metadata.version("sbi"),
             "nflows": importlib.metadata.version("nflows"),
             "sbi_trainer_files": trainer_files_digest()}
+
+
+def loaded_libraries() -> dict[str, str]:
+    """``libraries()`` as this process loaded them (``remember_loaded_code``): what a fit records as its
+    libraries and what a kept fit is held to. Read now and kept when they were not kept yet."""
+    if not _LOADED_LIBRARIES:
+        _LOADED_LIBRARIES.update(libraries())
+    return dict(_LOADED_LIBRARIES)
 
 
 def network_digest(net: torch.nn.Module) -> str:
@@ -500,7 +522,8 @@ class FitSession:
     The record's folder is made at the first pass saved, not before, and ``id`` is the record's id once
     a pass is kept (None until then): a training that ends or stops with no pass kept leaves nothing
     behind. Its manifest and its ``log.txt`` are refreshed at every pass. A save that fails (a
-    full disk, a file another program holds) is warned and never stops the training; a Ctrl-C or a
+    full disk, a file another program holds) is warned and never stops the training, and a log that
+    cannot be written leaves the pass saved and is warned of once; a Ctrl-C or a
     stop asked for in the window is never caught here. The lock taken at the first save is let go on every way out: a
     stop, a finish whose posterior cannot be written, and the end.
 
@@ -531,7 +554,8 @@ class FitSession:
         self.resumed = False
         self.log_before = ""                        # the earlier processes' log, for a resumed record
         self._wall_before = 0.0                     # the earlier processes' time in the fit
-        self._started: "float | None" = None        # when this process's fit began
+        self._started: "float | None" = None        # when this process's fit began, on the monotonic clock
+        self._log_unwritten_said = False            # a log that could not be written has been warned of
         self._lock: "FitLock | None" = None
         self._full: "dict | None" = None            # the whole identity, once the fit has begun
         self._kept = False                          # a manifest is on disk
@@ -554,9 +578,13 @@ class FitSession:
     def reopen(cls, store, kept: "KeptFit", *, cfg) -> "FitSession":
         """The session of the kept fit ``kept``, to be resumed in this process, with its lock taken.
 
-        Refused when another handle holds the lock: a running process is training it. Then its record,
-        its header and its newest whole pass are read (``state.pt``, else ``state.prev.pt``, which is
-        said with the pass it resumes from). A header saved in another format marks the record as one
+        Refused when another handle holds the lock: a running process is training it. Then its record
+        is read again, under the lock, since the listing read it before the lock was taken: one deleted
+        since, its folder or its manifest gone, and one marked since as one that cannot be resumed (by
+        another process's resume that found the rows no longer give the kept fit) are refused as the
+        listing would have refused them. Then its header and its newest whole pass are read
+        (``state.pt``, else ``state.prev.pt``, which is said with the pass it resumes from). A header
+        saved in another format marks the record as one
         that cannot be resumed, and is refused. A header, or every pass, that cannot be read now is
         refused and leaves the record as it was, to be tried again or deleted: a file another program
         holds for a moment reads as unreadable too. Nothing else is written here. The session carries
@@ -564,13 +592,25 @@ class FitSession:
         with (``resume_pair``); its first save in this process clears the stop an earlier process
         recorded. Every way out of here but the session handed back lets the lock go.
         """
+        from core.artifacts.store import StoreError
+        gone = f"There is no kept training with the id {kept.id!r} in the store."
         lock = FitLock(kept.path)
-        if not lock.acquire():
+        try:
+            taken = lock.acquire()
+        except FileNotFoundError:                   # its folder went after the listing read it
+            raise Refusal(gone, field="resume_fit") from None
+        if not taken:
             raise Refusal(f"The kept training {kept.id} is being trained by a running process.",
                           field="resume_fit")
         try:
-            m = store.get("fit", kept.id)
+            try:
+                m = store.get("fit", kept.id)
+            except StoreError:
+                raise Refusal(gone, field="resume_fit") from None
             body = dict(m.body)
+            if body.get("unresumable"):
+                raise Refusal(f"The kept training {kept.id} cannot be resumed: {body['unresumable']}.",
+                              field="resume_fit")
             session = cls(store, identity={}, region=body.get("region"),
                           posterior_name=body.get("posterior_name") or "", note=m.note, cfg=cfg,
                           config=dict(m.config), parents=dict(m.parents), fingerprints=dict(m.fingerprints))
@@ -666,10 +706,14 @@ class FitSession:
                                  "start": {k: v for k, v in start.items() if k != "started"}})
 
     def _write_log(self) -> None:
+        """The record's ``log.txt``: the earlier processes' records, then this one's. Written as every other
+        file of the record is, to a file beside it that then replaces it, so that a write cut short leaves
+        the last whole log, never a torn or an empty one."""
         from core.artifacts.store import LOG_FILE
         run_log = runs.current_run_log()
         if run_log is not None:
-            (self.path / LOG_FILE).write_text(self.log_before + run_log.text(), encoding="utf-8", newline="\n")
+            text = (self.log_before + run_log.text()).encode("utf-8")
+            _atomic_write(self.path / LOG_FILE, lambda fh: fh.write(text))
 
     def _write_manifest(self, **body) -> None:
         from core.artifacts.store import write_fit_manifest
@@ -711,20 +755,30 @@ class FitSession:
     # ── the lifecycle ──
     def save_pass(self, take) -> None:
         """Keep the pass that just ended. One deferred-cancel section, inside which nothing is said; a
-        failure inside it is warned once it closes, and the fit goes on."""
-        failure = None
+        failure inside it is warned once it closes, and the fit goes on.
+
+        The log is written in a try of its own: it is the record's account of the processes that trained
+        it, never what keeps the pass, so a log that cannot be written leaves the pass saved, and is warned
+        of once in the session, after the pass's line. The fit's time in this process is read off the
+        monotonic clock, which no setting of the computer's clock moves; its start, which the trainer stamps
+        on the computer's clock, is read onto it once, at this process's first save."""
+        failure = unlogged = None
         with runs.cancel_deferred():
             try:
                 snapshot, start = take()
-                self._started = start["started"]
-                wall = self._wall_before + (time.time() - start["started"])
+                if self._started is None:
+                    self._started = time.monotonic() - max(0.0, time.time() - start["started"])
+                wall = self._wall_before + (time.monotonic() - self._started)
                 if not self._kept:
                     self._begin(start)
                 if self._newest_unreadable:
                     self._set_aside_newest()
                 save_state(self.path, {**snapshot, "wall_seconds": wall, "processes": self.processes})
                 progress = _progress(snapshot, wall, self.processes)
-                self._write_log()
+                try:
+                    self._write_log()
+                except Exception as e:              # noqa: BLE001 -- the log is the record's, never the pass's
+                    unlogged = e
                 # The stop an earlier process recorded no longer describes the record once this one has
                 # saved: a resumed training killed afterwards reads as stopped unexpectedly.
                 self._write_manifest(progress=progress, stopped=None, save_error=None)
@@ -736,6 +790,11 @@ class FitSession:
                 failure = e
         if failure is None:
             log.info(f"[fit] saved after pass {self.passes}.")
+            if unlogged is not None and not self._log_unwritten_said:
+                self._log_unwritten_said = True
+                log.warning(f"[fit] could not write the kept training's log after pass {self.passes} "
+                            f"({type(unlogged).__name__}: {unlogged}); the pass is saved, and the next pass "
+                            f"tries the log again.")
             return
         what = f"{type(failure).__name__}: {failure}"
         if self._kept:
@@ -837,10 +896,11 @@ class FitSession:
                         f"written ({e}); it can be deleted.")
 
     def wall_seconds(self) -> float:
-        """The time the fit has run, in every process that trained it, up to now."""
+        """The time the fit has run, in every process that trained it, up to now; this process's part read
+        off the monotonic clock (``save_pass``)."""
         if self._started is None:
             return self._wall_before
-        return self._wall_before + (time.time() - self._started)
+        return self._wall_before + (time.monotonic() - self._started)
 
     def kept_note(self) -> "KeptNote | None":
         """The kept training this session leaves, for the stop or the failure the training stage raises;
@@ -923,8 +983,9 @@ def _why_not(store, state: str, body: dict, parents: dict, identity: dict, now: 
 
 def kept_fits(store) -> "list[KeptFit]":
     """Every kept fit with a record, newest first, with whether it can be resumed now. The code, the
-    constants and the libraries are read once per call."""
-    now = {"code": loaded_code(), "constants": constants(), "libraries": libraries()}
+    constants and the libraries are read once per call, the code and the libraries as this process
+    loaded them."""
+    now = {"code": loaded_code(), "constants": constants(), "libraries": loaded_libraries()}
     out = []
     for row in store.list("fit"):
         if not row.complete:

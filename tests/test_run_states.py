@@ -153,6 +153,8 @@ _TEXT_ONLY = {
     ("core.SBI.pipeline", "[checkpoint] no valid RNG snapshot for batch"): "a warning said from the engine",
     ("core.SBI.pipeline", "[checkpoint] could not save on the way out"): "an error said from the engine",
     ("core.SBI.training_checkpoint", "[checkpoint] {} other checkpoint(s) exist"): "a warning said from the engine",
+    ("core.SBI.fit_state", "[fit] could not write the kept training's log after pass"):
+        "a warning said from the engine",
 }
 # How the engine's lines the window reads begin.
 _PREFIXES = ("[fit]", "[checkpoint]", "[patho]", "[chi]", "[mem]")
