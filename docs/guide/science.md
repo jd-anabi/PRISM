@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit 76af6d46.
+Checked against commit 98882115.
 
 ## Nondimensionalisation
 
@@ -308,10 +308,12 @@ frame, so a probe's response ran 2.6 % off the frequency the lock-in was told. A
 cycles, 0.23 at 31, and nothing near 39. The wall at about 31 cycles below, whose spread climbs to a
 first failure at 36, is what that mismatch predicts; so is the recovery when the same traces are
 locked in again over a shorter prefix, and so is the phase scatter read as the oscillation's own
-diffusion. That the clock caused them is likely, not established. The band's top edge (0.3), the
-lock-in ceiling (20 cycles), the drive (0.15) and, less so, the cycle floor (2) are therefore
-measured again on the record clock before the next training, and change only if those measurements
-say so. Until then the reasoning below is the old clock's.
+diffusion. Measured again on the record clock, the wall is gone: a longer lock-in reads better
+up to the whole recording, so the ceiling is now 64 cycles (the lock-in ceiling, below, sets the
+two measurements side by side). The
+band's top edge (0.3) and the drive (0.15) hold for the master cell on the record clock as they
+did on the old one; the cycle floor (2) was not measured again. The band's and the drive's
+reasoning below is the old clock's measurement, which the new one agrees with.
 
 **The band, (0.03, 0.3) × Ω₀** (`core.config.CHI_FREQ_BOUNDS`). Every probe sits between 0.03 and
 0.3 times its own row's Ω₀, below resonance. The band was first fixed from a sweep of drive strength
@@ -340,8 +342,9 @@ the same traces over shorter prefixes, separated two different failures:
   was 0.12 times the undriven one at 1 ×). Entrainment belongs to the driven trace's spectrum, not
   to the lock-in window, so a cap cannot reach it.
 
-So the band's interior was a duration problem, which the lock-in ceiling below fixes. Its high edge
-is a different problem. With the ceiling in force, eleven multipliers from 0.03 to 0.6 × Ω₀ (32 runs
+So on the old clock the band's interior was a duration problem, which a 20-cycle ceiling fixed
+there (on the record clock it does not arise; the lock-in ceiling, below). Its high edge is a
+different problem. With that ceiling in force, eleven multipliers from 0.03 to 0.6 × Ω₀ (32 runs
 each, at five lengths) showed where the edge belongs:
 
 - **Reproducibility and signal do not discriminate.** The |χ| spread stays at 0.06 to 0.10 of its
@@ -390,21 +393,53 @@ frequency it was not driven at.) The floor is 2 and not higher because measureme
 one: at 5 s the 0.03 × probe has 3.39 cycles and gave the best |χ| spread in the sweep, 0.024, so a
 floor of 8 would delete the best probe in the experiment.
 
-**The lock-in ceiling, `CHI_MAX_CYCLES` = 20.** Every instinct says a longer lock-in is a better
-one, and past about 30 cycles on this model it is not. Re-locking the same traces over every prefix
-length (48 runs, in-band probes only, so frequency cannot confound it) brackets the wall:
+**The lock-in ceiling, `CHI_MAX_CYCLES` = 64.** On the record clock a longer lock-in is a better
+one, at every length and probe frequency measured, up to the whole of the longest recording training
+draws. [probes band](command-line.md#probes-band) with a grid of ceilings re-locks the same traces at
+each: its five lengths from 1 s to the cell's training ceiling (26.9 s), the band's four multipliers
+(0.03 to 0.3 × Ω₀, Ω₀ about 22 Hz), 48 runs per point, the configured drive, each probe's drive at
+the top of its cosine at the first frame. The rows are the worst over the in-band points each
+ceiling shortens; the master cell and its tier-1 twin are the same cell declared two ways:
 
-| ceiling (cycles) | 8 | 12 | 16 | 20 | 24 | 28 | 32 | 36 |
-|---|---|---|---|---|---|---|---|---|
-| worst \|χ\| spread | 0.042 | 0.039 | 0.047 | 0.062 | 0.086 | 0.123 | 0.198 | 0.456 |
-| worst driven / undriven | 18.8 | 22.0 | 21.9 | 18.3 | 15.9 | 12.8 | 7.9 | 3.6 |
+| ceiling (cycles) | 8 | 12 | 16 | 20 | 24 | 28 | 32 | 36 | 48 | 64 | 96 | 128 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| points it shortens (of 20) | 10 | 10 | 9 | 6 | 6 | 6 | 6 | 5 | 3 | 3 | 1 | 1 |
+| master cell, worst \|χ\| spread | 0.062 | 0.053 | 0.048 | 0.041 | 0.037 | 0.032 | 0.030 | 0.029 | 0.029 | 0.023 | 0.020 | 0.017 |
+| master cell, worst driven / undriven | 12.1 | 15.3 | 17.5 | 19.9 | 23.8 | 27.5 | 27.9 | 28.9 | 34.9 | 38.6 | 47.2 | 50.5 |
+| master cell, worst phase scatter (rad) | 0.067 | 0.059 | 0.051 | 0.047 | 0.046 | 0.040 | 0.036 | 0.031 | 0.029 | 0.028 | 0.018 | 0.015 |
+| tier-1 twin, worst \|χ\| spread | 0.062 | 0.055 | 0.048 | 0.038 | 0.040 | 0.038 | 0.035 | 0.029 | 0.026 | 0.022 | 0.017 | 0.015 |
+| tier-1 twin, worst driven / undriven | 12.6 | 15.4 | 17.2 | 19.6 | 23.4 | 26.6 | 27.6 | 28.9 | 34.2 | 38.4 | 47.3 | 49.6 |
+| tier-1 twin, worst phase scatter (rad) | 0.072 | 0.054 | 0.044 | 0.043 | 0.040 | 0.037 | 0.034 | 0.028 | 0.025 | 0.022 | 0.017 | 0.016 |
+| the old clock, worst \|χ\| spread | 0.042 | 0.039 | 0.047 | 0.062 | 0.086 | 0.123 | 0.198 | 0.456 | | | | |
+| the old clock, worst driven / undriven | 18.8 | 22.0 | 21.9 | 18.3 | 15.9 | 12.8 | 7.9 | 3.6 | | | | |
 
-- The wall is at 32 to 36 cycles, reached by a steady climb rather than a cliff, so there is no
-  correct value, only a trade.
-- 20 sits in the flat part: about three times inside the 0.2 spread screen, ten times the floor,
-  and the ceiling the re-lock measurement had already validated on every failing in-band point.
-- 12 to 16 reproduce slightly better and were not chosen. A shorter lock-in is also less
-  frequency-selective, and no experiment here has priced that side of the trade.
+- **There is no wall.** Every point improves with every longer ceiling, its spread falling and its
+  signal rising roughly as the square root of the cycles locked in: the longest, 26.9 s at 0.3 × Ω₀
+  (180 cycles), reads a spread of 0.041 and a signal of 22 at 20 cycles, 0.023 and 39 at 64, and
+  0.015 and 65 over the whole recording. The points a ceiling shortens change down the table, which
+  is why its rows are not one population; each point's own readings fall steadily. The band and the
+  drive hold for the cell on the record clock as they did on the old one.
+- **The old clock's wall was its own.** The last two rows are the same re-lock measurement on the
+  old clock (in-band probes only, 48 runs), where the spread climbed from 0.06 at 20 cycles to 0.46
+  at 36 and the ceiling was 20, below the climb. The climb is what that clock's 2.6 % frequency
+  mismatch makes of a long lock-in (see above).
+- **What a longer lock-in costs.** Nothing in simulation: every probe is simulated over its whole
+  recording, and the ceiling only decides how much of it the lock-in reads. It costs frequency
+  selectivity: over n cycles a response whose frequency is off by a fraction e reads at
+  |sinc(π · n · e)| of its size. Training simulates every probe at exactly its frequency, but at the
+  bench e is how far the camera's frame interval is from the one assumed: 1 % off reads 0.45 of |χ|
+  at 64 cycles (0.94 at 20), 0.1 % off reads 0.993 (a drive frequency known to a signal generator's
+  accuracy costs nothing at any ceiling here). So **a bench recording is read at its camera's own
+  measured frame interval before any inference on it**
+  ([Recording files and drive frequencies](recordings.md#recording-files-and-drive-frequencies)).
+- **Why 64, not more.** The gain flattens (the worst spread 0.023 at 64, 0.017 at 128) while the
+  cost of a frame-interval error keeps growing with n, and 64 keeps the lock-in's bandwidth at about
+  1.6 % of the probe frequency. At 64 a long recording is read over about a third of its length at
+  the band's top (9 of 26.9 s), against a ninth at 20; the encoder's `logcyc` channel, the log of
+  each probe's cycles, runs from log 2 to log 64.
+- What the measurement does not settle: it is one cell, a sharper or noisier preparation may differ
+  ([The chi assumptions, and checking them](recordings.md#the-chi-assumptions-and-checking-them)),
+  and it measures reproducibility and signal, not how much a posterior narrows.
 - The ceiling is not a filter: nothing is masked or dropped by it; the segment is shortened. It
   applies per row, inside `core.SBI.chi_probes.gen_chi_raw`, which training, the Fisher rotation,
   the posterior predictive check and a simulated observation all go through; the experimental path
@@ -613,10 +648,11 @@ gradients cannot explain: 1 alone, 0 fully aliased.
   susceptibility does not touch the mean. Three measurements agree. Chi will not break this pair,
   and no retraining will change that.
 - **The control.** Forced mode's Group G lock-in has no cycle ceiling, so at 4.5 s it ran 142 drive
-  cycles, far past the wall of about 31 ([Chi probe design](#chi-probe-design)). That inflates its
-  noise and flatters chi. The 1.0 s column (31.6 cycles) is a control on that lock-in, not a chi
-  comparison: there the forced `k` and `x_scale` scores roughly double, which shrinks chi's gain on
-  them to +0.015 and +0.043. Chi helps `k` and `x_scale` a little, within the effect of recording
+  cycles, far past the wall of about 31 that the old clock put on a lock-in
+  ([Chi probe design](#chi-probe-design)). That inflated its noise in this map and flattered chi.
+  The 1.0 s column (31.6 cycles) is a control on that lock-in, not a chi comparison: there the
+  forced `k` and `x_scale` scores roughly double, which shrinks chi's gain on them to +0.015 and
+  +0.043. Chi helps `k` and `x_scale` a little, within the effect of recording
   length. The `t_scale`, `lam` and `f_scale` gains are untouched by the control, and they are chi's
   real product.
 - **Compare only maps made at the same T_obs, and read a unique-handle score beside its gradient
@@ -1188,8 +1224,8 @@ train on part of a cache would run it without simulating.
 **New observables: a step for k, intermodulation for the nonlinearity.** Only after the
 M-replicate study.
 
-- For k, a step or force-clamp transient. A transient never meets the wall at about 30 drive cycles
-  ([Chi probe design](#chi-probe-design)), because that wall belongs to a steady-state lock-in.
+- For k, a step or force-clamp transient, which is read without a lock-in and so without its
+  ceiling or its frequency selectivity ([Chi probe design](#chi-probe-design)).
 - For the parameters that shape the model's nonlinearity (delta_E and beta in the channels' open
   probability, and f_max and s in the motor force and its calcium feedback, which set where on it the
   bundle sits), two-tone intermodulation at 2ω₁ − ω₂, with both drives inside the sub-resonance
@@ -1262,18 +1298,12 @@ exactly, might remove it at little cost; the same paired test, a candidate again
 sixteen times finer on one Brownian path, would show whether it does. The band of `E2_log_h3` near
 the frames' Nyquist frequency needs a far finer step than any tried.
 
-**Three chi measurements left open** ([Chi probe design](#chi-probe-design)):
+**Two chi measurements left open** ([Chi probe design](#chi-probe-design)):
 
 - the band's top edge, set at 0.3 by reasoning about entrainment against phase scatter, which two
   posteriors trained over (0.03, 0.12) and over (0.03, 0.3) would settle;
 - the rows under 0.3 Hz, about 16 % of the masking audit's, whose spectra have not been examined;
-  looking at them decides whether a prior screen is right for them;
-- the wander of the bundle's response over tens of drive cycles, inferred from re-locking the same
-  traces on the old clock, whose mechanism is untested; the old clock's 2.6 % frequency mismatch is
-  now the likely cause ([Chi probe design](#chi-probe-design)), and phase diffusion of the
-  free-running oscillation the other candidate. The probe checks on the record clock settle the
-  first; comparing how fast the undriven oscillation's phase scatter grows with how fast the lock-in
-  wanders, over the same lengths, would test the second.
+  looking at them decides whether a prior screen is right for them.
 
 **Clarity against the whole band.** [probes drive](command-line.md#probes-drive) counts the undriven
 cell as an oscillation when the power of its spectrum's highest bin above zero frequency, over the

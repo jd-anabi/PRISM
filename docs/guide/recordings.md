@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit cfcf9d61.
+Checked against commit 98882115.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, which bounds file a cell is checked against, the three observation modes and
@@ -296,9 +296,12 @@ python -m core infer --chi --bounds Resources/Bounds/nadrowski/master.txt --post
   in it is misread.
 - **A recording is read as if its samples are exactly 1 ms apart.** Training simulates every cell
   on exact frames, and PRISM does not yet read a recording at its camera's own measured interval. A
-  camera whose interval is off by 1 % reads a 20-cycle driven response at about 0.94 of its size (the
-  lock-in's own decay at a frequency 1 % off, |sinc(π · 20 · 0.01)|) and moves every feature measured
-  in time units by log 1.01. Know your camera's real frame interval before you trust a reading.
+  driven response locked in over the ceiling's 64 cycles reads at |sinc(π · 64 · e)| of its size
+  when the camera's interval is off by a fraction e: about 0.45 when it is 1 % off, 0.993 when it is
+  0.1 % off (over 20 cycles, 0.94 and 0.9993). An interval off by 1 % also moves every feature
+  measured in time units by log 1.01. A bench recording is to be read at its camera's own measured
+  frame interval before any inference on it: know your camera's real frame interval before you
+  trust a reading.
 - **Every driven recording starts with the drive at a known point of its cycle**, because the
   lock-in counts time from the recording's first sample, as training does:
   - a frequency-response probe starts with the drive at the top of a cosine: at its first sample the
@@ -336,7 +339,7 @@ cell's own oscillation, measured from the passive recording.
   two drive cycles in its recording. It stays in the set and contributes nothing. Training masks such
   probes too, so the network has learned to read a set with probes missing, and refusing would throw
   away an observation it handles.
-- **Truncated**, with a warning: a probe with more drive cycles than the lock-in ceiling, 20 cycles
+- **Truncated**, with a warning: a probe with more drive cycles than the lock-in ceiling, 64 cycles
   by default. The cycles up to the ceiling are used and the rest of the recording is dropped.
 - **Refused**, because each is a mistake to fix rather than a limit of the recording: a frequency
   that is not finite or not positive; a probe at or above 0.9 times the sampling limit, 450 Hz at
@@ -381,13 +384,13 @@ for that.
   ceiling by default, and marks with a warning any length you give beyond it
   ([probes band](command-line.md#probes-band)).
 
-**Chi mode has a shortest useful length too.** The band's two edges are ten times apart, and so are
-the two-cycle floor and the default 20-cycle ceiling. So at one length, T*, the lowest probe
-(0.03 Ω₀) first reaches two cycles and the highest (0.3 Ω₀) reaches twenty: T* = 2 / (0.03 Ω₀),
-about 66.7 / Ω₀ in seconds when Ω₀ is in hertz. Below T*, the probes at the bottom of the band are
-masked; above it, those at the top are truncated to the ceiling, which costs nothing. Record for
-longer than T*. On the `master_weak` cell T* is 2.93 s. `identifiability jacobian --chi` prints it
-for any Nadrowski cell, on the line that begins `low edge`
+**Chi mode has a shortest useful length too.** The band's lowest probe (0.03 Ω₀) first reaches the
+two-cycle floor at one length, T* = 2 / (0.03 Ω₀), about 66.7 / Ω₀ in seconds when Ω₀ is in hertz;
+the band's two edges are ten times apart, so there the highest probe (0.3 Ω₀) has twenty cycles,
+well under the default 64-cycle ceiling. Below T*, the probes at the bottom of the band are masked;
+above it, every probe is used, and those at the top are truncated to the ceiling only once they pass
+64 cycles, which costs nothing. Record for longer than T*. On the `master_weak` cell T* is 2.93 s.
+`identifiability jacobian --chi` prints it for any Nadrowski cell, on the line that begins `low edge`
 ([identifiability jacobian](command-line.md#identifiability-jacobian)); the same command also
 measures a whole degeneracy map:
 
@@ -402,16 +405,17 @@ under the 7.4 s every t_scale allows.
 ## The chi assumptions, and checking them
 
 Chi mode rests on four settings in `core/config.py`, chosen by measurements on the master cells
-([Chi probe design](science.md#chi-probe-design) has the measurements). Those measurements were made
-on the simulator's old clock, which ran the master cells 2.6 % fast, and are made again on the
-record clock before the next training; the values below stand until then:
+([Chi probe design](science.md#chi-probe-design) has the measurements). The band, the drive and the
+ceiling were measured on the simulator's old clock, which ran the master cells 2.6 % fast, and again
+on the record clock: the band and the drive hold, and the ceiling is 64 cycles, where on the old
+clock it was 20:
 
 | setting | value | what it means for a recording |
 |---|---|---|
 | `CHI_FREQ_BOUNDS` | (0.03, 0.3) | the band: probes lie between 0.03 and 0.3 times the observation's own Ω₀, so the band moves with each cell |
 | `CHI_F0` | 0.15 | the drive amplitude in model units: 0.15 times the cell's force scale, 1.5 pN on `master.txt`'s cells, whose `f_scale` is 10 pN. On the tier-1 box the force scale is derived from the temperature ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)), so for the values in `master_spont_tier1.txt` it is about 47.0 pN and the drive about 7.0 pN; a chi training run prints the drive its prior implies on its second `[tier1]` line. Strong enough for a reproducible lock-in, and weak enough to leave the bundle oscillating on its own |
 | `CHI_MIN_CYCLES` | 2 | the floor: a probe with fewer drive cycles is masked |
-| `CHI_MAX_CYCLES` | 20 | the lock-in ceiling: each probe is locked in over at most its first 20 cycles, because on this model a longer lock-in is not a better one |
+| `CHI_MAX_CYCLES` | 64 | the lock-in ceiling: each probe is locked in over at most its first 64 cycles. A longer lock-in reads χ more reproducibly, but it is more selective in frequency, so it asks for the camera's frame interval to be exact (above), and past 64 cycles the gain flattens while that cost keeps growing |
 
 The band, the drive and the cycle floor come only from `core/config.py`. The lock-in ceiling, and
 the number of probe slots beside it, also have boxes on step 1, Model and options ("Lock-in limit" and "Slots for driven recordings")

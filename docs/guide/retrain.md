@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit ae1b21c.
+Checked against commit 98882115.
 
 The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
 with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies
@@ -258,7 +258,7 @@ build, and again before the run. Nothing here trains the retrain, and any step c
    Read the line that begins `low edge` in each:
 
    ```
-     low edge 0.03x clears 2 cycles at T_obs >= <s> s; high edge 0.3x stays under the 20-cycle ceiling below T_obs = <s> s.
+     low edge 0.03x clears 2 cycles at T_obs >= <s> s; high edge 0.3x stays under the 64-cycle ceiling below T_obs = <s> s.
    ```
 
    The first length is T*: below it, the band's lowest probes fall under the cycle floor and are

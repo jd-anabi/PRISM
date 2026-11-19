@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit cfcf9d61.
+Checked against commit 98882115.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -580,11 +580,10 @@ seconds with no simulation: run it first after touching anything chi.
   shape error hours into a run; it costs only input columns, so choose it generously once. Guard: it
   is recorded with every chi posterior and observation, the loaders refuse another, and the
   simulation cache's identity carries it.
-- **The lock-in ceiling is per row, inside the probe loop.** Past about 30 drive cycles a longer
-  lock-in measured worse, on the simulator's old clock, which may be what caused it
-  ([Chi probe design](science.md#chi-probe-design)); the cap defines the measurement, so training,
-  the Fisher, the predictive check and the experimental path must all apply it the same way. A single duration for a
-  whole batch is a regression: keyed on the fastest row, it once left about 48 % of rows with no live
+- **The lock-in ceiling is per row, inside the probe loop.** The ceiling (64 cycles,
+  [Chi probe design](science.md#chi-probe-design)) defines the measurement, so training, the Fisher,
+  the predictive check and the experimental path must all apply it the same way. A single duration
+  for a whole batch is a regression: keyed on the fastest row, it once left about 48 % of rows with no live
   probe. Faced with a chi failure, ask for the cycle count before the frequency. Guard:
   `core.SBI.chi_probes.gen_chi_raw` caps each row from its own probe frequency, the experimental path
   truncates a longer recording to the same cap (`chi.probe_verdict`), and `SimConfig.__post_init__`
