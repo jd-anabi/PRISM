@@ -47,7 +47,9 @@ def _atomic_write(path, writer: Callable[..., None], *, retries: int = 3,
                    after the partial temp file has been removed.
     :param retries: os.replace attempts on PermissionError. Windows-specific: a virus scanner or an
                     Explorer preview holding the destination open makes the rename fail transiently,
-                    and a multi-day run must not die on that.
+                    and a multi-day run must not die on that. At least 1: with none the copy would be
+                    written and never renamed, nothing replaced and nothing said, so fewer is refused
+                    with a ValueError before the writer runs or any file or folder is made.
     :param previous: where the file being replaced is kept, one generation back. Once the temp file is
                     fsynced, an existing ``path`` is renamed to ``previous`` (replacing what was there),
                     then the temp file to ``path``. At every instant one whole generation is on disk:
@@ -60,6 +62,8 @@ def _atomic_write(path, writer: Callable[..., None], *, retries: int = 3,
     A failed rename removes the temp file and re-raises; a failure at the first of the two leaves
     ``path`` and ``previous`` as they were.
     """
+    if retries < 1:
+        raise ValueError(f"retries is the number of tries at the rename and must be at least 1; got {retries!r}")
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)

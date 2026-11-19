@@ -55,7 +55,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -697,12 +696,14 @@ class FitSession:
 
     def _discard(self) -> None:
         """The session ends with no pass kept: the lock is let go and the folder a first save made is
-        removed, so that nothing is left behind."""
+        removed, so that nothing is left behind. The removal is the store's own, which tries again when
+        another program holds a file of the folder for a moment."""
+        from core.artifacts.store import _rmtree_retry
         self._release()
         path, self.path, self._full = self.path, None, None
         if path is not None:
             try:
-                shutil.rmtree(path)
+                _rmtree_retry(path)
             except OSError as e:
                 log.warning(f"[fit] could not remove the folder {path}, which holds no kept training "
                             f"({type(e).__name__}: {e}); the store lists it as a leftover to clear.")

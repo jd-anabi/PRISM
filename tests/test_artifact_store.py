@@ -5492,6 +5492,37 @@ def test_a_running_kept_fit_is_refused_deletion_and_a_stopped_one_is_deleted(sto
     assert store.list("fit") == []
 
 
+def test_a_kept_trainings_removal_holds_its_lock_so_no_resume_begins_while_it_runs(store, monkeypatch):
+    """Deleting a kept training takes its lock, as a process that trains it does, and holds it while the record goes:
+    a resume that tries to take the lock meanwhile (from a second window, or a shell) is refused, rather than beginning
+    on a record whose files are being removed under it. A check that the lock is free, made before the removal, would
+    leave that instant open. Once the record is gone the lock is let go, and nothing of the folder is left."""
+    from core.SBI.fit_state import FitLock, running
+    from tests._fixtures import build_fit_record
+    fid = build_fit_record(store)
+    where = store.path("fit", fid)
+    taken, real_unlink = [], os.unlink
+
+    def unlink(path, *args, **kwargs):
+        if not taken:                                   # a resume, trying the lock as the first file goes
+            other = FitLock(where)
+            taken.append(other.acquire())
+            other.release()
+        return real_unlink(path, *args, **kwargs)
+
+    failed = None
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "unlink", unlink)
+        try:
+            store.delete("fit", fid)
+        except st.StoreError as e:
+            failed = e
+    assert taken == [False], f"the lock was free while the kept training was being removed: {taken}"
+    assert failed is None, failed
+    assert not where.exists() and store.list("fit") == []
+    assert not running(where)
+
+
 def test_write_fit_manifest_keeps_who_began_the_training_and_replaces_its_body(store):
     """A kept training's manifest is written again at every pass, and by every process that resumes it:
     the later writes replace the body and keep who began it -- its id, name and when, its note, the

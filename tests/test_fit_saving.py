@@ -1110,6 +1110,36 @@ def test_a_save_that_fails_warns_and_the_training_goes_on(tiny_run, fits_left, m
     assert _added_folders(r, fits_left) == []
 
 
+def test_a_stop_before_any_pass_is_kept_removes_the_folder_through_the_stores_patient_removal(
+        store, monkeypatch, caplog):
+    """A training stopped before any pass was kept removes the folder its failed first save made. On Windows another
+    program (a virus scanner, an Explorer preview) can hold a file in it for a moment, so the folder is removed as the
+    store removes a record: a removal refused for a moment is tried again, and nothing is left behind."""
+    session = fit_state.FitSession(store, identity={}, region=None, posterior_name="", note="", cfg=None, config={},
+                                   parents={}, fingerprints={})
+    folder = store.new_fit_dir()
+    folder.mkdir(parents=True)
+    (folder / "header.pt").write_bytes(b"a header its first state never followed")
+    session.path, session._lock = folder, FitLock(folder)
+    assert session._lock.acquire()
+    tries, real_rmtree = [], shutil.rmtree
+
+    def held_for_a_moment(path, *args, **kwargs):
+        tries.append(Path(path))
+        if len(tries) == 1:
+            raise PermissionError(13, "The process cannot access the file because another process is using it",
+                                  str(path))
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", held_for_a_moment)
+    caplog.set_level(logging.INFO, logger="core")
+    session.stopped(KeyboardInterrupt())
+    assert tries == [folder, folder] and not folder.exists()
+    assert not running(folder)
+    said = [rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"]
+    assert said == [], said
+
+
 def test_without_a_kept_simulation_set_nothing_is_saved_and_the_run_says_so(tiny_run, fits_left, monkeypatch):
     """With checkpointing off the rows are not kept, so the training is not saved and says so before its
     fit; asked to save all the same, the stage refuses before any row is made, naming the cadence."""
@@ -2496,6 +2526,27 @@ def test_a_name_given_at_a_resume_is_carried_into_the_kept_record(tiny_run, fits
     final = _resume(r, kept.id)
     assert (final.name, final.manifest.note) == ("fit_named_twice", "the first note")
     assert _new_fits(r, fits_left) == []
+
+
+def test_a_kept_training_renamed_keeps_its_name_through_the_passes_saved_after(tiny_run, fits_left, monkeypatch):
+    """A kept training named through the store (Records, or ``artifacts`` on the command line) keeps that name. Every
+    pass a resume saves rewrites the record's body and keeps who began it, its name among them, so the name, and the
+    folder the record was moved to under it, last through the passes saved after the rename and the stop after them;
+    the name is the record's, never the posterior's."""
+    r = tiny_run
+    row = _keep(r, 7, 8)
+    renamed = r.store.rename("fit", row.id, "kept_by_hand")
+    folder = r.store.path("fit", row.id)
+    assert (renamed.id, renamed.name) == (row.id, "kept_by_hand")
+    with monkeypatch.context() as patch:
+        _stop_after(patch, 2, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            _resume(r, row.id)
+    record = r.store.get("fit", row.id)
+    assert (record.name, record.body["progress"]["passes"], record.body["progress"]["processes"]) == (
+        "kept_by_hand", 2, 2)
+    assert r.store.path("fit", row.id) == folder and record.body["posterior_name"] == ""
+    assert _row(r, row.id).name == "kept_by_hand"
 
 
 def test_a_posterior_whose_name_was_taken_during_its_fit_is_saved_unnamed_when_asked_and_its_kept_training_goes(

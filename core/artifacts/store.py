@@ -269,6 +269,20 @@ def _rmtree_retry(path, retries: int = 3, backoff_s: float = 0.1) -> None:
             time.sleep(backoff_s * (attempt + 1))
 
 
+def _unlink_retry(path, retries: int = 3, backoff_s: float = 0.1) -> None:
+    """``os.unlink`` with ``_rmtree_retry``'s patience; a file already gone is taken as removed."""
+    for attempt in range(retries):
+        try:
+            os.unlink(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(backoff_s * (attempt + 1))
+
+
 def _newest_mtime(path) -> float:
     """The newest modification time anywhere in ``path``'s tree, as a POSIX timestamp.
 
@@ -824,36 +838,57 @@ class ArtifactStore:
         sub, m = self._find(kind, ref)
         if m is None:
             raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}", field="artifact")
+        lock = None
         if kind == "fit":
             # A kept training a process holds is written at every pass, and ``force`` does not change
             # that: removing its folder under the run would lose the passes it is saving, and on
             # Windows the held lock file would stop the removal partway, after other files had gone.
+            # The removal takes the training's lock, as a process that trains it does, and holds it
+            # while the record goes: a check that the lock is free, made before the removal, would
+            # leave an instant in which a resume could take it and begin on a record being removed.
             from core.SBI import fit_state
-            if fit_state.running(sub):
+            lock = fit_state.FitLock(sub)
+            try:
+                taken = lock.acquire()
+            except OSError as e:
+                raise StoreError(f"could not remove {kind} {m.name or m.id} at {sub}: "
+                                 f"{type(e).__name__}: {e}", field="artifact") from e
+            if not taken:
                 raise StoreError(f"refusing to delete fit {m.id}: a running process is training it; "
                                  f"stop that training first", field="artifact")
-        deps = self.dependents(kind, m.id)
-        if deps and not force:
-            listed = "; ".join(f"{k} {n or '(unnamed)'} [{i}]" for k, i, n in deps)
-            # The wording does not move, ``force=True`` included: core/refusals.py's own rule is that
-            # a message names no box, tab, flag or button but MAY name a Python keyword -- "it is the
-            # core API's own word". No front end offers force -- each deletes one artifact at a time,
-            # never forced -- but the log's reader still needs the escape hatch's name. Both refusals
-            # take field="artifact": either is answered by picking a different artifact in the list.
-            raise StoreError(
-                f"refusing to delete {kind} {m.name or m.id}: {len(deps)} artifact(s) name it as a "
-                f"parent -- {listed}. Delete those first, or pass force=True to orphan them.",
-                field="artifact")
-        # The same two guards ``remove_incomplete`` and ``sweep_incomplete`` carry -- a failed removal
-        # is a refusal, and a removal is verified -- and this is the only one of the three that
-        # removes a REAL artifact.
         try:
-            _rmtree_retry(sub)
-        except OSError as e:
-            # A held handle (an Explorer preview, a scanner) is not a bug: without this wrapper it
-            # escapes the tool's Refusal rung as a raw traceback for "try again in a moment".
-            raise StoreError(f"could not remove {kind} {m.name or m.id} at {sub}: "
-                             f"{type(e).__name__}: {e}", field="artifact") from e
+            deps = self.dependents(kind, m.id)
+            if deps and not force:
+                listed = "; ".join(f"{k} {n or '(unnamed)'} [{i}]" for k, i, n in deps)
+                # The wording does not move, ``force=True`` included: core/refusals.py's own rule is that
+                # a message names no box, tab, flag or button but MAY name a Python keyword -- "it is the
+                # core API's own word". No front end offers force -- each deletes one artifact at a time,
+                # never forced -- but the log's reader still needs the escape hatch's name. Both refusals
+                # take field="artifact": either is answered by picking a different artifact in the list.
+                raise StoreError(
+                    f"refusing to delete {kind} {m.name or m.id}: {len(deps)} artifact(s) name it as a "
+                    f"parent -- {listed}. Delete those first, or pass force=True to orphan them.",
+                    field="artifact")
+            # The same two guards ``remove_incomplete`` and ``sweep_incomplete`` carry -- a failed removal
+            # is a refusal, and a removal is verified -- and this is the only one of the three that
+            # removes a REAL artifact.
+            try:
+                if lock is not None:
+                    # Under the lock the record goes: its manifest, which a resume reads again once it
+                    # holds the lock, so that none can begin on it afterwards. The lock is then let go,
+                    # since on Windows the file its handle holds cannot be removed, and the rest of the
+                    # folder goes as a folder with no record would.
+                    _unlink_retry(sub / MANIFEST)
+                    lock.release()
+                _rmtree_retry(sub)
+            except OSError as e:
+                # A held handle (an Explorer preview, a scanner) is not a bug: without this wrapper it
+                # escapes the tool's Refusal rung as a raw traceback for "try again in a moment".
+                raise StoreError(f"could not remove {kind} {m.name or m.id} at {sub}: "
+                                 f"{type(e).__name__}: {e}", field="artifact") from e
+        finally:
+            if lock is not None:
+                lock.release()                        # a second release does nothing
         if sub.exists():
             # _rmtree_retry treats ANY FileNotFoundError as "already gone" -- including one raised
             # from inside the walk, after part of the tree has been removed. Verified, not assumed.

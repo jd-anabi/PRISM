@@ -260,6 +260,30 @@ def test_atomic_savez_round_trips_and_cannot_be_torn(tmp_path):
         np.savez = real_savez
 
 
+def test_the_atomic_writer_refuses_fewer_than_one_try_before_it_touches_a_file(tmp_path):
+    """The writer replaces a file by renaming a finished copy over it, and tries the rename ``retries`` times. Asked for
+    no try at all it would write the copy and never rename it: nothing replaced, a stray copy left beside the file, and
+    no word said. So fewer than one try is refused at the call, before the writer runs and before any folder or file is
+    made; one try is enough."""
+    import numpy as np
+    kept = tmp_path / "kept.pt"
+    kept.write_bytes(b"the file as it was")
+    elsewhere = tmp_path / "a folder not made yet" / "state.pt"
+    ran = []
+    for retries in (0, -1):
+        with pytest.raises(ValueError, match="retries"):
+            file_manager._atomic_write(elsewhere, ran.append, retries=retries)
+        with pytest.raises(ValueError, match="retries"):
+            file_manager.atomic_torch_save({"passes": 1}, kept, retries=retries)
+        with pytest.raises(ValueError, match="retries"):
+            file_manager.atomic_savez(kept, {"passes": np.zeros(1)}, retries=retries)
+    assert ran == [], "the writer ran"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["kept.pt"], "a folder or a stray copy was made"
+    assert kept.read_bytes() == b"the file as it was"
+    file_manager.atomic_torch_save({"passes": 1}, kept, retries=1)
+    assert torch.load(kept, weights_only=False) == {"passes": 1}
+
+
 # ── the chi band/drive preflight (2026-08-19 regression) ─────────────────────────────────────────
 def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(monkeypatch):
     """A ~5-day retrain was spent at the RETIRED band (0.1, 10.0) because QSettings restored a value
