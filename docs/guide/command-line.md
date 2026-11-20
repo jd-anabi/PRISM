@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit 96f756e8.
+Checked against commit ce9af6c4.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -194,8 +194,8 @@ The tool reads no environment variable itself; every setting is a flag. PRISM re
 |---|---|---|
 | `PRISM_RESOURCES` | the inputs root | see [Inputs and records](getting-started.md#inputs-and-records) |
 | `PRISM_ARTIFACTS` | the records root | see [Inputs and records](getting-started.md#inputs-and-records); the tool resolves it once, when a command starts, except for `smoke`, which uses another root |
-| `PRISM_VRAM_CEILING_GIB` | the GiB one simulation batch may plan to hold on the card; 0 or unset is automatic; in the window, a number here takes precedence over the memory limit kept in Settings | afresh for every batch plan |
-| `PRISM_MEM_LOG_EVERY` | the batches between `[mem]` memory lines, 250 when unset | once, when the simulation pipeline is first imported |
+| `PRISM_VRAM_CEILING_GIB` | the GiB one simulation batch may plan to hold on the card; 0 or unset is automatic; in the window, a number here takes precedence over the memory limit kept in Settings; a value that is no number (a word, an infinity, NaN, or more GiB than can be counted in bytes) is ignored, with a warning | afresh for every batch plan |
+| `PRISM_MEM_LOG_EVERY` | the batches between `[mem]` memory lines, 250 when unset; a value that is not a whole number of at least 1 is taken as unset, with a warning | once, when the simulation pipeline is first imported |
 
 The last two are read by the simulation pipeline (`core.SBI.pipeline`), never by the tool, and are
 deliberately not flags: they change how a batch is planned in memory, or how often memory is
@@ -616,8 +616,10 @@ repeats tell sampling noise from a real miscalibration.
 - `--accept-truncated` — see [Acceptance flags](#acceptance-flags).
 
 **Writes** a diagnostic record whose parents are the posterior and its prior, its variant `pooled`,
-or `k<K>` for a fixed probe count, with the pooled rank histogram and every repeat's p-values. It
-prints `[sbc] repeat <r>/<R>: n_valid=...  worst KS p=...` per repeat, then each parameter's p-value
+or `k<K>` for a fixed probe count, with the pooled rank histogram and every repeat's p-values. Each
+repeat says which it is as it begins (`[sbc] repeat <r>/<R>: drawing <N> calibration datasets`),
+again before its ranks and before its check, and ends with
+`[sbc] repeat <r>/<R>: n_valid=...  worst KS p=...`; then it prints each parameter's p-value
 distribution over the repeats (median, minimum, fraction below 0.05), then the rank-uniformity half
 of the calibration verdict: a repeat passes when every parameter's KS p reaches 0.05 divided by the
 number of parameters. The record keeps each repeat's answer and the fraction that passed in
