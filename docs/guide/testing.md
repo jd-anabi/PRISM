@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit c2422d9e.
+Checked against commit 38d60981.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -533,7 +533,8 @@ Then delete the scratch folder, as the recipe says.
   there the same way: `tests/test_user_models.py`'s UMTEST models, and `tests/test_user_sbi.py`'s full
   user-model pipeline. The session guard `_no_inputs_written` fails a run that ends with any of them
   left. A killed run never reaches the `finally` and leaves them behind: delete whatever `git status`
-  lists as untracked under `Resources/`. They are not inputs.
+  lists as untracked under `Resources/`. They are not inputs. Until then every install of the test model
+  refuses before it writes anything, naming the files it found there.
 - **A widget that was never shown** reports a placeholder size from `width()`: 640×480 for one built
   without a parent, 100×30 for one built inside another. The suites run offscreen and show nothing,
   so assert on `sizeHint()`, `minimumSizeHint()` or `maximumWidth()`, or show the widget, resize it
