@@ -4565,6 +4565,27 @@ def test_the_release_empties_the_allocators_cache_after_the_plans_and_the_graphs
     assert calls == [], calls
 
 
+def test_the_release_survives_a_plan_cache_that_cannot_be_reached(monkeypatch, caplog):
+    """The plan cache is looked up inside its guard: a manager whose every attribute raises, as the real one does where
+    the card cannot be reached, costs one warning, and the graphs are still dropped and the allocator's cache still
+    emptied, in that order. A stand-in, so that this holds whether a card is present or not."""
+    class _Unreachable:
+        def __getattr__(self, name):
+            raise RuntimeError("No CUDA GPUs are available")
+
+    calls = []
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    monkeypatch.setattr(torch.backends.cuda, "cufft_plan_cache", _Unreachable())
+    monkeypatch.setattr(_sdeint_mod, "drop_graph_cache", lambda: calls.append("graphs") or 0)
+    monkeypatch.setattr(pipeline_mod, "_BATCH_TAG", "")
+    caplog.clear()
+    _cuda_release_probe(pipeline_mod._release_device_memory)
+    assert calls == ["graphs", "empty_cache"], calls
+    said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == pipeline_mod.__name__]
+    assert said == [("WARNING", "simulation: cuFFT plan-cache clear failed during recovery and was ignored "
+                                "(RuntimeError: No CUDA GPUs are available)")], said
+
+
 def test_the_oom_notice_is_printed_before_the_release(caplog):
     """The notice has to reach the log even when the release that follows it explodes.
 

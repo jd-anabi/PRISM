@@ -404,12 +404,17 @@ def _release_device_memory(device: torch.device, *, plans: bool = True,
         about to capture ANOTHER at the reduced width, since the batch shape is part of the graph
         key. Dropping them is the one release that addresses the retry's own next allocation.
 
-    THE ALLOCATOR'S CACHE IS EMPTIED LAST. A dropped graph hands its private pool back to the caching
-    allocator as cached blocks, and only an ``empty_cache`` made after the drop returns them to the
-    driver; emptied first, the cache missed them, and they stayed reserved, out of reach of the retry's
-    own next capture, until some later release. The plan cache is held outside the allocator, so it is
-    cleared with the graphs, before the cache is emptied. Each release, the lookup of the plan cache
-    included, runs inside its guard: on a process whose card cannot be reached that lookup itself raises.
+    THE ALLOCATOR'S CACHE IS EMPTIED LAST, so that what the graph drop lets go is in what it returns.
+    Emptied first, it left the dropped graphs' pools reserved until the next capture emptied the cache
+    as it began (``torch.cuda.graph`` does so before it captures), and what follows a release ran with
+    them still held: the ``[mem]`` line after an out-of-memory error, whose free figure counted them as
+    taken; ``_we_are_the_holder``, which counted them as this process's; the wait before a re-run; and
+    the retry's own allocations ahead of its capture, a halving ladder's result preallocated "at the one
+    moment when the card is least full" among them. A few MiB a graph, at most SOLVER_GRAPH_CACHE_MAX of
+    them: what the order buys is that those readings and allocations see the memory already given up.
+    The plan cache is held outside the allocator, so it is cleared with the graphs, before the cache is
+    emptied. Each release, the lookup of the plan cache included, runs inside its guard: on a process
+    whose card cannot be reached that lookup itself raises.
 
     CALL IT OUTSIDE THE ``except`` BLOCK, always. While the caught error is still bound its traceback
     owns the frames of the failed attempt, which own their tensors -- the solver's (n_vars, batch, T)

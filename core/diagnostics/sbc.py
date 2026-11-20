@@ -105,9 +105,9 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                      the caller's RNG afterwards.
     :param fig_sink: (title, fig) -> None; the writer's sink saves the PNG and forwards to this one.
 
-    Each repeat says which it is as it begins, again before its ranks and before its check, and a stop asked for in
-    the window is taken at the next of these lines: the ranks (sbi's ``run_sbc``) and the check (the reference sample
-    and sbi's ``check_sbc``) are one call each, and run to their end once begun.
+    Each repeat says which it is as it begins, again before its ranks and before its check. A stop asked for in the
+    window is taken at the next line the run says, these among them; the ranks (sbi's ``run_sbc``) and the check
+    (PRISM's reference sample, then sbi's ``check_sbc`` with its C2ST) each run to their end once begun.
 
     ⚠ FOR A TSNPE POSTERIOR, reproducibility is WHOLE-RUN, not per-repeat. ``val_latent_prior`` (the
     region-restricted proposal built once below, before the loop) is ONE ``TruncatedLatentPrior``
