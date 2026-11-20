@@ -1,739 +1,564 @@
 # The retrain runbook
 
-Checked against commit 98882115.
+Checked against commit ce0d6d7f.
 
-The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
-with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies
-it. It runs on the command line, from the repository root, one command at a time, and every command
-is written here in full. What each flag means is in [The command-line tool](command-line.md), and the
-reasoning behind each setting in [The science behind the settings](science.md).
-
-The commands use these PowerShell variables, set once in the session that runs them. Replace
-`<scratch>` with a new, empty folder outside the repository that nothing else uses: the pre-flight
-writes its throwaway records there, and deletes the whole folder at the end. Every command that
-names a bounds file takes `--model` from its folder, NADROWSKI, and none below gives it.
-
-```powershell
-$py   = "C:\Users\J\anaconda3\envs\biophys-env\python.exe"
-$Box  = "--bounds","Resources/Bounds/nadrowski/master_tier1.txt"
-$Cell = "--cell","Resources/Cells/nadrowski/master_spont_tier1.txt"
-$M    = "--bounds","Resources/Bounds/nadrowski/master.txt"
-$MC   = "--cell","Resources/Cells/nadrowski/master_spont.txt"
-$S    = "<scratch>"
-```
+The next full-size training: a posterior of the frequency response on the tier-1 box, 10,000 batches
+of 2,048 simulations, with a network 256 wide and 10 deep, followed by one narrowing round that
+certifies it. It runs in the window, and its owner starts it. Every step below names the control by
+the words the window shows: the part of the rail (Home, Parameter inference, Records, Settings), the
+step (1 to 6), the field and the button. The few things the window cannot do are gathered in
+[What stays on the command line](#what-stays-on-the-command-line), each with its reason. The
+reasoning behind each setting is in [The science behind the settings](science.md), and every field
+of the window has its help beside it.
 
 ## Decisions
 
 Each decision, with its reason.
 
+**A new simulation set, simulated from the start.** The simulator now integrates each cell at its
+exact time scale: every recorded point is exactly one frame after the last in the cell's own time,
+where each frame once took the nearest whole number of fixed steps
+([Nondimensionalisation](science.md#nondimensionalisation),
+[The record clock](architecture.md#the-record-clock)). A simulation set's identity names the clock it
+was made with, so the finished set of the last full-size training, made at the earlier fixed step,
+is not continued, and nothing of it is read again. It stays on disk; Records lists it with the other
+simulation sets.
+
 **The tier-1 box, `master_tier1.txt`.** The master box samples the gating-spring energy twice, and
 nothing holds the two samples to agree, so the bath temperature they imply is spread over decades.
 The tier-1 box infers the temperature T, in (280, 310) K, in place of f_scale, and derives the force
 scale from it ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)).
-Temperature is an assumed input: every report marks it as one, and it stays in the calibration
-verdict, judged like every other parameter.
+Temperature is an assumed input: every report marks it "(assumed input)", and it stays in the
+calibration verdict, judged like every other parameter.
 
-**A fresh prior, `retrain_prior`, built on the tier-1 box with `--chi`.** The stability screen
-reads the non-dimensional block alone (`core.orchestrator.build_prior`), and the two boxes share it,
-so the screen is the same as a `master.txt` prior's. A `master.txt` prior would even load:
-`core.artifacts.store.ArtifactStore.load_prior` compares the model, the non-dimensional parameters,
-their order and box, and the log-box mask, and neither the mode nor the rescale block. But a prior's
-record names what it was built from: its bounds file by path and hash, and a configuration block
-with the mode, all thirteen parameter names and the tier-1 constraint
-(`core.artifacts.manifest.config_from_cfg`). Built on the tier-1 box in chi mode, the record names
-the retrain's own box and mode. A new prior is also a new fit, and a simulation cache is keyed on its
-prior's fit, so no cache made before it can be picked up by accident.
+**A fresh prior, built on the tier-1 box with the frequency response.** A prior's record names what
+it was built from, its bounds file by path and hash and the kind of observation, so a prior built
+for this run names this run's own box. A simulation set is keyed on the prior it was made with, so a
+fresh prior cannot continue any set made before it by accident. And the audit of unusable driven
+recordings is read on the prior in use, and the comparison after the simulation reads that audit:
+both belong to the prior this training uses.
 
-**10,000 batches × 2,048 rows.** Every row of a batch shares the batch's (t_scale, T_obs) pair, so
-the batch count is the training set's operating-point diversity and the width is replication at each
-point ([The solver's physics check](science.md#the-solvers-physics-check) sets count against width).
-The August 2026 retrain ran 5,000 batches; this run doubles the operating points at the same width,
-20.48 million rows. The width is the card's hardware batch, which `--run-size 0` takes. It costs
-almost nothing in simulation time, because the solver's time is set by its sequential steps, but the
-fit's time grows with the rows, so the width is paid for in fitting: a width of 1,024 would about
-halve the fit.
+**10,000 batches of 2,048 simulations.** Every simulation of a batch shares the batch's
+(t_scale, recording length) pair, so the batch count is the training set's diversity of operating
+points and the width is replication at each point
+([The solver's physics check](science.md#the-solvers-physics-check) sets count against width). The
+August 2026 retrain ran 5,000 batches; this run doubles the operating points at the same width,
+20.48 million simulations. The width is the card's own batch, which "Simulations per batch" set to
+"Automatic" takes. It costs almost nothing in simulation time, because the solver's time is set by
+its sequential steps, but the fit's time grows with the rows, so the width is paid for in fitting: a
+width of 1,024 would about halve the fit.
 
-**256 hidden features × 10 transforms, from the start.** The August 2026 retrain's reading that more
-capacity would not help was made before the conditioning repair, by a flow that could not see two of
-its own channels ([The August 2026 retrain](science.md#the-august-2026-retrain)); a larger flow may
-use what the repair restored. The network's settings are not part of the simulation cache's identity,
-so if the larger flow does not help, the complete cache refits at 128 × 8 without simulating again.
+**A network 256 wide and 10 deep, from the start.** The August 2026 retrain's reading that more
+capacity would not help was made before the conditioning repair, by a network that could not see two
+of its own inputs ([The August 2026 retrain](science.md#the-august-2026-retrain)); a larger network
+may use what the repair restored. The network is not part of the simulation set's identity, so if
+the larger network does not help, the complete set is fitted again at 128 by 8 without simulating
+again.
 
-**Six probes supplied into twelve slots.** A simulated observation supplies `CHI_N_FREQS` = 6 probes
-into `CHI_K_PAD` = 12 slots, and training draws its probe count for each batch from 2 to 12. The slot
-count stays: it is frozen into every chi record and into the cache's identity, so a change means
-another full retrain, and whether a matched slot count would buy information has never been measured
-([Open questions](science.md#open-questions)). Changed here, its effect could not be measured apart
-from the run's other changes.
+**Six driven recordings supplied into twelve slots.** A simulated observation holds six driven
+recordings ("Driven recordings per observation") in twelve slots ("Slots for driven recordings"),
+and training draws its number for each batch from 2 to 12. The slot count stays: it is frozen into
+every posterior of the frequency response and into the set's identity, so a change means another
+full training, and whether a matched slot count would buy information has never been measured
+([Open questions](science.md#open-questions)). Changed here, its effect could not be told apart from
+the run's other changes.
 
 **The certification round.** Before this posterior meets a bench recording, one narrowing round on
-the simulated tier-1 cell, whose truth is known, at the retrain's own size. It checks end to end that
-a round drawn from this posterior keeps the truth inside every direction it truncates and calibrates
-on its region; on today's code a round has run only at smoke size
+the simulated tier-1 cell, whose truth is known, at the training's own size. It checks end to end
+that a round drawn from this posterior keeps the truth inside every direction it narrows and
+calibrates on its region; on this code a round has run only at small size
 ([Narrowing rounds](science.md#narrowing-rounds)).
 
-**A budget of four weeks of the card, 672 hours, for the retrain and its certification round**, set
-by the owner on 30 September 2026. The round is a second full-size training, so the two cost about
-twice the flow's fit plus about 95 hours for the rest (two generations, the calibrations and the
-stratified `sbc` runs), which leaves each fit about 290 hours. The epoch timing's projection reaches
-that at about 16 s per epoch, so a reading above it stops the retrain before anything is simulated,
-when a stop costs only the timing (pre-flight step 2); while the flow trains, the same limit reads as
-about 2.2 hours per full-size epoch and about 290 hours of fitting ([What to watch](#what-to-watch)).
+**A budget of four weeks of the card, 672 hours, for the training and its certification round**,
+set by the owner on 30 September 2026. The round is a second full-size training, so the two cost
+about twice the fit, plus the two generations, the calibrations and the calibrations at fixed
+numbers of driven recordings. What is left after those, halved, is each fit's limit;
+[The figures that depend on the simulator's step](#the-figures-that-depend-on-the-simulators-step)
+gives it in hours and per epoch. The last full-size fit of this network on this card, in October
+2026, took about 62 minutes an epoch on 20.48 million simulations, well inside it; the August 2026
+fit stopped by itself after 130 epochs.
 
-**The verdict rule.** The calibration gate is one fixed rule, `validate`'s verdict: PASS when every
-parameter's rank test reaches KS p ≥ 0.05 ÷ 13 and the joint coverage test reaches KS p ≥ 0.05
-([Reading calibration honestly](science.md#reading-calibration-honestly)). It is fixed before the run,
-so the gate cannot be bent to the result, and the calibration is seeded, so a reviewer can repeat it
-on the same card, though not bit for bit.
-The stratified `sbc` runs characterise the posterior and gate nothing. They run because a pooled rank
-test can be flat while each probe count is miscalibrated in compensating directions; they gate
-nothing because each carries only the rank half of the verdict, and no rule was set for them before
-the run.
+**The verdict rule.** The calibration decides by one fixed rule: it passes when every parameter's
+rank test reaches KS p ≥ 0.05 ÷ 13 and the joint coverage test reaches KS p ≥ 0.05
+([Reading calibration honestly](science.md#reading-calibration-honestly)). It is fixed before the
+run, so the gate cannot be bent to the result, and the calibration is seeded, so it can be repeated
+on the same card, though not bit for bit. The calibrations at a fixed number of driven recordings
+characterise the posterior and decide nothing. They run because a pooled rank test can be flat while
+each number of driven recordings is miscalibrated in compensating directions; they decide nothing
+because each carries only the rank half of the verdict, and no rule was set for them before the run.
 
-**`core/config.py`'s defaults stay** at 128 × 8 and 5,000 batches. Every setting reaches its stage as
-an argument ([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps)), so the retrain needs no
-edit, and the defaults go on serving every other run. That is also why the retrain runs on the command
-line: in the window, Hidden features and Transforms open at `core/config.py`'s values on every launch,
-so the retrain, and every resume of it, would need them typed into the Posterior tab each time; the
-tab remembers Batches ([What the window remembers](window.md#what-the-window-remembers)).
+**The settings travel in a plan.** `core/config.py`'s defaults stay at 128 by 8 and 5,000 batches,
+and they go on serving every other run: every setting reaches its stage as an argument
+([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps)), so this run needs no edit of the
+code. The network's width and depth open at the defaults each time PRISM starts, so this run's
+settings are saved once as a plan ([Run plans](recordings.md#run-plans)), committed with the inputs,
+and filled into the forms from it. A Resume of a kept training needs no plan: it runs on the settings
+the training was kept with.
 
-**A new simulation cache after a chi constant changes.** If any chi constant in `core/config.py` has
-changed since a cache was written, train against a new cache. The drive, the band, the lock-in
-ceiling and the slot count are part of the cache's identity, so a change to one of them re-keys the
-cache (a committed cache exactly one setting away is refused until `--new-run` is given), and the
-store refuses a posterior trained at another value of any of them. Two, the cycle floor
-`CHI_MIN_CYCLES` and the smallest probe count `CHI_K_MIN_TRAIN`, are in neither
-([The artifact store](architecture.md#the-artifact-store)); after a change to either, a plain `train`
-finds the old cache and reuses rows drawn under the old value.
-[The chi probe set and its Fisher](rules-and-traps.md#the-chi-probe-set-and-its-fisher) has the
-general rule. No flag forces a new cache under an unchanged identity:
-`--resume never` refuses when this run's own cache holds batches, and `artifacts rm` refuses a cache
-while any record names it.
+**A new simulation set after a setting of the frequency response changes.** The drive, the band,
+the lock-in limit and the slot count are part of the set's identity, so a change to one of them
+starts a new set, and the store refuses a posterior trained at another value of any of them. Two,
+the cycle floor `CHI_MIN_CYCLES` and the smallest number of driven recordings `CHI_K_MIN_TRAIN`, are
+in neither ([The artifact store](architecture.md#the-artifact-store)): after a change to either, a
+training at unchanged settings would continue the old set and its rows drawn under the old value.
+The route is a fresh prior, which no old set matches
+([The chi probe set and its Fisher](rules-and-traps.md#the-chi-probe-set-and-its-fisher) has the
+general rule). Turning the saving of the simulations off would also stay clear of an old set, but a
+10,000-batch run that cannot resume is not acceptable.
 
-For this retrain the question arises only if an earlier attempt of it left a cache in the real store,
-keyed on that attempt's `retrain_prior` (`& $py -m core artifacts list simulation` lists the caches
-there). A prior built afresh matches no older cache, but the old prior still holds its name, and any
-command that names it finds the old cache. If one is there, take one of two routes:
+## The figures that depend on the simulator's step
 
-- **A new prior, the recommended route.** Build it in pre-flight step 4 under a new name,
-  `retrain_prior_2` say, because the old prior keeps its name for as long as the old cache depends on
-  it. Every other name the earlier attempt took (`retrain_band`, `retrain_mask`, and `retrain` if it
-  finished) needs a new one too, and each new name is used wherever this page uses the old one,
-  `--posterior retrain` above all: an old input name loads the earlier attempt's record without a
-  word. A rebuild is a new fit, and a cache is keyed on its prior's fit. When the prior is the only
-  difference, as it is after a change to the cycle floor or the smallest probe count, the old cache
-  is exactly one setting away (`prior_fingerprint`): the first `train` is refused naming it, and the
-  same command with `--new-run` starts the new cache. Otherwise the first `train` starts the new
-  cache at once. A resume needs no `--new-run` once the new cache holds a commit: the first comes at
-  batch 50, or sooner from the rescue save of a crash or an unpiped Ctrl-C ([Resuming](#resuming)
-  covers a first process that committed nothing). Nothing is deleted, and
-  every record stays in the real store.
-- **Or delete the old cache.** Delete the records that depend on it from the leaves up (the
-  calibrations, inferences, diagnostics and narrowing rounds built on each posterior trained from it,
-  then those posteriors), then the cache itself with
-  `& $py -m core artifacts rm simulation <digest>`; each refusal lists the records still in the way.
-  The old `retrain_prior` can stay: skip step 4's `prior` line, and run its two probe checks again
-  under new names, since they measured under the old constants.
+These figures move whenever the simulator's step or its rule for taking a step changes, and they are
+kept in this one place. At this commit:
 
-Training with `--checkpoint-every 0` also stays clear of the old cache, but a 10,000-batch run that
-cannot resume is not acceptable.
+- **Generation**, 10,000 batches of 2,048 at a memory limit of 6 GiB: about 29 card hours, about
+  10 s a batch. An estimate, not yet measured on this code: the solver's steps counted over a fresh
+  draw of 10,000 batches, a count that gives the last full-size set's measured 26.85 hours at the
+  earlier fixed step. A narrowing round of 10,000 batches simulates at about the same pace.
+- **A full-size calibration**, 2,000 test datasets at 200 operating points: under an hour (43
+  minutes, measured at the earlier fixed step). Each repeat of a calibration at a fixed number of
+  driven recordings costs about as much, so the four of ten repeats take about 30 hours.
+- **The audit of unusable driven recordings**, 100 batches of 32: about six minutes.
+- **The set on disk**: about 10.3 GiB. The run's full text states the size and the free space when
+  the set starts.
+- **The last full-size set's readings**, at the earlier fixed step: 0.15 % failed simulations, and
+  0.083 % of its summary elements clipped to their percentiles.
+- **The rest of the programme**: about 95 hours, the two generations, the calibrations and a few
+  hours for the inferences and the other checks. Each fit may then take about 290 hours,
+  (672 − 95) ÷ 2: about 2.2 hours an epoch over 130 epochs, which the timing of a short fit reaches
+  at about 16 s an epoch (2.2 hours ÷ 500).
 
 ## Pre-flight
 
-In order, with one exception: the card and host checks of step 5 come first, before step 2's prior
-build, and again before the run. Nothing here trains the retrain, and any step can stop it.
+In this order. Nothing here trains, and any item can stop the run.
 
-1. **The card smoke gate, run 4 included.** All five command lines of
-   [The card smoke gate](testing.md#the-card-smoke-gate) pass, on the code the retrain will run. Run 4
-   matters most here: it runs this box at this network size, end to end. If the resume path has
-   changed since the last card run, run 4's resume passes as well
-   ([The card smoke gate](testing.md#the-card-smoke-gate)). The retrain's checks below lean on the
-   diagnostics too, so if code under `core/diagnostics` has changed since the last card run,
+1. **The card smoke gate**, every line passing on the code the run will use, from the command line
+   ([What stays on the command line](#what-stays-on-the-command-line)). Its run 4 trains this box at
+   this network size end to end, and its run 5 ends a training like a power cut and resumes it. If
+   code under `core/diagnostics` has changed since the last card run,
    [The diagnostic card](testing.md#the-diagnostic-card) passes as well.
 
-2. **The epoch timing**, in a scratch store: how long one epoch of the 256 × 10 flow takes on this
-   card, and one of the current default flow, 128 × 8, on the same prior, before anything costs
-   weeks.
+2. **This computer, in Settings.** Under "This computer", **Memory limit**: choose "Limit each batch
+   to" and type 6 (GiB). With no limit the 1 October run died at batch 237, out of the card's
+   memory; at 6 GiB 9,500 batches went through. The limit is remembered for this computer, and the Training
+   step's "Before you start" names it: "Memory limit: 6 GiB for each batch of simulations (set in
+   Settings, This computer)." `PRISM_VRAM_CEILING_GIB`, when it holds a number in the environment the
+   window starts in, takes precedence, and Settings then says "Set outside PRISM by
+   PRISM_VRAM_CEILING_GIB = …"; the desktop shortcut starts PRISM with Explorer's environment, so the
+   variable reaches the window only through `run.bat` started from a shell that set it
+   ([Launching PRISM](getting-started.md#launching-prism)). Leave "Keep this computer awake while a
+   run is live" ticked: PRISM then asks Windows not to sleep until the run ends, and a shutdown or a
+   sign-out shows PRISM's reason and waits for an answer.
 
-   ```powershell
-   $env:PRISM_ARTIFACTS = "$S/timing"
-   & $py -m core prior @Box --chi --device cuda --name timing_prior
-   & $py -m core train @Box --chi --device cuda --prior timing_prior --num-runs 20 --hidden-features 256 --num-transforms 10 --max-epochs 9 --checkpoint-every 0 --name timing
-   & $py -m core train @Box --chi --device cuda --prior timing_prior --num-runs 20 --hidden-features 128 --num-transforms 8 --max-epochs 9 --checkpoint-every 0 --name timing_small
-   ```
+3. **The forms, saved as a plan.** Fill the forms once, then save them:
+   - Step 1, Model and options: Model "Nadrowski", Kind of observation "Frequency response". Leave
+     "Driven recordings per observation" at 6, "Slots for driven recordings" at 12, "Lock-in limit" at
+     64 and Rotation "On", their usual values. Press **Apply model and options**.
+   - Step 2, Prior: Bounds file `master_tier1.txt`.
+   - Step 3, Training: Batches 10,000; "Simulations per batch" "Automatic"; Network width 256;
+     Network depth 10; "Continue or start new" at "Continue the saved simulation set if there is
+     one". Under "Rarely changed", "Expected epochs (for the time estimate only)" 130, the August 2026
+     fit's count: no finished training of this kind is in Records to take it from. Leave the rest at
+     their usual values, "Save the simulations every … batches" at 50 above all.
+   - Step 6, Narrowing round: Batches 10,000; Network width 256; Network depth 10; "Region level"
+     0.999 and "Directions narrowed" 5, their usual values. The round takes nothing from step 3's
+     form.
+   - Back on step 1, under Model, **Save as a plan…**, a "Plan name" such as `retrain`, **Save**. The
+     file is `Resources/Plans/nadrowski/retrain.txt`; open it with **Show what it holds** to check
+     it holds each setting above.
 
-   Twenty batches of 2,048 rows are 40,960 rows, 1/500 of the retrain's. The 128 × 8 run shows
-   whether the card is as fast as it was in August 2026, and measures directly how much slower the
-   larger flow is. Each fit's span is read from its posterior's record:
+   A later launch opens the plan list on "No plan" and the network at 128 by 8: choose the plan and
+   press **Fill the forms from this plan** before any start that is not a Resume.
 
-   - It starts when generation ends. Generation's last line in the record's `log.txt`, from
-     `core.SBI.pipeline.gen_training_data`, is the `[chi] masked probes` run total; then
-     `core.SBI.train.train_nn` logs `[winsor] clipped …`, builds the flow and fits it.
-   - No record is logged after the fit. `core.orchestrator.build_posterior` goes straight on to write
-     the record, whose directory is created as the writing starts
-     (`core.artifacts.store.ArtifactWriter`), so the directory's creation time marks the fit's end to
-     within about a second.
-   - sbi's loop (0.26.1, as 0.25 before it) runs while its epoch count, counted from zero, is at most
-     the ceiling, so
-     `--max-epochs 9` trains ten epochs. Divide by the count the record keeps,
-     `training.epochs_trained`, never by `--max-epochs`.
+4. **The inputs committed, the revision noted.** Commit the plan, with the bounds file and the cell
+   files the run reads (`master_tier1.txt`, `master_spont_tier1.txt`) if either has changed, and see
+   that `git status --short` prints nothing: an untracked file counts as a change too. Every record
+   stamps the checkout's revision and whether the tree has changes: a simulation set when it starts,
+   a prior, a check or a posterior when it is written, the posterior at the very end of the run. Then
+   note `git rev-parse HEAD` with the time. Both are command lines.
 
-   ```powershell
-   foreach ($name in "timing", "timing_small") {
-       $dir = (Get-ChildItem "$S/timing/posteriors" -Directory -Filter "${name}__*").FullName
-       $name
-       Select-String -Path "$dir/log.txt" -Pattern "masked probes"
-       (Get-Item $dir).CreationTime.ToString("HH:mm:ss")
-       (Get-Content "$dir/manifest.json" -Raw | ConvertFrom-Json).body.training.epochs_trained
-   }
-   ```
+5. **The prior.** Step 2, Prior: **Build a new prior instead…**, the bounds file as above, a Name not
+   taken (an earlier attempt's prior may hold `retrain_prior`; "Before you start" says "Fine. This
+   name is free." of a free one), then **Build a new prior**. Its sweep has no retry when the card's
+   memory runs out, so close what uses the card first (item 7). Its record's text says how much of the
+   box was stable: on this box nearly all of it, and a warning that no clusters were found, defaulting
+   to one, is expected here and does not stop the run ([The prior](science.md#the-prior)).
 
-   A record's folder is its name, two underscores and its id, so `timing__*` never matches
-   `timing_small__…`; the braces in `${name}` are needed, because PowerShell would read `$name__` as
-   a variable of that name. The loop was checked on this machine's Windows PowerShell 5.1 against
-   stand-in folders of both names.
+6. **The checks before the run**, in step 4, Checks, whose list groups them under "Before the run".
+   Each runs on the prior in use; select the check, fill its form, press its button.
+   - **Frequency band**, Cell file `master_spont_tier1.txt`, **Run the frequency-band check**. It
+     must read "Passed": the band (0.03, 0.3) and the drive 0.15 both hold for this cell. The cell
+     shares the master cell's non-dimensional values and time scale, and every driven recording is
+     made at the same non-dimensional amplitude, so it should read as the master cell does
+     ([Chi probe design](science.md#chi-probe-design)). Any other reading stops the run until it is
+     understood.
+   - **Unusable driven recordings: audit**, at its usual 100 batches of 32, **Run the audit**. It
+     runs training's own generator over this prior. It reads
+     "Passed" within 8 points of the expected 37 % (29 % to 45 %); "Look closer" from 8 to 12 points
+     away, or when any driven recording gave no finite reading: the owner reads its table, the share
+     by cause and the per-batch figures, and decides; "Failed" beyond 12 points, or when one of its
+     consistency records does not hold: stop. Do not run it again with another seed to average: the
+     seed changes neither the prior nor the layout of the driven recordings. Its share is the one the
+     comparison after the simulation reads. Why these widths: the reference 37 % is itself uncertain
+     by about 3 points, this reading by about 1.2, and a prior's build may move the share by up to
+     about 2; combined, about 3.5 to 4 points, so ±8 is about two standard deviations and ±12 about
+     three ([Chi probe design](science.md#chi-probe-design) says where each comes from).
+   - **What the observations can pin down**, Cell file `master_spont_tier1.txt`, Recording length
+     4.5 (s), **Run this check**. Its result says "Driven recordings at the low end of the band hold
+     2 cycles from <s> s": that length must be under 4.5 s, the length the certification round
+     simulates ([Recording length](recordings.md#recording-length)). Below it, the lowest driven
+     recordings of the band fall under the cycle floor and are masked.
+   - **Timing of a short fit**, at its usual 20 batches and 10 epochs, **Run this check**. It fits
+     step 3's network, 256 by 10, then the built-in 128 by 8, each on 20 batches of the card's width,
+     1/500 of the run, in a store of its own that it removes. Its result gives each network's seconds
+     per epoch, and a projection: "About … of fitting, if the fit takes 130 epochs". The 128 by 8
+     reading shows whether the card is as fast as it was in August 2026, about 5.1 s an epoch; the
+     larger network read about 6.2 s in October 2026.
+     - Above the timing's limit for 256 by 10, in
+       [the step's figures](#the-figures-that-depend-on-the-simulators-step), **stop for the owner's
+       decision**. Nothing is simulated yet, so a stop costs only the timing. The owner's
+       options: look for a cause (another program on the card, host memory short) and time again; a
+       width of 1,024, which about halves the fit but halves the replication at each operating point,
+       a science choice; or fit 128 by 8 first from the complete set and fit again at 256 by 10 later
+       without simulating again.
+     - Above about 7 s an epoch for 128 by 8, the card is slower than it was: tell the owner before
+       the run, whatever the larger network read.
+     - Whatever the reading, tell the owner the programme's projected total, twice the projected fit
+       plus the rest of the programme in the step's figures, before the run starts.
 
-   Seconds per epoch is the span from the `[chi] masked probes` stamp to the directory's creation
-   time, divided by the epoch count; add 24 hours to a span that crosses midnight. The span also
-   holds a few seconds of set-up, the flow's construction and the card's warm-up on first use, so it
-   slightly overstates an epoch, which errs toward stopping; ten epochs keep that share small. As a
-   guide: about 5.1 s per epoch for the 128 × 8 flow, as in August 2026; for the 256 × 10 flow about
-   6 to 8 s is likely and about 19 s the upper bound; the stop point is about 16 s.
-
-   - **The projection**, in hours, is seconds per epoch × 500 × 130 ÷ 3,600: about 18 hours for
-     every second an epoch takes. 500 is 20,480,000 ÷ 40,960, the retrain's rows over the timing
-     run's, and 130 is the epoch count the August 2026 fit trained to at a patience of 20 epochs, the
-     only count measured at full size, on 10.24 million rows. At 20.48 million rows each epoch holds
-     twice the steps, so the count may be lower; it is not known.
-   - **The reference.** The August 2026 retrain fitted its 128 × 8 flow on 10.24 million rows in 46.1
-     hours, 130 epochs with the best at 110: about 5.1 s per epoch at the timing's size
-     (46.1 × 3,600 ÷ 130 ÷ 250), and about 92 hours for the same flow on 20.48 million rows. Counted
-     on the network the code builds for this box in chi mode, 256 × 10 has about 3.7 times the
-     trainable parameters of 128 × 8 (3.79 million against 1.04 million, of which the embedding net
-     is 74 thousand; the flows alone, 3.72 million against 0.96 million, are 3.9 times), but a step's
-     time does not follow them. The August fit took about 64 ms per 512-row minibatch, about a
-     hundred times its arithmetic on this card: a step's time is set by a fixed overhead per
-     operation, the kernel launches and the two host-device synchronisations sbi's loop makes each
-     step, not by the arithmetic. (The training data stay in host memory and go to the card one
-     minibatch at a time.) The larger flow adds about a quarter more operations per step, and on the
-     CPU its step took 1.2 to 1.6 times as long. So the likely fit is about 110 to 145 hours, about 6
-     to 8 s per epoch in the timing; about 340 hours, about 19 s per epoch, is the upper bound,
-     reached only if a step's time grew with its arithmetic. None of this was timed on the card: the
-     timing decides.
-   - **The rest of the programme.** The projection covers the fit alone. Generation is planned at 31
-     hours for 10,000 batches, the wall clock of the full-size run of 29 August 2026, which holds a
-     gap of about 15 hours after an out-of-memory stop: its simulation ran at about 5.9 s per batch,
-     about 16 hours for 10,000 batches, and a narrowing round that re-simulated 5,000 batches under a
-     fresh rotation took 8.1 hours at the same pace (2 September 2026). A full-size `validate`, 2,000
-     calibration datasets over 200 operating points, took 43 minutes on the card (29 September 2026,
-     on this box); each `sbc` repeat costs about as much, so the four stratified runs of ten repeats
-     take about 28 hours. The certification round is a second full-size training. So the whole
-     programme, the retrain and its certification round, costs about twice the fit plus about 95
-     hours: the two generations at the planning figure, the calibrations and the stratified `sbc`
-     runs, and a few hours for the rest.
-   - **The stop point.** The owner's budget is four weeks of the card, 672 hours, for the whole
-     programme ([Decisions](#decisions)), so each fit may take at most about 290 hours,
-     (672 − 95) ÷ 2, which the projection reaches at about 16 s per epoch (290 ÷ 18).
-     - If the 256 × 10 reading is above about 16 s per epoch, **stop for the owner's decision**.
-     - Whatever the reading, report the projected programme total, twice the projection plus about
-       95 hours, to the owner before the run starts.
-     - If the 128 × 8 reading is above about 7 s per epoch, the card is slower than it was in August
-       2026: report that to the owner before the run, even when the 256 × 10 reading is under 16 s.
-   - **If the stop fires**, nothing has been simulated yet. The owner's options: look for a cause,
-     another program on the card or host memory short (step 5), and time again; a batch width of
-     1,024 (`--run-size 1024`), which about halves the fit but halves the replication at each
-     operating point, a science choice ([Decisions](#decisions), under 10,000 batches × 2,048 rows),
-     and which changes this page where it assumes 2,048 rows: the `[budget]` line the run must print,
-     the projection's factor of 500 (250 at that width) and the cache's size; or fit the 128 × 8 flow
-     first from the complete cache, about 92 hours, and refit at 256 × 10 later without simulating
-     again.
-
-3. **The recording-length check**, still in the scratch store.
-
-   ```powershell
-   & $py -m core identifiability jacobian --chi @M @MC --t-obs 4.5 --m 32 --m-noise 128 --seed 0 --device cuda
-   & $py -m core identifiability jacobian --chi @Box @Cell --t-obs 4.5 --m 32 --m-noise 128 --seed 0 --device cuda
-   ```
-
-   Read the line that begins `low edge` in each:
-
-   ```
-     low edge 0.03x clears 2 cycles at T_obs >= <s> s; high edge 0.3x stays under the 64-cycle ceiling below T_obs = <s> s.
-   ```
-
-   The first length is T*: below it, the band's lowest probes fall under the cycle floor and are
-   masked. It must be under 4.5 s, the length the certification round simulates
-   ([Recording length](recordings.md#recording-length)). The two cells share their non-dimensional
-   values and time scale, so both maps should give the same two lengths. The tier-1 map also has a
-   temperature column, recorded as a measurement
-   ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)).
-
-4. **The retrain prior, then the probe checks**, with `PRISM_ARTIFACTS` unset, so that the prior is
-   written into the real store:
-
-   ```powershell
-   Remove-Item Env:PRISM_ARTIFACTS -ErrorAction SilentlyContinue
-   & $py -m core prior @Box --chi --device cuda --name retrain_prior
-   & $py -m core probes band @Box @Cell --device cuda --name retrain_band
-   & $py -m core probes mask @Box --prior retrain_prior --num-runs 100 --device cuda --name retrain_mask
-   ```
-
-   - `prior` logs the two stages' counts, `[prior] stability sweep: kept <n> of <m> candidates …`
-     and `[prior] fill: kept <n> new sets from <m> steps (<a> outside the box, <b> unstable); …`,
-     both also in `retrain_prior`'s `log.txt`. On this box nearly the whole box is stable: the census
-     keeps about 99 % of its 102,400 candidates, and the walk's outside-the-box count is a small share
-     of its steps. HDBSCAN then finds one or two broad clusters or none, so
-     `warning: No clusters found. Defaulting to 1 cluster` is expected here and does not stop the
-     retrain ([The prior](science.md#the-prior)).
-   - `probes band` must report that the configured band (0.03, 0.3) and the configured drive 0.15
-     both hold for the tier-1 cell. The cell shares the master cell's non-dimensional values and time
-     scale, and every probe is driven at the same non-dimensional amplitude, so the verdicts should
-     read as they do on `master_spont` ([Chi probe design](science.md#chi-probe-design)); one that
-     does not hold stops the retrain until it is understood.
-   - `probes mask` runs training's own generator over the retrain's own prior, 100 batches of 32 rows
-     (`--run-size` at its default). Twelve batches took 43 s on the card (29 September 2026), so 100
-     should take about six minutes, an estimate. First the mechanism, as the report prints it: the
-     cycle floor is the only cause (its line, `the cycle floor: …`, counts every masked probe, and the
-     packer's reads `a non-finite or zero lock-in, dropped by the packer: 0 (0.0%)`),
-     `[mask] invariants hold: …`, and
-     `[mask] cross-check: every batch and row asked for reached the audit, and the training generator's own warnings confirm every row range's masked count (…)`.
-     Any `warning: [mask] …` line stops the retrain until it is understood. Then the masked share P,
-     the percentage on the report's first line, `[mask] <m> (<p>%) of <n> probes masked, …`:
-     - within 8 points of 37 %, 29 % to 45 %, it passes;
-     - further than 8 points but within 12, 25 % to 29 % or 45 % to 49 %, the owner reads the
-       per-row peak-frequency quantiles, `[mask] each row's own peak frequency: …`, and the split by
-       cause printed under the first line, and decides;
-     - further than 12 points from 37 %, stop.
-
-     Do not run it again with another seed to average: the seed changes neither the prior nor the
-     probe layout. Write P down: gate 3 is read against it. Why these widths: the reference 37 % is
-     itself uncertain by about 3 points, this reading by about 1.2, and the prior's build may move
-     the fraction by up to about 2; combined, about 3.5 to 4 points, so ±8 is about two standard
-     deviations and ±12 about three. The reference was read on priors of the older construction,
-     before the prior's walk was made even and confined to the box, so this is the first reading on
-     the new one ([Chi probe design](science.md#chi-probe-design) says where each comes from).
-
-   Then delete the scratch folder: `Remove-Item -Recurse -Force $S`.
-
-5. **Resources**, checked before step 2 and again before the run.
-
-   - **Card memory.** Read it with `nvidia-smi --query-gpu=memory.used --format=csv`, never with
-     `torch.cuda.mem_get_info()`, which on Windows overstates free memory by the desktop's share
-     ([Memory and devices](rules-and-traps.md#memory-and-devices)). The margin is about 1 GiB: at
-     2,048 rows the worst batch geometry needs about 11.44 GiB against a budget of about 12.48 GiB on
-     an idle card. Close every desktop application that uses the card, browsers first, before the
-     prior build and before the run. A run survives a busy card by splitting its batches, at several
-     times the cost
+7. **The card and the computer to the run**, just before the start, and kept so while it runs.
+   - Close every program that uses the card, browsers first: the longest batches use most of the
+     card's memory even under the limit, which bounds the simulator's own buffers and not everything
+     a batch holds. In Settings, "Free graphics-card memory" with **Read now** reads what is free. A
+     batch that does not fit is split into smaller pieces, at several times the cost
      ([Memory planning and out-of-memory recovery](architecture.md#memory-planning-and-out-of-memory-recovery)).
-   - **Host memory.** As training starts, the copies of the training data sbi makes are expected to
-     hold about 50 of the machine's 63 GiB on their own, with the process's own footprint on top;
-     close other applications.
-   - **Disk.** The cache is about 10.3 GiB. The `[checkpoint] writing to …` line states the size and
-     the free space, and a warning follows it when the space is short.
-   - **The prior's sweep has no out-of-memory retry**, so the card must be clear before `prior` runs
-     too.
-
-6. **Capture the console.** A resumed run's first process prints lines that exist nowhere else, and
-   sbi's prints and the tool's own lines never reach a `log.txt`. This keeps the live display and
-   appends both output streams to one file; it was checked on this machine's Windows PowerShell 5.1
-   with the two commands below, which import no torch:
-
-   ```powershell
-   $ErrorActionPreference = "Continue"
-   $env:PYTHONUNBUFFERED = "1"
-   filter Plain { if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ } }
-   $Log = "$HOME\prism-retrain-console.log"
-   & $py -m core --help 2>&1 | Plain | Tee-Object -FilePath $Log -Append
-   $LASTEXITCODE
-   & $py -m core validate 2>&1 | Plain | Tee-Object -FilePath $Log -Append
-   $LASTEXITCODE
-   ```
-
-   The first prints the help and 0, the second a usage error and 2, and `$Log` then holds both: the
-   help from the output stream and the usage error from the error stream.
-
-   - `2>&1` joins the error stream, where warnings, refusals and progress bars go, to the output
-     stream, and `Tee-Object -Append` shows each line and appends it to the file, so a resumed run's
-     lines follow the first process's.
-   - Windows PowerShell wraps every line from a program's error stream in an error record; `Plain`
-     gives back the line. Without it, the first such line prints inside PowerShell's
-     `NativeCommandError` block, in the file too.
-   - `$ErrorActionPreference` must stay `Continue`, its default: under `Stop`, the first line on the
-     error stream ends the command.
-   - `PYTHONUNBUFFERED=1`: without it, Python holds its printed lines while its output goes into a
-     pipe, and they reach the screen and the file only when the run ends.
-   - `$LASTEXITCODE` still holds the tool's exit code after the pipe.
-   - Progress bars redraw as new lines instead of in place, and since the two streams are merged as
-     they arrive, a warning can land a line or two away from the record it followed.
-   - Under this pipe, Ctrl-C kills the run outright, with no rescue save and no closing lines;
-     [Resuming](#resuming) says what that costs and when to run without the pipe.
-   - Set the first four lines again in every new PowerShell session, a resume's included.
+   - While the run is live the card is its own: no pytest (the fast gate runs its card tests on the
+     card), no card gate, no other PRISM command. PRISM keeps one window; a second start brings the
+     open one to the front.
+   - Host memory: close other programs. The last full-size fit's process held about 25 GB of the
+     machine's 63 GiB through its fit.
+   - Disk: the set's size in the step's figures, with room to spare.
+   - **No edit under `core/` and no commit while the run is live.** The posterior stamps the
+     checkout's revision and whether the tree has changes when it is written at the end, so a commit
+     of any file during the run, documents included, moves that stamp. Whether an import late in a
+     run reads an edited file is not established. And an edit inside the code that builds or trains
+     the network, a comment included, makes every training kept before it unresumable
+     ([Resuming](#resuming)).
 
 ## The run
 
-```powershell
-& $py -m core train @Box --chi --device cuda --prior retrain_prior --num-runs 10000 --hidden-features 256 --num-transforms 10 --checkpoint-every 50 --name retrain --note "<one line>" 2>&1 | Plain | Tee-Object -FilePath $Log -Append
-$LASTEXITCODE
-```
+Step 3, Training, with the plan's settings in the form and the new prior in use. Read
+"Before you start" first. It should say, in this order:
 
-Left at their defaults ([train](command-line.md#train)): `--run-size 0`, the hardware batch, 2,048
-rows on this card, so the `[budget]` line must read
-`2,048 rows`; `--learning-rate 0.001`; `--stop-after-epochs 20`; `--max-epochs`, no ceiling;
-`--fisher-m 48`, `--fisher-dz 0.1` and `--fisher-points 8`; `--resume auto`, and no `--new-run`; and
-`--chi-k 6`, which in chi mode sets the Fisher rotation's probe count and not the training rows'
-probe count: each batch draws its own, from 2 to 12.
+- "Model Nadrowski; bounds file master_tier1.txt; prior <the new prior>; frequency response with 12
+  slots; rotation on."
+- "10,000 batches of 2,048 make 20,480,000 simulations. Each simulates one spontaneous recording and
+  2 to 12 driven recordings."
+- That it starts a new simulation set, naming each saved set of the model it does not continue with
+  what it differs in: the finished set of the last full-size training among them, made on another
+  prior, at a lock-in limit of 20 and by another version of PRISM.
+- "The fit is saved after every epoch, so a stop or a failure keeps it." and "A resume first reads
+  the simulation set back, about four minutes at full size."
+- How long it should take, when the run history or the timing of a short fit can say; the memory
+  limit in force; and what the frequency band and the audit read for this prior, "Fine." when both
+  passed.
 
-Then the calibration and the two diagnostics that read the record:
+Type the Name (`retrain`, say) and a one-line Note, then press **Start training**. Two questions may
+come first:
 
-```powershell
-& $py -m core validate @Box --chi --device cuda --posterior retrain --n-cal 2000 --cal-n-scales 200 --posterior-samples 1000 --seed <N> --name retrain_cal
-& $py -m core identifiability rotation @Box --chi --posterior retrain --name retrain_rotation
-& $py -m core ablation @Box --chi --device cuda --posterior retrain --name retrain_ablation
-```
+- "Start training although a check failed?" only when the frequency band or the audit failed: cancel,
+  and go back to the pre-flight.
+- "Start a new simulation set?", listing each saved set with what it differs in. Answer
+  **Start training on a new simulation set**; "Cancel" is preselected.
 
-- `validate` ([validate](command-line.md#validate)): `<N>` is a whole number you choose and write
-  down; the record keeps it. `--n-cal`, `--cal-n-scales` and `--posterior-samples` are written at
-  their defaults. Left at its default: `--chi-k 6`, which a calibration does not read, since it
-  draws its probe count for each batch as training does.
-- `identifiability rotation` ([identifiability rotation](command-line.md#identifiability-rotation))
-  reads the record and simulates nothing. Left at their defaults: `--n-worst 3`, `--top-n 4`,
-  `--device auto`.
-- `ablation` ([ablation](command-line.md#ablation)) reads the posterior's own simulation cache, one
-  reason the run keeps one. Left at their defaults: `--rows 200000`, `--n-sweep 33`.
-
-Then the stratified SBC, a characterisation and not a gate (the reason is under
-[Decisions](#decisions)): once at each fixed probe count, and once pooled.
-
-```powershell
-& $py -m core sbc @Box --chi --device cuda --posterior retrain --chi-k-fixed 2 --name retrain_sbc_k2
-& $py -m core sbc @Box --chi --device cuda --posterior retrain --chi-k-fixed 6 --name retrain_sbc_k6
-& $py -m core sbc @Box --chi --device cuda --posterior retrain --chi-k-fixed 12 --name retrain_sbc_k12
-& $py -m core sbc @Box --chi --device cuda --posterior retrain --name retrain_sbc_pooled
-```
-
-Left at their defaults ([sbc](command-line.md#sbc)): `--repeats 10`, `--n-cal 2000`,
-`--posterior-samples 1000`, `--cal-n-scales 200`, `--seed 0`, and `--chi-k 6`, which `sbc` does not
-read either. Each repeat costs about what one `validate` does.
-
-## Resuming
-
-A run that stops keeps every batch its cache holds at its last commit, made every 50 batches. What
-it keeps beyond that depends on how it stopped:
-
-- **A crash during generation, or Ctrl-C when the command is not piped,** also saves the batches
-  completed since the last commit. Ctrl-C then prints
-  `[checkpoint] stopping: saving <n> completed batches (<from> -> <to>) before unwinding…` and
-  `prism train: interrupted: the artifact being written was removed. If a [checkpoint] line above says batches were saved, the same command with --resume require continues them. If a [fit] line above says the training is kept as fit <id>, the same command with --resume-fit <id> continues it.`,
-  and exits 130.
-- **Ctrl-C under the console capture of step 6 ends the run like a killed process**: PowerShell kills
-  a program whose output it pipes, before the rescue save can run. The run keeps what its last commit
-  holds, prints neither line, and `$LASTEXITCODE` reads -1. A power cut or a killed process loses the
-  same, at most the batches since the last commit. When the rescue save matters more than the
-  capture, run the command without the pipe.
-- **A run that dies, or is stopped, while the flow trains** keeps its fit at its last saved pass, as
-  a kept training, and none of its rows: the fit is saved after every pass, and losing the pass in
-  progress is the most it can lose. Its cache is complete, so the same command with
-  `--resume-fit <id>` instead of `--resume require` reads the rows back without simulating any again
-  and continues the fit from that pass (the last bullet below). Ctrl-C prints
-  `[fit] the training stopped after pass <n> and is kept as fit <id> (stopped on purpose).`; after a
-  crash, a power cut or a killed process, `python -m core artifacts list fit` names it, as stopped
-  unexpectedly.
-- **A process that stopped before its first commit**, in the Fisher step or the first 50 batches (on
-  Ctrl-C under the pipe, say), left nothing to resume, and `--resume require` is refused. Run the
-  first command again instead, with `--new-run` again on the new-prior route of
-  [Decisions](#decisions), and never set the prior back to the one that refusal points at.
-
-In every other case, open a PowerShell session, set the variables at the top of this page and the
-first four lines of step 6 of the pre-flight, and run the same command with `--resume require`:
-
-```powershell
-& $py -m core train @Box --chi --device cuda --prior retrain_prior --num-runs 10000 --hidden-features 256 --num-transforms 10 --checkpoint-every 50 --name retrain --note "<one line>" --resume require 2>&1 | Plain | Tee-Object -FilePath $Log -Append
-$LASTEXITCODE
-```
-
-- **It prints, in order:**
-  - `Reusing the Fisher rotation stored with the training checkpoint (<k>/10000 batches) — NOT recomputing it: the rotation's operating points are not reproducible across processes, …`,
-    with `— COMPLETE, so generation will be skipped` after the batch count when every batch was
-    committed;
-  - `[checkpoint] the stored rotation's eigenvalues come with it (spread best/worst <x>); …`: the
-    rotation's eigenvalues were found beside it;
-  - `[checkpoint] resuming at batch <k>/10000 from <dir> (reusing the stored rotation V)`, from the
-    simulation;
-  - only when a save was cut off between writing its shards and committing them,
-    `[checkpoint] moved <n> uncommitted shard files past batch <k> (batches [<a>, <b>), …) aside to <dir>\uncommitted\<m>, which no load reads`
-    ("file" when there is only one): before anything is committed, those shards are moved, never
-    deleted, into a numbered folder of their own
-    (`core.SBI.training_checkpoint.set_aside_uncommitted`), so they cannot overlap the rows committed
-    after them. A resume that had to read its commit from the older state file moves nothing, and
-    warns instead ([What to watch](#what-to-watch)).
-
-  A resumed process prints no `[fisher]` line, and its record writes the three Fisher settings as
-  null ([The Fisher settings on a resumed run](window.md#the-fisher-settings-on-a-resumed-run)).
-- **Keep the prior.** Resume with the same `retrain_prior`: the cache is keyed on its fit, and a
-  rebuilt prior is another fit ([The artifact store](architecture.md#the-artifact-store) says why the
-  fit is part of the key).
-- **The two refusals** ([Training-cache flags](command-line.md#training-cache-flags)):
-  - with `--resume require` and no committed batch in this run's own cache,
-    `prism train: refused: resume='require' but there is no resumable cache at <dir>. (--resume)`;
-    when a committed cache one setting away exists, the sentence is followed by
-    `A committed cache ONE setting away exists:` and a line for each such cache, at most three, the
-    last ending `(--resume)`. Either the first process committed nothing (above), or the
-    command differs from the first run's in the setting a listed cache names, or neither state file
-    of the cache can be read. In that last case do not re-run the first command, which would start
-    over from zero: stop for the owner. A listed cache that differs in `prior_fingerprint`, on the
-    new-prior route, is the earlier attempt's: never set the prior back to reach it;
-  - without `require`, a run one setting away from a committed cache is refused before the Fisher
-    step: `This run would start a NEW simulation cache at <dir> from zero, but a committed cache ONE setting away exists:`,
-    a line for each such cache, at most three, naming the setting and both values, and a line ending
-    `(--new-run)`. Set the setting back to continue that cache, unless it is the earlier attempt's.
-    `--new-run` is right only when that one setting was changed on purpose and a new run from zero is
-    what you want; it never forces a fresh start over this run's own cache.
-
-  A resume refused because the cache holds two shards that overlap names both: move the one that
-  does not fit the committed run, with its `th_` twin, into the cache's `uncommitted` folder, as the
-  message says, and resume again.
-- **Capture every process, with `-Append`.** The posterior's `log.txt` holds the last process's
-  records, after those of the processes that trained the kept training it resumed, if it resumed one;
-  a process that stopped before the fit saved its first pass is in none of them, so its lines, its
-  `[fisher]` lines among them, exist nowhere but in the captured file.
-- **A fit kept partway** resumes with the kept training's id in place of `--resume require`:
-
-  ```powershell
-  & $py -m core train @Box --chi --device cuda --prior retrain_prior --resume-fit <id> 2>&1 | Plain | Tee-Object -FilePath $Log -Append
-  $LASTEXITCODE
-  ```
-
-  The kept training gives every setting the command leaves out (the batches, the network, the
-  patience, the cadence, the name and the note), and a setting given that differs from its own is
-  refused before anything is read, naming its flag; so is a change since it was kept in its rows, in
-  the code that builds or trains the network, in a configuration constant that code reads or in the
-  libraries, naming the flag that answers it where one does (`--prior`, `--num-runs`, `--run-size`,
-  `--model`, `--device`, `--bounds`) and ending `(--resume-fit)` otherwise. It prints
-  `[fit] resuming the kept training <id> after pass <n> (best validation loss <x>, <k> passes since the best); its simulation set is read back first.`,
-  then the cache's resume lines above, and `[fit] saved after pass <n+1>.` once the next pass is
-  saved. When the newest saved pass cannot be read it warns, and resumes from the pass before it. A
-  kept training whose rows, read back, do not give the kept fit is refused then and marked as one that
-  cannot be resumed: stop for the owner. Once the posterior is written the kept training is removed.
+The run's page then stands in the step's place, and the foot of the rail says where it is
+("Simulating, batch 6,150 of 10,000", "Fitting, epoch 62 of about 130"); Ctrl+R goes back to it from
+anywhere. The page shows the run's four stages, Rotation, Simulation, Fitting and Saving; one sentence
+that says where it stands; a time axis with when the stage should end; the training's health; the
+fit's loss by epoch; and the messages, newest first. **Show the full text** shows every line the run
+wrote, and **Open the file** opens its dated text file, kept in the `runs` folder beside the settings
+file (`%APPDATA%\PRISM`). Closing the window asks first, "Keep running" preselected.
 
 ## What to watch
 
-In the order the run prints them, quoted as the code prints them. The tool's own lines (`[cfg]`,
-`[prism]`) and sbi's prints reach only the console; every other line is in the posterior's `log.txt`
-as well ([Conventions](command-line.md#conventions)).
+Stage by stage, as the run's page says it. The engine's own lines are in the full text, and the
+records' lines are also in the record's `log.txt`.
 
-- `[cfg] chi: K=6 F0=0.15 range=(0.03, 0.3) x Omega_0  -> 12 probe slots, conditioning block = 72 features`,
-  with `[cfg] bounds=Resources/Bounds/nadrowski/master_tier1.txt` and
-  `[cfg] rescale order: ['x_scale', 't_scale', 'T']`. Anything else, stop.
-- `[tier1] f_scale is DERIVED as N*beta*k_B*T/x_scale: implied range over the prior p1/p50/p99 = <a> / <b> / <c> (cell force units), min <lo> max <hi>`
-  and `[tier1] chi drive amplitude = CHI_F0 * f_scale = <a> / <b> / <c> at those quantiles`: the
-  force scale the prior implies, and the drives that follow. They report and never refuse
-  ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)).
-- `Training batch COUNT overridden: 10000 batches (config default 5000) — 20,480,000 training rows.`
-- `[budget] 10,000 batches x 2,048 rows = 20,480,000 training rows`: anything but 2,048 rows, stop.
-- In a fresh process only: `Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)...`,
-  `[fisher] averaged simulation Fisher over <n>/8 operating points (prior median + <n-1> prior draw(s))`
-  and `[fisher] eigenvalue spread (best/worst direction): <x>`. A
-  `warning: [fisher] operating point <k> …` line means that point was skipped.
-- `[checkpoint] writing to <dir> every 50 batches (~10.3 GiB total, <free> GiB free)`, when the
-  cache starts; a `UserWarning: Only <free> GiB free …` after it means the disk is short. A resume
-  prints `[checkpoint] resuming at batch <k>/10000 from <dir> (reusing the stored rotation V)` in its
-  place.
-- `[checkpoint] moved <n> uncommitted shard files past batch <k> (batches [<a>, <b>), …) aside to <dir>\uncommitted\<m>, which no load reads`,
-  only when an earlier process's save was cut off before its commit ([Resuming](#resuming)).
-- `warning: [checkpoint] state.pt could not be read, so this run resumes from state.prev.pt, …`:
-  the cache's commit file could not be read, so the run resumed from the one before it and left the
-  shards past that point where they are. Do what the warning says, before the first batch ends.
-- For each batch that masks any probe, a notice on the error stream:
-  `<file>:<line>: UserWarning: training batch <k>/10000 [t_scale=<…>, T=<…>, n_fine=<…>, N_points=<…>, rows=2048]: chi: <m>/<n> probes masked (below 2.0 drive cycles, at/above Nyquist, out of band, or a non-finite lock-in).`
-  Here T is the batch's recording length, not the temperature.
-- `warning: [patho] batch <k>: <n> new pathological trajectorie(s) -- …`, for each batch that has
-  any, and at the end of generation
-  `[patho] run total: <n> pathological of <rows> simulated trajectories (<p>%) -- …`.
-- `[mem] training batch <k>/10000 [...]: peak allocated <a> GiB, peak reserved <b> GiB, <free>/<total> GiB reported free (optimistic on Windows), learned cap <cap>`,
-  on the first batch and every 250th after it. Peak reserved far above peak allocated means the
-  allocator cannot hand memory back. A few `OOM at simulation batch …` warnings are survivable; a
-  steady stream means the card is fuller than the splitting absorbs.
-- `[chi] masked probes: <m> of <n> (<p>%) over 10000 batches, every committed batch of the simulation cache; per batch <lo>-<hi>%, median <med>%`,
-  the run total gate 3 reads. It is logged when generation ends: judge it then, against
-  `retrain_mask`'s reading, before the fit has gone far ([Gates](#gates)).
-- `[checkpoint] complete: 10000 batches in <dir>. Safe to delete once the posterior is saved; keeping it lets you retrain the flow without re-simulating.`
-  Keep it: `ablation` reads it.
-- `[winsor] clipped <n> of <m> summary elements (<p>%) to their per-column 0.1%/99.9% percentiles`:
-  a few tenths of a percent.
-- sbi's epoch counter, `Training neural network. Epochs trained: <n>`, and at the end
-  `Neural network successfully converged after <n> epochs.`: prints of sbi's, on the console only.
-  sbi redraws the counter in place, so under the capture each count reaches the file only when the
-  next one starts. A full-size epoch takes about 500 times the timing's seconds per epoch: about 2.2
-  hours at the budget's limit of 16 s. Read the file's latest count at two times a few hours apart,
-  noting the clock each time, from any PowerShell session with `$Log` set as in step 6 of the
-  pre-flight (the file can be read while the run appends to it):
+- **Rotation.** "The rotation is being computed before any simulation." The full text says over how
+  many operating points the rotation was averaged (8 of 8 expected) and its eigenvalue spread; a
+  warning that an operating point was skipped means one fewer.
+- **Simulation.** "Simulating: batch … of 10,000, … s per batch", at about the pace
+  [the step's figures](#the-figures-that-depend-on-the-simulators-step) give. The full text's first
+  line of the set states its size and the free disk space; a
+  warning after it means the disk is short. The set is saved every 50 batches.
+- **Training health**, its four rows:
+  - "Failed simulations": "Fine" up to 1 %; the step's figures give the last full-size set's share.
+  - "Graphics-card memory": the largest batch's peak so far. "Batch … did not fit in the graphics
+    card's memory and was run in smaller pieces." now and then is survivable; a steady stream means
+    the card is fuller than the splitting absorbs: look for another program on it.
+  - "Unusable driven recordings": "Counted when simulation ends", then the comparison with the
+    audit ([Gates](#gates)).
+  - "Training saved": "after epoch …", once the fit has begun.
+- **Two lines a continued simulation can bring.** When an earlier session's save was cut off before
+  it committed, the full text says it "moved … uncommitted shard files past batch … aside to …,
+  which no load reads": nothing is asked of you, and nothing was deleted. When the set's newest
+  commit file could not be read, a message from the engine says that "state.pt could not be read, so
+  this run resumes from state.prev.pt, a generation back": act on it before the first batch ends, as
+  [Resuming](#resuming) says.
+- **When simulation ends**, the comparison is made at once: within 3 points of the audit is fine, and
+  the fit goes on ([Gates](#gates) says what the other two bands ask). The full text then says how
+  many summary elements were clipped to their percentiles: a few tenths of a percent at most.
+- **Fitting.** The stage says "Now, about … per epoch"; the loss by epoch grows on the page; "Training
+  saved" follows each epoch. A silence during an epoch is said as normal; one twice as long as the
+  last epoch took is a warning. A full-size epoch takes about 500 times the timing's seconds per
+  epoch. Slower than the limit per epoch in the step's figures, stop the run for the owner; so does
+  a fit still running past its limit in hours after simulation ended. Either
+  way the set is complete and the fit is kept after every epoch, so a stop loses at most the epoch
+  in progress, never a simulated batch ([Resuming](#resuming)).
+- **Saving.** "Saving the posterior" cannot be stopped. The page then says the posterior is saved,
+  and how the fit ended: by itself, once validation had not improved for 20 epochs. The record holds
+  the loss figure, `figures/training_loss.png`, and its numbers, `loss.npz`.
 
-  ```powershell
-  (Select-String -Path $Log -Pattern "Epochs trained" | Select-Object -Last 1).Line
-  ```
+## Resuming
 
-  Hours elapsed over epochs gained is the hours per epoch; the further apart the readings, the finer
-  it is. More than about 2.2 hours per epoch, stop the run for the owner. The budget also assumes
-  about 130 epochs: a fit still running about 290 hours after generation ended stops for the owner's
-  decision too. Either way the simulation cache is complete and the fit is kept after every pass, so
-  stopping loses at most the pass in progress, never a simulated row, and the kept training resumes
-  with `--resume-fit <id>` from its last saved pass ([Resuming](#resuming)).
-- `[prism] posterior retrain__<id>  <path>`: the record is written.
-- In the record: `figures/training_loss.png`, the loss curve with the best epoch and the early-stop
-  window marked, and `loss.npz`, its numbers.
+A run that stops keeps what it saved:
+
+- **During the simulation**, every batch its set saved, the last save at most 50 batches back. A
+  stop from the page saves the batches finished since, too.
+- **During the fit**, every batch, and the fit at its last saved epoch, kept as a training of its
+  own: a record of the kind `fit`, which Records calls an unfinished training. The fit is
+  saved after every epoch, so a stop, a failure, a power cut or a closed window loses at most the
+  epoch in progress. A training whose simulations are not saved keeps no fit at all.
+
+**Stopping on purpose.** **Stop training…** asks first. During the simulation it says that the
+batches simulated so far are kept and the batch in progress is not: **Stop and keep the
+simulations**. During the fit, that the fit stops when the epoch in progress ends and every finished
+epoch is kept: **Stop training**. "Keep training" is preselected each time, and until the stop is
+taken **Don't stop after all** withdraws it. Once the stop has landed, the page asks "Keep this
+training so you can resume it later?": **Keep**. **Discard** deletes the kept training, not the
+simulations.
+
+**Resuming.** A kept training is resumed by **Resume** in three places: on the run's page ("Resume
+the training") until PRISM is closed; after a reopening, on step 3, Training, under "Kept trainings",
+whose row says how and when it stopped, its best validation loss and what it trains on; and on Home,
+whose next step offers it. A Resume runs on the training's own record ("It uses the settings it was
+kept with"), whatever the forms hold, and puts its prior in use. It first reads the simulation set
+back, about four minutes at full size, then continues from the epoch after the last one saved; the
+full text says from which pass it resumes, and "Training saved" moves on once the next epoch is saved.
+
+**Continuing a simulation.** A training stopped or failed during its simulation keeps its set, and
+step 3 says "Simulations saved to batch …". Its run's page offers **Continue from batch …** until
+PRISM is closed, and Home offers it for one that failed or was not seen to end; either fills the
+forms with the settings the run was started with, leaving the name and the note blank. Or fill the
+forms from the plan and load the prior the set was made with (step 2, **Use a saved prior
+instead…**, **Load this prior**): "Before you start" then says "Continues the saved simulation set:
+… of 10,000 batches are done.", and **Start training** continues it. A continued set reuses the
+rotation stored with it, and step 3 says of the rotation's three settings "Not used: this training
+reuses the saved simulation set's rotation."
+
+**What makes a kept training unresumable.** A kept training resumes only while what it was trained
+with is unchanged. Its row on step 3 says why it cannot, in place of **Resume**:
+
+- the code that builds or trains the network has changed since it was kept, an edit of a comment
+  included (the functions named in `core.SBI.fit_state.FIT_CODE`): finish a kept training you want
+  before such an edit;
+- a configuration constant that code reads has changed;
+- the libraries have changed, sbi's own trainer files among them;
+- its simulation set is gone from the store, or no longer holds the batches it was trained on.
+
+Its settings and its network's shape are checked as well: the window resumes it on its own settings,
+so these cannot differ there, and a resume whose rows, read back, do not give the kept fit is refused
+and the training marked as one that cannot be resumed: stop for the owner. A kept training that cannot
+be resumed is deleted with **Delete** on its row. Once the posterior is written, the kept training is
+removed.
+
+**Keep the prior.** A simulation set is keyed on its prior, and a prior built again is another prior:
+continue a set with the prior it was made with. A Resume puts the right one in use itself.
+
+**When the set's newest commit could not be read**, the continued run says so in a message from the
+engine, naming the shard files it leaves in place. Stop the run while it is still on its first
+batch, where a stop commits nothing, and continue again: if `state.pt` reads then, nothing is lost.
+Only if it is really damaged, copy `state.prev.pt` over it in the set's folder before continuing;
+that run then sets those files aside. Left to run, it simulates those batches again, and a later load
+may refuse the leftovers as overlapping.
+
+**A set that a continuation refuses as holding two shards that overlap** names both: move the one
+that does not fit the committed run, with its `th_` twin, into the set's `uncommitted` folder, as the
+message says, and continue again.
 
 ## Gates
 
-Four gates pass or fail, and two readings are recorded; [Afterwards](#afterwards) says which record
-answers each. A retrained model passes when all four gates hold. Gate 3 is read when generation
-ends, before the flow's fit has gone far; the other three once the run and its diagnostics are done.
+On step 4, Checks: "A posterior passes when all six deciding checks have passed." The list shows each
+check's state. Two passed before the run; one is read when the simulation ends; three run once the
+posterior is in use, each from its page, with the posterior and its own prior in use.
 
-1. **The calibration verdict passes.** `retrain_cal`'s `[verdict]` record reads
-   `[verdict] PASS: every parameter's rank test at KS p >= 0.05/13 = 0.003846 and the joint coverage test at KS p >= 0.05 (calibration seed <N>)`.
-   Temperature's row is marked "(assumed input)" and counts like the rest.
-2. **The dead channels are revived.** In `retrain_ablation`, `A1_mean` and `D3_bimodality`, the two
-   channels the August 2026 flow could not see
-   ([Conditioning features](science.md#conditioning-features)), read `healthy`: each moves the
-   embedding at least a tenth as far as the median channel, the same order as this run's healthy
-   channels.
-3. **The masked total is within 3 points of the retrain prior's own `probes mask` reading**, the
-   masked share P that pre-flight step 4 wrote down, and not of 37 %. It is read from the training
-   run's `[chi] masked probes` line, the one scoped to every committed batch of the simulation cache,
-   which is logged when generation ends, so it is judged then, before the flow's fit, tens to
-   hundreds of hours, has gone far. With D the difference between that total and P, in points:
-   - D at most 3: the fit goes on.
-   - D above 3 and at most 5: look closer before leaving the fit to run. Compare the line's per-batch
-     range and median, and the per-batch masking notices in the captured file, with the audit's
-     per-batch figures (its `[mask] masked per batch: …` line, and `results.per_batch` in its record).
-   - D above 5: stop the run and investigate. The simulation cache is complete, so the fit can be run
-     later without simulating again, and a fit stopped partway is kept and resumes from its last saved
-     pass ([Resuming](#resuming)).
+1. **Frequency band**: passed in the pre-flight.
+2. **Unusable driven recordings: audit**: passed in the pre-flight.
+3. **Unusable driven recordings: simulation set against the audit.** Made by itself when simulation
+   ends, on the run's page and in this list. With D the difference between the set's share and the
+   audit's, in points:
+   - D at most 3: "Passed"; the fit goes on.
+   - D above 3 and at most 5: "Look closer before leaving the fit to run". The comparison's page here
+     shows the per-batch figures of the set and of the audit side by side; once they are understood,
+     **Accept this difference**, which the run's history keeps with its moment.
+   - D above 5: the advice is to stop the fit and find out why, and the run's page asks for an
+     answer: **Keep training**, or stop with **Stop training…**. The window never stops the fit
+     itself. The set is complete and the fit is kept, so a stop loses at most the epoch in progress.
 
-   D spreads as the audit's reading does, about 1.2 to 1.6 points: the full run's own total, over
-   10,000 batches, is far steadier, and neither the reference's uncertainty nor the prior's build
-   enters, since both readings are of the same prior. So 3 points is at least about two standard
-   deviations and 5 at least about three ([Chi probe design](science.md#chi-probe-design)).
-   `validate` logs a line of its own, scoped to its own process, which is not this gate.
-4. **The eigenvalues are recorded.** `retrain_rotation` prints `[eigenvalues] max … min … spread …`
-   and the participation ratio; `[eigenvalues] NOT STORED for this artifact.` fails the gate.
+   D spreads as the audit's reading does, about 1.2 to 1.6 points: the set's own share, over 10,000
+   batches, is far steadier, and neither the reference's uncertainty nor the prior's build enters,
+   since both readings are of the same prior. So 3 points is at least about two standard deviations
+   and 5 at least about three. A calibration's own count of unusable driven recordings, scoped to its
+   own run, is not this gate.
+4. **Calibration**, at its usual 2,000 test datasets, 200 operating points and 1,000 samples per
+   dataset: **Run the calibration**. A calibration made smaller never decides. It passes by the
+   verdict rule ([Decisions](#decisions)); temperature's row is marked "(assumed input)" and counts
+   like the rest. Its seed is drawn and recorded; to repeat a calibration set, type that seed in
+   "Seed", under "Rarely changed".
+5. **Use of each part of the input**, at its usual 200,000 simulations read and 33 points a sweep:
+   **Run the input-use check**. It reads the posterior's own simulation set, one reason the run keeps
+   it. It passes when the two inputs the August 2026 network could not see, `A1_mean` and
+   `D3_bimodality` ([Conditioning features](science.md#conditioning-features)), respond as the
+   typical input does; any other input invisible to the network makes it "Look closer".
+6. **Identifiability of the posterior**: **Run the identifiability check**. It simulates nothing. It
+   passes when the record holds how strongly each direction is pinned down: the rotation's
+   eigenvalues, stored with the set and carried by the posterior.
 
-The two readings, written down rather than passed:
+Two readings are written down, not passed:
 
-- **The loss curve.** A clean plateau well before the best epoch, the validation loss no longer
-  descending as it nears its best, reads as a limit in the data; a validation loss still falling near
-  the best epoch reads as under-fitting ([Identifiability limits](science.md#identifiability-limits)),
-  which is answered by fitting again from the complete cache, with no new simulation.
-- **Informativeness**, total and per parameter, as the first baseline: the `Informativeness` block
-  `retrain_cal` prints. Read its sign first: a negative total means the flow gives the truth less
-  density than the prior does. Temperature's line is marked "(assumed input)", and the total is not
-  adjusted for it ([Reading calibration honestly](science.md#reading-calibration-honestly)). No
-  earlier posterior exists to compare with, so this is the number later runs are compared against,
-  always on fresh calibration sets. Compare two totals with their `sem_nats`. Under one prior, an
-  amortized posterior's calibration set repeats with `validate --seed N` and the same `--n-cal` and
-  `--cal-n-scales`. A narrowed posterior draws its set from its region, so its set is never its
-  parent's.
+- **The loss curve**, on the run's page and in the posterior's record. A clean plateau well before
+  the best epoch, the validation loss no longer descending as it nears its best, reads as a limit in
+  the data; a validation loss still falling near the best epoch reads as under-fitting
+  ([Identifiability limits](science.md#identifiability-limits)), answered by fitting again on the
+  complete set, with no new simulation.
+- **Informativeness**, total and per parameter, as the first baseline: the reading under the
+  calibration's table. Read its sign first: a negative total means the network gives the truth less
+  density than the prior does. Temperature's line is marked as an assumed input, and the total is
+  not adjusted for it ([Reading calibration honestly](science.md#reading-calibration-honestly)). No
+  earlier posterior of this code exists to compare with, so this is the number later runs are
+  compared against, always on fresh calibration sets. Under one prior, a calibration set repeats with
+  the same seed, test datasets and operating points; a narrowed posterior draws its set from its
+  region, so its set is never its parent's.
 
-Dropped, each with its reason:
-
-- **The implied temperature in 280 to 310 K.** On the tier-1 box it is 100 % by construction: T is
-  drawn inside that box, and the force scale is derived from it.
-- **A dry run before the run.** The tool has none. The epoch timing replaces it, and the smoke gate's
-  run 4 has already run this box and this network end to end.
-- **Old against new on one calibration set.** No old posterior exists: the August 2026 retrain's
-  records are gone.
+And one characterisation: **Calibration repeated at fixed numbers of driven recordings**, under "After
+the fit", once at each of 2, 6 and 12 in "Fixed number of driven recordings" and once at "Mixed, as
+in training", each at 10 repeats of 2,000 test datasets ([Decisions](#decisions) says why it decides
+nothing).
 
 ## The certification round
 
-A narrowing round from `retrain`, drawn around the simulated tier-1 cell at 4.5 s:
+A narrowing round from the passed posterior, drawn around the simulated tier-1 cell at 4.5 s.
 
-```powershell
-& $py -m core infer @Box --chi --device cuda --posterior retrain @Cell --t-obs 4.5 --name cert_parent
-& $py -m core tsnpe @Box --chi --device cuda --posterior retrain --observation <id> --directions 5 --level 0.999 --num-runs 10000 --hidden-features 256 --num-transforms 10 --checkpoint-every 50 --name cert_round 2>&1 | Plain | Tee-Object -FilePath $Log -Append
-& $py -m core validate @Box --chi --device cuda --posterior cert_round --accept-truncated --n-cal 2000 --cal-n-scales 200 --posterior-samples 1000 --seed <N> --name cert_cal
-```
-
-- `<id>` comes from `infer`'s `[prism] observation _unnamed__<id>  <path>` line: the part after
-  `_unnamed__`.
-- `cert_parent` logs `[ppc] chi probes: <n> live / <K> slots` (`core.orchestrator.infer_and_visualize`).
-  That is how many of the observation's probe slots the posterior-predictive draws keep live, which
-  reads how well the posterior constrains Ω₀ ([Chi probe design](science.md#chi-probe-design)), not
-  the probe machinery gate 3 checks. The August 2026 retrain kept about four live. Record it; it is
-  not a gate.
-- The round is a second full-size training. It inherits neither its parent's network nor its batch
-  count, so both are passed ([tsnpe](command-line.md#tsnpe)). Its region is part of its cache's
-  identity, so it simulates a cache of its own, and it costs about what the whole retrain does. Its
-  roughly 31 hours of generation is the planning figure, taken from the full-size 10,000-batch run of
-  29 August 2026, a wall clock that holds a gap after an out-of-memory stop; the one measured
-  narrowing-round generation is the 8.1 hours for 5,000 batches, at that run's simulation pace
-  (pre-flight step 2, under the rest of the programme). Its fit falls under the same budget as the
-  retrain's: watch its epoch counter the same way, with the same limits of about 2.2 hours per epoch
-  and about 290 hours of fitting ([What to watch](#what-to-watch)).
-- Left at their defaults: `infer`'s `--chi-k 6`, the probes the simulated cell is measured at, and
-  `--n-samples 1000`; `tsnpe`'s `--chi-k 6`, which the observation's own probe count replaces,
-  `--run-size 0`, `--learning-rate 0.001`, `--stop-after-epochs 20`, `--max-epochs` with no ceiling,
-  and `--resume auto`; `validate`'s as above.
-- A round resumes like the retrain: the same `tsnpe` command with `--resume require`. It draws its
-  region again from a seed taken from the observation and the round's settings, so that the same
-  command finds its own cache (`core.SBI.truncate.region_from_posterior`). No round has been resumed
-  on the card yet, so check for the `[checkpoint] resuming at batch …` line before leaving it. If the
-  resume is refused for want of a cache, either the round's first process committed nothing or its
-  region did not come out the same; the refusal names no cache one setting away, because a different
-  region never counts as one. Either way, start the round again without `--resume require`.
-- A round stopped while its flow trains is kept like the retrain's training (a `[fit]` line names it)
-  and resumed with the same `tsnpe` command, `--resume-fit <id>` added and `--directions` and `--level`
-  left out: it trains in the region it was kept with, and a number of directions or a level given beside
-  it is refused.
-- An optional child inference records the narrowed posterior on the cell. Re-simulating the cell
-  draws new noise, so the observation is never the region's own, and the command needs both
-  acceptances. Left at their defaults, as for `cert_parent`: `--chi-k 6` and `--n-samples 1000`.
-
-  ```powershell
-  & $py -m core infer @Box --chi --device cuda --posterior cert_round @Cell --t-obs 4.5 --accept-truncated --accept-other-observation --name cert_child
-  ```
+1. **The observation.** Step 5, Inference: "Run on" "A simulated cell", Cell file
+   `master_spont_tier1.txt`, Recording length 4.5 (s), a "Name of the inference" and a "Name of the
+   observation", then **Run inference**. The inference records the parent's intervals, beside each
+   parameter's true value, and its observation is the one the round is drawn around.
+2. **The round.** Step 6, Narrowing round, with the plan filled: Observation the one just made (an
+   observation an inference makes is chosen in the list once its run has ended), Region level 0.999,
+   Directions narrowed 5, Batches 10,000, Network width 256, Network depth 10, a Name. Read its
+   "Before you start", then press **Start the narrowing round**. The round is a second
+   full-size training: it inherits neither its parent's network nor its batch count, which is why
+   both are in its form. Its region is part of its set's identity, so it simulates a set of its own,
+   and it costs about what the training does; watch it the same way, against the same limits. It
+   reuses its parent's rotation, the one its region was measured in, and computes none.
+3. **Its calibration.** The round's posterior comes into use on step 3 when its run ends. Step 4,
+   Checks: **Run the calibration**, at the usual sizes. It draws its test datasets inside the region
+   the posterior was narrowed to, and its record keeps the region's share of the prior,
+   `results.kept_fraction`.
+4. Optional, **a child inference**: step 5 again on the same cell and length with the narrowed
+   posterior in use. Simulating the cell again draws new noise, so the observation is never the
+   region's own, and the press asks "Run on another observation?": **Run inference anyway**. Its
+   intervals are a record only: drawn on independent noise, they cannot be compared with the parent's
+   interval by interval.
 
 The round passes when both hold:
 
-- its `[tsnpe] truth direction <d>: <value> inside [<lo>, <hi>]` lines say inside for every truncated
-  direction, as `cert_round`'s `training.truth_containment` records. A direction loaded on t_scale is
-  left full width, and `[tsnpe] direction <j> NOT truncated: …` says so;
-- its calibration verdict passes: `cert_cal`'s `[verdict] PASS`, with `results.accepted` showing
-  `truncated`.
+- the truth lies inside every narrowed direction: the round's full text says for each "truth
+  direction …: … inside [lo, hi]", a truth outside is a warning among its messages, and the
+  posterior's record keeps the answers as `training.truth_containment`. A direction loaded on t_scale
+  is left at full width, and the full text says that it was not narrowed;
+- its calibration passes, made inside its region.
 
-[tsnpe](command-line.md#tsnpe) says what the round prints about its acceptance and the truth's
-containment, and [Narrowing rounds](science.md#narrowing-rounds) why `cert_cal`'s informativeness
-is inflated by −log P(A).
+A round that stops is resumed like the training: its run's page offers to resume or continue it
+until PRISM is closed, and after a reopening step 6 lists it under "Kept narrowing rounds", with
+**Resume** and **Delete**, Home's **Open Narrowing round** leading there. A continued round draws its
+region again from a seed taken from the observation and the round's settings, so that it finds its
+own set; before leaving a continued round, see that its Simulation stage started from the batch it
+stopped at, not from the first. Its first start may ask "Start the narrowing round beside a saved
+simulation set?": answer **Start the narrowing round**.
 
-**The widths.** That a round narrows the posterior no more than the data support is not a reading of
-this run. The round's proposal guarantees it: the prior restricted to the region, never the
-posterior, which a test in the suite pins on a case whose answer is known
-([Narrowing rounds](science.md#narrowing-rounds)). The run checks it through the two criteria above,
-the truth's containment and the calibration on the region. `cert_child`'s intervals are a record
-only: drawn on independently simulated noise, they cannot be compared with `cert_parent`'s interval
-by interval.
+That a round narrows the posterior no more than the data support is not a reading of this run. The
+round's proposal guarantees it: the prior restricted to the region, never the posterior, which a test
+in the suite pins on a case whose answer is known ([Narrowing rounds](science.md#narrowing-rounds)).
+The run checks it through the two criteria above, and the round's informativeness is inflated by
+−log P(A), as that section says.
 
 ## Afterwards
 
-Note the posterior with its result, and save its lineage report:
+In Records, select the posterior: type its result in the Note box (the verdict and the gates in one
+line) and press **Set**; then **Lineage report…** saves the posterior and every record it was made
+from, back through the chain, to a file you choose.
 
-```powershell
-& $py -m core artifacts note posterior retrain --note "<one line: the verdict and the gates>"
-& $py -m core artifacts summary posterior retrain --out <path>
-```
+Which record answers each gate. Records shows each record's manifest; the keys are under its `body`.
 
-Which record answers each gate. The keys are under each record's manifest `body`, which
-`& $py -m core artifacts show <kind> <ref>` prints with the tail of its `log.txt`.
+- The calibration verdict: the calibration's `results.verdict` (`passed`, a row per parameter, the
+  coverage row) and `results.seed`.
+- The inputs: the input-use diagnostic's `results.channels`, the `A1_mean` and `D3_bimodality`
+  entries and their `verdict`.
+- The comparison: the posterior's `log.txt`, its total of masked driven recordings over every batch
+  of the set; the audit's `results.masked_fraction`, a fraction, not a percentage.
+- The eigenvalues: the posterior's `transform.fisher_eigenvalues`; the identifiability diagnostic's
+  `results.eigenvalues`.
+- The loss curve: the posterior's `figures/training_loss.png`, `loss.npz`, `training.epochs_trained`
+  and `training.best_validation_loss`.
+- Informativeness: the calibration's `results.informativeness` (`total_nats`, `sem_nats`,
+  `per_param`, `per_direction`).
+- The calibrations at fixed numbers: each diagnostic's `results.rank_verdict`.
+- The round's truth: the round's posterior's `training.truth_containment`; its calibration's
+  `results.verdict`, and `results.kept_fraction`, set for a calibration inside a region.
+- The round's widths, a record: each inference's `results.posterior_summary` (`q05`, `median`, `q95`)
+  and `results.ground_truth`.
+- The cost: the simulation set's `wall_seconds`, from its start to its completion across sessions;
+  the posterior's `training.fit_wall_seconds`, the fit across its sessions, and
+  `training.wall_seconds`, the last session alone.
 
-| gate | record | key or file |
-|---|---|---|
-| the calibration verdict | calibration `retrain_cal` | `results.verdict` (`passed`, one row per parameter, the coverage row), `results.seed`; the `[verdict]` record in its `log.txt` |
-| the revived channels | diagnostic `retrain_ablation` | `results.channels`, the `A1_mean` and `D3_bimodality` entries and their `verdict`; `results.median_disp` |
-| the masked total | posterior `retrain`; diagnostic `retrain_mask` | the `[chi] masked probes` record in the posterior's `log.txt`; the audit's `results.masked_fraction`, P as a fraction, not a percentage |
-| the eigenvalues | posterior `retrain`; diagnostic `retrain_rotation` | `transform.fisher_eigenvalues`; `results.eigenvalues` |
-| the loss curve, a reading | posterior `retrain` | `figures/training_loss.png`, `loss.npz`, `training.epochs_trained`, `training.best_validation_loss` |
-| informativeness, a reading | calibration `retrain_cal` | `results.informativeness` (`total_nats`, `sem_nats`, `per_param`, `per_direction`) |
-| the stratified SBC, a characterisation | diagnostics `retrain_sbc_k2`, `retrain_sbc_k6`, `retrain_sbc_k12`, `retrain_sbc_pooled` | `results.rank_verdict` |
-| the round's truth | posterior `cert_round` | `training.truth_containment` |
-| the round's calibration | calibration `cert_cal` | `results.verdict`, `results.accepted` |
-| the round's widths, a record | inferences `cert_parent`, `cert_child` | `results.posterior_summary` (`q05`, `median`, `q95`), `results.ground_truth` |
-| the run's cost | the simulation cache; posterior `retrain` | the cache's `wall_seconds`, from its creation to its completion across resumes; the posterior's `training.wall_seconds`, the last process only |
-| the lines no record keeps | the console capture | `$Log`: the tool's and sbi's prints, and every process's records but the last |
+Every line a run wrote is in its dated text file in the `runs` folder, the sessions of a resumed run
+each in its own.
+
+## What stays on the command line
+
+Only what the window cannot do, one line each, from the repository root in PowerShell.
+
+- **The card smoke gate**: `docs/guide/testing.md`'s five command lines and run 5's drill, each
+  checked with `$LASTEXITCODE` ([The card smoke gate](testing.md#the-card-smoke-gate)). The window's
+  Card test, under "Tools", runs one small pipeline on the card; the gate also proves a resume, a
+  refusal one setting away, the forced mode and a training ended like a power cut, in throwaway
+  stores, which no check of the window does.
+- **The diagnostic card**, when code under `core/diagnostics` has changed
+  ([The diagnostic card](testing.md#the-diagnostic-card)), for the same reason.
+- **The revision**: `git rev-parse HEAD`, and `git status --short`, which must print nothing. The
+  window reads no git; it only stamps the revision into each record.
+- **The commit of the inputs**: `git add Resources/Plans/nadrowski/retrain.txt`, then `git commit`.
+  The window saves a plan but commits nothing.
+- **The card's memory while a run is live**: `nvidia-smi --query-gpu=memory.used --format=csv`.
+  Settings reads the free memory only while no run is live, and the run's health row gives the run's
+  own peak, not what other programs hold.
+
+The two file moves a damaged simulation set can ask for, copying `state.prev.pt` over `state.pt` and
+moving an overlapping shard aside, are made in Explorer, as the engine's message says.
+
+## Ready, and not ready
+
+The code at this commit is ready for this run from the window: the plan holds every setting it needs,
+the twelve checks hold the pre-flight's readings and the six gates, the run's page watches the
+simulation, the comparison and the fit, the fit is saved after every epoch, and a kept training or
+round resumes from the window. The simulator integrates each cell at its exact time scale, so the
+finished simulation set of the last full-size training no longer matches, and this run simulates its
+set again from the start. A long run is started by its owner, from the window.
+
+It is not ready for an inference on bench recordings: PRISM reads every recording as sampled exactly
+once a millisecond, and a bench recording is to be read at its camera's own measured frame interval
+before any inference on it
+([Recording files and drive frequencies](recordings.md#recording-files-and-drive-frequencies)). And
+the narrowing round has run on this code only at small size: the certification round is its first
+full-size run.

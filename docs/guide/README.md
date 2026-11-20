@@ -56,8 +56,8 @@ You decide the science and run the full-size training.
 
 1. [The science behind the settings](science.md), read in order: why each setting has the value it
    has, what the August 2026 retrain measured, and the questions still open.
-2. [The retrain runbook](retrain.md): the decisions, the pre-flight checks, the exact commands, what
-   to watch while it runs, and the gates a new model must pass.
+2. [The retrain runbook](retrain.md): the decisions, the pre-flight checks, the run in the window,
+   what to watch while it runs, and the gates a new model must pass.
 3. [The inference settings](window.md#the-inference-settings): every setting on the Parameter
    inference tabs as they were before the redesign, with its flag, the argument that receives it, its default and what it really
    changes.
