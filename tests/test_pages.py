@@ -32,8 +32,8 @@ from core.gui.widgets.in_use import InUse
 from core.gui.widgets.labeled_inputs import COMMA_SENTENCE, FloatField, IntField
 from core.gui.widgets.message_row import MessageRow
 from tests._dialogs import all_asked, asked
-from tests._fixtures import (TWO_LINES, build_part, build_run_host, build_step_page, build_window, qt_app,
-                             readings_of_a_run)
+from tests._fixtures import (TWO_LINES, build_part, build_run_host, build_step_page, build_window, out_of_memory,
+                             qt_app, readings_of_a_run, the_most_rows_in_error)
 from tests._look_helpers import _gone, _settle, _the_look, text_size
 from tests._runs import Clock, StandIn, a_worker_that_cannot_be_made, at, controller_on, start_run, turn_until
 from tests._window_helpers import in_front, shown_off_screen
@@ -1139,15 +1139,6 @@ def _a_detail_open(page) -> None:
     page.open_detail()
 
 
-def _the_most_rows_in_error(page) -> None:
-    """The Checks list with the page of its check of the most rows open, the card test, beside the list or in its place
-    as the width says, and its recording length emptied, said under it."""
-    page.open_check("card_test")
-    page.form.rows["t_obs"].widget.setText("")
-    page.redraw()
-    assert page.form.rows["t_obs"].in_error()
-
-
 def _on_recordings(page, *, posterior: bool = True) -> None:
     """Inference on your own recordings: a configuration of a frequency response of twelve slots in use, with a
     posterior of it unless ``posterior`` is False; the observation named."""
@@ -1211,7 +1202,7 @@ def _every_round_fact(page) -> None:
 FOOT_PAGES = {"the stand-in": (None, "training", None),
               "a table of rows": ("stand_in_table_page", "infer", _twelve_rows_one_in_error),
               "a list with a detail open": ("stand_in_list_page", "checks", _a_detail_open),
-              "the Checks list, the check of the most rows open": (ValidatePanel, "checks", _the_most_rows_in_error),
+              "the Checks list, the check of the most rows open": (ValidatePanel, "checks", the_most_rows_in_error),
               "Inference, twelve driven recordings, one in error": (InferPanel, "infer",
                                                                      _twelve_driven_recordings_one_in_error),
               "the Narrowing round, every fact it says": (TSNPEPanel, "narrowing", _every_round_fact)}
@@ -4590,16 +4581,6 @@ def _a_training(tmp_path, page):
     return RunText(controller()), folder, training_spec(place=("inference", "training"), stop_button="Stop training…")
 
 
-def _out_of_memory():
-    try:
-        raise RuntimeError("CUDA error: out of memory")
-    except RuntimeError as card:
-        try:
-            raise RuntimeError("the simulation of batch 237 failed") from card
-        except RuntimeError as raised:
-            return raised
-
-
 def test_a_training_tried_again_keeps_the_run_page_and_the_lock_until_it_ends(tmp_path):
     """After the card ran out of memory the run waits to be tried again, live: the page stays on the run's page, locked, its
     reading owed; the try goes on the same page, and its finish gives the column back and reads once."""
@@ -4613,7 +4594,7 @@ def test_a_training_tried_again_keeps_the_run_page_and_the_lock_until_it_ends(tm
     stand_in = StandIn()
     _start(page, stand_in, spec=spec)
     to_the_simulation(app, stand_in, text, held, folder, 236)
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     turn_until(app, lambda: held.status.state == "retrying")
     assert page.results.currentWidget() is page.run_view and not page.form.isEnabled() and page.readings == 0
     clock.advance(retry.PAUSES_S[0] + 1)

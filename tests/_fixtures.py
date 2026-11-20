@@ -153,6 +153,24 @@ def calls_that_speak(source: str) -> list[str]:
     return said
 
 
+def run_by(fn) -> list:
+    """``fn`` and every function of the program's own that its parsed code calls by name, and the ones those call in
+    turn: what runs when ``fn`` does, as far as a name can tell. A name a function imports inside itself, a call
+    through a module's name and a method are not followed."""
+    found, todo = [], [fn]
+    while todo:
+        f = todo.pop()
+        if f in found:
+            continue
+        found.append(f)
+        for node in ast.walk(ast.parse(code_only(f))):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                callee = f.__globals__.get(node.func.id)
+                if inspect.isfunction(callee) and callee.__module__.startswith("core."):
+                    todo.append(callee)
+    return found
+
+
 class PaneCapture:
     """Records the lines a page writes itself to its log pane -- a refusal's sentence, "Model applied",
     a record written -- as ``(level, text)`` in order, INSTEAD of rendering them:
@@ -480,6 +498,65 @@ def sbitest_installed():
         yield bounds, cell
     finally:
         teardown()
+
+
+def stop_after_pass(patch, at: int, exc: BaseException) -> None:
+    """Stop the training with ``exc`` right after pass ``at`` is saved, as a Ctrl-C, a stop asked for in the window or
+    an error arriving between two passes would: the pass's save runs whole (its state, its record and its line), then
+    ``exc`` is raised where the trainer hands the pass on. ``patch`` is the monkeypatch that puts the save back. The
+    card gate's resume drill (tests/_fit_drill.py) keeps a stop of its own, which ends its process there."""
+    from core.SBI import fit_state
+    real = fit_state.FitSession.save_pass
+
+    def save_pass(self, take):
+        real(self, take)
+        if self.passes == at:
+            raise exc
+
+    patch.setattr(fit_state.FitSession, "save_pass", save_pass)
+
+
+def guard_batches(patch, most: int, *, exactly: bool = False) -> None:
+    """Fail at once, before anything is simulated, a training whose rows are asked for in more batches than ``most``,
+    or, with ``exactly``, in any other number than ``most``: one that has fallen back on another number of batches --
+    the configured budget of thousands, most likely -- would otherwise simulate for hours before an assertion could
+    turn it red. ``patch`` is the monkeypatch that puts the simulation back."""
+    from core.SBI import pipeline
+    real = pipeline.gen_training_data
+
+    def guarded(*args, **kwargs):
+        batches = args[5] if len(args) > 5 else kwargs.get("n_runs")
+        wrong = batches is None or (batches != most if exactly else batches > most)
+        assert not wrong, (f"a training reached the simulation with {batches} batches where the test allows "
+                           f"{'exactly' if exactly else 'at most'} {most}: it fell back on another number of batches, "
+                           f"the configured thousands most likely")
+        return real(*args, **kwargs)
+
+    patch.setattr(pipeline, "gen_training_data", guarded)
+
+
+def out_of_memory(what: str = "the simulation of batch 237"):
+    """An error chain the engine reads as the graphics card running out of memory: the card's own error, under the
+    error ``what`` failed with, raised from it."""
+    try:
+        raise RuntimeError("CUDA error: out of memory")
+    except RuntimeError as card:
+        try:
+            raise RuntimeError(f"{what} failed") from card
+        except RuntimeError as raised:
+            return raised
+
+
+def the_most_rows_in_error(page, *, fold_open: bool = False) -> None:
+    """The Checks list with the page of its check of the most rows open, the card test, beside the list or in its place
+    as the width says, its fold opened first with ``fold_open``, and its recording length emptied, in error under its
+    field."""
+    page.open_check("card_test")
+    if fold_open:
+        page.form.fold.set_open(True)
+    page.form.rows["t_obs"].widget.setText("")
+    page.redraw()
+    assert page.form.rows["t_obs"].in_error(), page.form.rows["t_obs"].line.words
 
 
 def build_tiny_run(store, hw=None):

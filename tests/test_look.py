@@ -4993,28 +4993,21 @@ def test_the_line_under_the_time_axis_stands_one_under_the_other_however_little_
             for form, times, wide in (("ahead", (_FIT, _FIT_NOW, _DUE_FROM, _DUE_BY), key),
                                       ("inside", (_FIT, dt.datetime(2026, 10, 7, 1, 45), _DUE_FROM, _DUE_BY), key),
                                       ("late", (_FIT, _FIT + _plus(hours=153), _DUE_FROM, _DUE_BY), marker)):
-                holder = QWidget()                              # a page's column, the line at its top
-                holder.setAttribute(Qt.WA_DontShowOnScreen)
-                column = QVBoxLayout(holder)
-                column.setContentsMargins(0, 0, 0, 0)
                 line = AxisCaption(*times)
-                column.addWidget(line)
-                column.addStretch(1)
                 part = design.scaled(wide)
                 words = math.ceil(QFontMetricsF(line.words.font()).horizontalAdvance(line.words.text()))
                 one = line.started.sizeHint().width() + gap + part + gap + words           # the width one line needs
-                for short in (0, 1, part // 2, part - 1, -(one // 5)):
-                    holder.resize(one - short, 300)
-                    holder.show()
-                    _settle()
-                    start, at = line.started.mapTo(line, QPoint(0, 0)), line.words.mapTo(line, QPoint(0, 0))
-                    whole = (at.x() >= 0 and at.x() + line.words.width() <= line.width()
-                             and (line.words.width() >= words
-                                  or line.words.height() >= line.words.heightForWidth(line.words.width())))
-                    seen[factor, form, short] = (at.y() == start.y(), at.y() >= start.y() + line.started.height(),
-                                                 whole)
-                    wanted[factor, form, short] = (short <= 0, short > 0, True)
-                _gone(holder)
+                with _standing(line, one, 300) as holder:       # a page's column, the line at its top
+                    for short in (0, 1, part // 2, part - 1, -(one // 5)):
+                        holder.resize(one - short, 300)
+                        _settle()
+                        start, at = line.started.mapTo(line, QPoint(0, 0)), line.words.mapTo(line, QPoint(0, 0))
+                        whole = (at.x() >= 0 and at.x() + line.words.width() <= line.width()
+                                 and (line.words.width() >= words
+                                      or line.words.height() >= line.words.heightForWidth(line.words.width())))
+                        seen[factor, form, short] = (at.y() == start.y(), at.y() >= start.y() + line.started.height(),
+                                                     whole)
+                        wanted[factor, form, short] = (short <= 0, short > 0, True)
     assert seen == wanted, (
         "the line under the time axis stays on one line where it does not fit it, or cuts its words", seen)
 

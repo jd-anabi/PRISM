@@ -728,20 +728,13 @@ def test_train_resume_fit_continues_a_kept_training_and_names_the_flag_of_what_d
     six batches: a resume that lost its kept training would fall back on the configured budget of
     thousands, and fails at once instead of simulating for hours."""
     from core.artifacts import ArtifactStore
-    from core.SBI import fit_state, pipeline
+    from tests._fixtures import guard_batches, stop_after_pass
     bounds, cell, root = tool_run
     before = {s.id for s in ArtifactStore(root).list("fit")}
-    real = fit_state.FitSession.save_pass
-
-    def save_pass(self, take):
-        real(self, take)
-        if self.passes == 2:
-            raise KeyboardInterrupt
-
     argv = ["train", *_cfg(bounds), "--prior", "tp"]
     capsys.readouterr()
     with monkeypatch.context() as patch:
-        patch.setattr(fit_state.FitSession, "save_pass", save_pass)
+        stop_after_pass(patch, 2, KeyboardInterrupt())
         assert main([*argv, "--name", "tk", "--num-runs", "6", "--run-size", "8", "--hidden-features", "8",
                      "--num-transforms", "1", "--stop-after-epochs", "3", "--max-epochs", "8",
                      "--checkpoint-every", "1", "--new-run"]) == 130
@@ -749,14 +742,7 @@ def test_train_resume_fit_continues_a_kept_training_and_names_the_flag_of_what_d
     assert "--resume-fit" in said.err, said.err
     kept, = [s for s in ArtifactStore(root).list("fit") if s.id not in before]
     assert f"is kept as fit {kept.id}" in said.out, said.out
-    real_rows = pipeline.gen_training_data
-
-    def rows(*args, **kwargs):
-        batches = args[5] if len(args) > 5 else kwargs.get("n_runs")
-        assert batches == 6, f"the resume reached the simulation with {batches} batches, not the kept training's 6"
-        return real_rows(*args, **kwargs)
-
-    monkeypatch.setattr(pipeline, "gen_training_data", rows)
+    guard_batches(monkeypatch, 6, exactly=True)                 # the kept training's six batches, read back
     assert main([*argv, "--resume-fit", kept.id, "--hidden-features", "16"]) == 1
     err = capsys.readouterr().err
     refused = [ln for ln in err.splitlines() if ln.startswith("prism train: refused:")]

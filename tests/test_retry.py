@@ -26,7 +26,7 @@ from core.gui.fields import fix_sentence
 from core.gui.run import retry
 from core.gui.run.model import SIMULATION_ROW, RunSpec
 from core.refusals import Refusal
-from tests._fixtures import all_asked, build_fit_record, build_run_host, choose, qt_app
+from tests._fixtures import all_asked, build_fit_record, build_run_host, choose, out_of_memory, qt_app
 from tests._runs import (BUDGET as _BUDGET, ROTATING as _ROTATING, Clock, RunText, StandIn, at as _at,
                          controller_on as _controller_on, ended as _ended, epoch_line as _epoch, note as _note,
                          say as _say, start_run, to_the_fit as _to_the_fit,
@@ -59,18 +59,6 @@ def _health(view) -> list:
     """The rows of the page's health table, as written in their cells."""
     table = view.health.view.model()
     return [tuple(table.index(row, column).data().strip() for column in range(3)) for row in range(table.rowCount())]
-
-
-def _out_of_memory(what="the simulation of batch 237"):
-    """An error chain the engine reads as the graphics card running out of memory: the card's own error, under the
-    error raised from it."""
-    try:
-        raise RuntimeError("CUDA error: out of memory")
-    except RuntimeError as card:
-        try:
-            raise RuntimeError(f"{what} failed") from card
-        except RuntimeError as raised:
-            return raised
 
 
 def _card(message):
@@ -269,7 +257,7 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     start_run(host, stand_in, spec=_training(), name="retrain_3", num_runs=10_000, on_result=results.append)
     _to_the_simulation(app, stand_in, text, held, folder, 236)
     clock.advance(600)                                  # 03:12
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     _waiting(app, held)
 
     def page():
@@ -298,7 +286,7 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     stand_in.row(SIMULATION_ROW, 300, 10_000)
     turn_until(app, lambda: held.model.batches_done() == 300)
     _set(tmp_path, 300)                                 # the try saved batches up to 300, then ran out of memory
-    stand_in.fail(_out_of_memory("the simulation of batch 301"))
+    stand_in.fail(out_of_memory("the simulation of batch 301"))
     _waiting(app, held)
     assert page() == waits("1 minute", "first", 300), "a try that kept a batch more did not start the count again"
     clock.advance(60)
@@ -322,7 +310,7 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     _tried(app, held, stand_in, 4)
     stand_in.row(SIMULATION_ROW, 300, 10_000)           # the try's bar, from the batches the set holds
     turn_until(app, lambda: held.model.batches_done() == 300)
-    stand_in.fail(_out_of_memory("the simulation of batch 301"))
+    stand_in.fail(out_of_memory("the simulation of batch 301"))
     _waiting(app, held)
     assert page() == waits("10 minutes", "third", 300)
     base = {"name": "retrain_3", "num_runs": 10_000}
@@ -357,7 +345,7 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     finishing = StandIn()
     start_run(host, finishing, spec=_training(), on_result=results.append)
     _to_the_simulation(app, finishing, text, held, folder, 300)
-    finishing.fail(_out_of_memory("the simulation of batch 301"))
+    finishing.fail(out_of_memory("the simulation of batch 301"))
     _waiting(app, held)
     clock.advance(60)                                   # 03:18
     held.tick()
@@ -373,7 +361,7 @@ def test_the_window_tries_again_three_times_after_the_cards_memory_ran_out(tmp_p
     _to_the_simulation(app, asked_to_stop, text, held, folder, 236)
     choose(monkeypatch, words="Stop and keep the simulations")
     view.stop_button.click()
-    asked_to_stop.fail(_out_of_memory())               # before the stop is taken
+    asked_to_stop.fail(out_of_memory())               # before the stop is taken
     _ended(app, held)
     assert ([status.state for status in text.statuses[before:] if status.state == "retrying"],
             len(asked_to_stop.calls), held.status.outcome, view.noted.isVisibleTo(view)) == ([], 1, "failed", True), (
@@ -416,14 +404,14 @@ def test_a_run_waiting_to_be_tried_again_keeps_the_computer_awake_and_shutting_d
 
     start_run(host, stand_in, spec=_training())
     _to_the_simulation(app, stand_in, text, held, folder, 236)
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     _waiting(app, held)
     standing("the first pause")
     clock.advance(60)
     held.tick()
     _tried(app, held, stand_in, 2)
     standing("the second try")
-    stand_in.fail(_out_of_memory("the simulation of batch 237"))
+    stand_in.fail(out_of_memory("the simulation of batch 237"))
     _waiting(app, held)
     standing("the second pause")
 
@@ -460,7 +448,7 @@ def test_stop_trying_pressed_as_the_pause_runs_out_begins_no_try(tmp_path):
     stand_in = StandIn()
     start_run(host, stand_in, spec=_training())
     _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     _waiting(app, held)
     clock.advance(60)                                   # the pause has run out, and nothing has looked yet
     view.stop_trying_button.click()
@@ -488,7 +476,7 @@ def test_a_try_that_ends_with_no_outcome_is_not_the_lack_of_memory_before_it(tmp
     stand_in = StandIn()
     start_run(host, stand_in, spec=_training())
     _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     _waiting(app, held)
     clock.advance(60)
     with runs_that_end_unsaid():
@@ -523,7 +511,7 @@ def test_a_run_tried_again_reads_its_failed_simulations_alike_live_in_its_histor
     start_run(host, stand_in, spec=_training())
     _say(app, stand_in, text, _BUDGET, resuming(236), "[patho] batch 6149: 3 new pathological trajectorie(s) -- "
          "12,000 non-finite, 6,450 exactly constant, 0 over 1e+06 in magnitude, of 12,595,200 simulated")
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     _waiting(app, held)
     clock.advance(60)
     held.tick()
@@ -547,7 +535,7 @@ _REPORTED_AT_ONCE = {
                             "unsupported operand type(s) for +: 'int' and 'NoneType'", False),
     "a refusal after the spend": (lambda: Refusal("The read-back of the posterior was refused.", field="name"),
                                   f"The read-back of the posterior was refused. {fix_sentence('name')}", True),
-    "the card's memory, in a check": (_out_of_memory, "the simulation of batch 237 failed", False),
+    "the card's memory, in a check": (out_of_memory, "the simulation of batch 237 failed", False),
 }
 
 
@@ -621,13 +609,13 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     stand_in = StandIn()
     start_run(host, stand_in, spec=_training(settings=named))
     _to_the_simulation(app, stand_in, text, held, folder, 236)
-    stand_in.fail(_out_of_memory())
+    stand_in.fail(out_of_memory())
     for pause, calls in ((60, 2), (180, 3), (600, 4)):  # three tries in a row that keep nothing more
         _waiting(app, held)
         clock.advance(pause)
         held.tick()
         _tried(app, held, stand_in, calls)
-        stand_in.fail(_out_of_memory())
+        stand_in.fail(out_of_memory())
     _ended(app, held)
     assert reopened("the simulation of batch 237 failed"), (_failure(view), held.status)
     record = history.read(tmp_path / "runs" / f"{held.status.run}.json")
@@ -636,7 +624,7 @@ def test_when_only_reopening_can_help_the_page_says_so(tmp_path, store):
     device = StandIn()
     start_run(host, device, spec=_training(settings=named))
     _to_the_simulation(app, device, text, held, folder, 236)
-    device.fail(_out_of_memory())
+    device.fail(out_of_memory())
     _waiting(app, held)
     clock.advance(60)
     held.tick()
@@ -1124,14 +1112,14 @@ def test_a_failed_runs_history_keeps_its_failure_once_its_end_is_seen_or_set_asi
         stand_in.kept_fit = _note(kept, 2)
         start_run(host, stand_in, spec=_training())
         _to_the_fit(app, stand_in, text, clock, folder, [(1, 0), (2, 1)])
-        stand_in.fail(_out_of_memory("the fit's epoch 3"))
+        stand_in.fail(out_of_memory("the fit's epoch 3"))
         stand_in.kept_fit = None                        # three tries in a row that keep nothing more
         for pause, calls in ((60, 2), (180, 3), (600, 4)):
             _waiting(app, held)
             clock.advance(pause)
             held.tick()
             _tried(app, held, stand_in, calls)
-            stand_in.fail(_out_of_memory("the fit's epoch 3"))
+            stand_in.fail(out_of_memory("the fit's epoch 3"))
         _ended(app, held)
 
     def an_error_of_its_own():
@@ -1213,7 +1201,7 @@ def test_a_failure_while_the_posterior_is_saved_says_the_training_is_kept_with_i
     start_run(host, stand_in, spec=_training())
     _to_the_fit(app, stand_in, text, clock, folder, [(1, 0), (2, 20)])
     assert held.model.stage == "Saving"
-    stand_in.fail(_out_of_memory("the posterior's save"))
+    stand_in.fail(out_of_memory("the posterior's save"))
     _waiting(app, held)
     assert view.sentence.text() == ("The graphics card ran out of memory as the posterior was being saved. Trying "
                                     "again in 1 minute: the first of three tries. The training is kept with its fit "
@@ -1247,7 +1235,7 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     stand_in.kept_fit = _note(kept, 2)
     _start_with(host, stand_in, _training(), cfg, prior, None, True, **base)
     _to_the_fit(app, stand_in, text, clock, folder, [(1, 1), (2, 0), (3, 0)])    # epoch 3's save did not hold
-    stand_in.fail(_out_of_memory("the fit's epoch 4"))
+    stand_in.fail(out_of_memory("the fit's epoch 4"))
     _waiting(app, held)
 
     def waits(pause, which, epoch):
@@ -1268,7 +1256,7 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
         "an epoch whose save did not hold stayed on the curve, or the best was counted from it")
     _say(app, stand_in, text, _epoch(3, 1), _epoch(4, 2))
     stand_in.kept_fit = _note(kept, 4, resumed=True, processes=2)
-    stand_in.fail(_out_of_memory("the fit's epoch 5"))
+    stand_in.fail(out_of_memory("the fit's epoch 5"))
     _waiting(app, held)
     assert view.sentence.text() == waits("1 minute", "first", 4), "a try that kept more epochs did not start again"
     stand_in.kept_fit = None                            # each try below fails as the kept training is read back
@@ -1276,7 +1264,7 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
         clock.advance(pause)
         held.tick()
         _tried(app, held, stand_in, calls)
-        stand_in.fail(_out_of_memory("the fit's epoch 5"))
+        stand_in.fail(out_of_memory("the fit's epoch 5"))
         if after is not None:
             _waiting(app, held)
             assert view.sentence.text() == waits(*after, 4)
@@ -1293,7 +1281,7 @@ def test_a_try_after_the_fit_ran_out_of_memory_resumes_the_kept_training(tmp_pat
     parent, observation = SimpleNamespace(name="retrain_3", id="p1"), SimpleNamespace(name="", id="o1")
     _start_with(host, narrowing, _training("Narrowing round"), typed, parent, prior, observation, **narrowed)
     _to_the_fit(app, narrowing, text, clock, folder, [(1, 0), (2, 1)])
-    narrowing.fail(_out_of_memory("the fit's epoch 3"))
+    narrowing.fail(out_of_memory("the fit's epoch 3"))
     _waiting(app, held)
     clock.advance(60)
     held.tick()
@@ -1338,13 +1326,13 @@ def test_a_runs_call_is_kept_only_while_its_page_offers_to_continue_or_resume_it
         return kept
 
     def tries_to_the_end(stand_in):
-        stand_in.fail(_out_of_memory())
+        stand_in.fail(out_of_memory())
         for pause, calls in ((60, 2), (180, 3), (600, 4)):
             _waiting(app, held)
             clock.advance(pause)
             held.tick()
             _tried(app, held, stand_in, calls)
-            stand_in.fail(_out_of_memory())
+            stand_in.fail(out_of_memory())
 
     offered = ended(_training(), lambda stand_in: stand_in.fail(OSError(28, "No space left on device")))
     assert offered() is not None, "the call of a run its page offers to continue was let go"
@@ -1388,7 +1376,7 @@ def test_closing_the_window_during_a_pause_ends_the_tries_and_then_closes_it(tmp
         stand_in = StandIn()
         start_run(host, stand_in, spec=_training())
         _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
-        stand_in.fail(_out_of_memory())
+        stand_in.fail(out_of_memory())
         _waiting(app, held)
         window.go_to("home")
         assert (foot._title, foot._words, step.accessibleName()) == (

@@ -54,7 +54,8 @@ from core.SBI.fit_state import (FIT_CODE, FIT_CONSTANTS, SBI_TRAINER_FILES, STAT
                                 FitLock, code_digests, constants, first_difference, indices_digest,
                                 libraries, load_state, network_digest, running, save_state,
                                 trainer_files_digest)
-from tests._fixtures import build_fit_record, calls_that_speak, code_only
+from tests._fixtures import (build_fit_record, calls_that_speak, code_only, guard_batches, run_by,
+                             stop_after_pass)
 
 
 # ── the two generations of the state ─────────────────────────────────────────────────────────────
@@ -158,29 +159,12 @@ def test_a_save_runs_inside_the_deferred_cancel_section(tmp_path, monkeypatch):
     assert not runs.cancel_is_deferred()
 
 
-def _run_by(fn) -> list:
-    """``fn`` and every function of the program's own that its parsed code calls by name, and the ones
-    those call in turn: what runs when ``fn`` does, as far as a name can tell."""
-    found, todo = [], [fn]
-    while todo:
-        f = todo.pop()
-        if f in found:
-            continue
-        found.append(f)
-        for node in ast.walk(ast.parse(code_only(f))):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                callee = f.__globals__.get(node.func.id)
-                if inspect.isfunction(callee) and callee.__module__.startswith("core."):
-                    todo.append(callee)
-    return found
-
-
 def test_nothing_prints_or_logs_inside_a_saved_pass():
     """Under the window every print and every record passes a cancel checkpoint, so one said inside the
     save would let a Cancel stop it between its two renames. Read on the parsed code of the save and of
     every function of the program's own it reaches by name, the atomic writer's helpers among them, so a
     helper the save gains later is read too, and a docstring that quotes the rule cannot trip it."""
-    ran = _run_by(fit_state.save_state)
+    ran = run_by(fit_state.save_state)
     reached = {f"{f.__module__}.{f.__name__}" for f in ran}
     assert {"core.SBI.fit_state.save_state", "core.Helpers.file_manager.atomic_torch_save",
             "core.Helpers.file_manager._atomic_write", "core.Helpers.file_manager._replace_retrying",
@@ -804,16 +788,8 @@ def _no_training_of_the_configured_size():
     more has fallen back on the configured budget of thousands of batches -- a resume that lost the kept
     training it names, or a narrowing round that no longer hands it on -- and fails here at once, instead
     of simulating for hours before an assertion can turn it red."""
-    real = pipeline.gen_training_data
-
-    def guarded(*args, **kwargs):
-        batches = args[5] if len(args) > 5 else kwargs.get("n_runs")
-        assert batches is not None and batches <= 10, (
-            f"a training of {batches} batches reached the simulation: the configured budget, not this test's")
-        return real(*args, **kwargs)
-
     patch = pytest.MonkeyPatch()
-    patch.setattr(pipeline, "gen_training_data", guarded)
+    guard_batches(patch, 10)
     yield
     patch.undo()
 
@@ -861,20 +837,6 @@ def _added_folders(r, before) -> list:
     """Every folder under the kept trainings' directory added since ``before``, a record or not."""
     root = r.store.kind_dir("fit")
     return sorted(p.name for p in root.iterdir() if p.name not in before) if root.is_dir() else []
-
-
-def _stop_after(patch, at: int, exc: BaseException) -> None:
-    """Stop the training with ``exc`` right after pass ``at`` is saved, as a Ctrl-C, a stop asked for in the window
-    or an error arriving between two passes would: the pass's save runs whole (its state, its record and
-    its line), then ``exc`` is raised where the trainer hands the pass on."""
-    real = fit_state.FitSession.save_pass
-
-    def save_pass(self, take):
-        real(self, take)
-        if self.passes == at:
-            raise exc
-
-    patch.setattr(fit_state.FitSession, "save_pass", save_pass)
 
 
 class _SaidInsideASave(logging.Handler):
@@ -959,7 +921,7 @@ def test_a_training_stopped_on_purpose_is_kept_and_says_how_it_stopped(tiny_run,
         return {**real_code(names), "core.orchestrator.build_embedding_net": "1" * 16}
 
     monkeypatch.setattr(fit_state, "loaded_code", as_loaded)
-    _stop_after(monkeypatch, 2, KeyboardInterrupt())
+    stop_after_pass(monkeypatch, 2, KeyboardInterrupt())
     with pytest.raises(KeyboardInterrupt):
         _train(r, 2, 7, name="fit_stopped")
     row, = _new_fits(r, fits_left)
@@ -1099,7 +1061,7 @@ def test_a_training_that_fails_is_kept_as_stopped_unexpectedly_with_its_reason(t
     """An error after the second pass's save keeps the training too: stopped unexpectedly, with the error
     as its reason, its lock let go."""
     r = tiny_run
-    _stop_after(monkeypatch, 2, RuntimeError("the flow diverged"))
+    stop_after_pass(monkeypatch, 2, RuntimeError("the flow diverged"))
     with pytest.raises(RuntimeError, match="the flow diverged"):
         _train(r, 2, 5, name="fit_failed")
     row, = _new_fits(r, fits_left)
@@ -1187,7 +1149,7 @@ def test_a_save_that_fails_warns_and_the_training_goes_on(tiny_run, fits_left, m
     assert _added_folders(r, fits_left) == []
     # Stopped (a Ctrl-C) right after a first save that failed: the folder that save made goes with it.
     with monkeypatch.context() as patch:
-        _stop_after(patch, 0, KeyboardInterrupt())
+        stop_after_pass(patch, 0, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _train(r, 3, 2, name="fit_disk_full_then_stopped")
     assert _added_folders(r, fits_left) == [], "the stop left the folder its failed first save made"
@@ -1251,7 +1213,7 @@ def test_a_log_that_cannot_be_written_leaves_each_pass_saved_and_is_warned_once(
         real(self)
 
     monkeypatch.setattr(fit_state.FitSession, "_write_log", held_by_another_program)
-    _stop_after(monkeypatch, 3, KeyboardInterrupt())
+    stop_after_pass(monkeypatch, 3, KeyboardInterrupt())
     caplog.set_level(logging.INFO, logger="core")
     with _SaidInsideASave() as inside, pytest.raises(KeyboardInterrupt) as stopped:
         _train(r, 7, 2, name="fit_log_held")
@@ -1356,7 +1318,7 @@ def test_a_new_training_names_the_kept_trainings_that_match_its_settings(tiny_ru
     same."""
     r = tiny_run
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _train(r, 3, 5, name="fit_first")
     first, = _new_fits(r, fits_left)
@@ -1416,7 +1378,7 @@ def test_the_listing_of_kept_trainings_says_which_can_be_resumed_and_why_not(
     on Windows a reader holding one would make the running training's next save fail to rename it."""
     r = tiny_run
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         for width in (4, 3):
             with pytest.raises(KeyboardInterrupt):
                 _train(r, 3, width, name="fit_listed")
@@ -1489,7 +1451,7 @@ def test_a_narrowing_rounds_kept_fit_names_its_observation_and_parent_posterior(
     obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_round_obs")
     region = orchestrator.build_truncation_region(r.posterior, obs, n_directions=1, level=0.99)
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _train(r, 2, 8, truncation=region, observation=obs, parent_posterior=r.posterior, name="fit_round")
     row, = _new_fits(r, fits_left)
@@ -1522,7 +1484,7 @@ def _keep(r, batches: int, width: int, *, at: int = 1, **given):
     training it leaves."""
     before = {s.id for s in r.store.list("fit")}
     with pytest.MonkeyPatch.context() as patch:
-        _stop_after(patch, at, KeyboardInterrupt())
+        stop_after_pass(patch, at, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _train(r, batches, width, **given)
     row, = [s for s in r.store.list("fit") if s.id not in before]
@@ -2148,7 +2110,7 @@ def test_a_kept_narrowing_round_resumes_in_its_own_region(tiny_run, kept_once, f
     r = tiny_run
     obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_resumed_round_obs")
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, n_directions=1, num_runs=4, run_size_cap=8,
                                      name="fit_resumed_round", fig_sink=r.sink, store=r.store, **_TRAINING)
@@ -2282,7 +2244,7 @@ def test_a_training_kept_at_a_stop_says_every_epoch_it_kept_once_and_so_does_its
     said, while the next pass trains, adds nothing: the record is not said twice."""
     r = tiny_run
     with monkeypatch.context() as patch:
-        _stop_after(patch, 2, KeyboardInterrupt())
+        stop_after_pass(patch, 2, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _train(r, 7, 3, name="fit_epochs_kept")
     row, = _new_fits(r, fits_left)
@@ -2537,7 +2499,7 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
     r = tiny_run
     for exc, width in ((KeyboardInterrupt(), 6), (RuntimeError("the flow diverged"), 7)):
         with monkeypatch.context() as patch:
-            _stop_after(patch, 2, exc)
+            stop_after_pass(patch, 2, exc)
             with pytest.raises(type(exc)) as stopped:
                 _train(r, 6, width, name="fit_noted")
         note = stopped.value.kept_fit
@@ -2561,7 +2523,7 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
     assert stopped.value.kept_fit == fit_state.KeptNote(kept.id, 2, True, False, 1), stopped.value.kept_fit
     assert r.store.get("fit", kept.id).body["progress"]["processes"] == 1
     with monkeypatch.context() as patch:
-        _stop_after(patch, 3, KeyboardInterrupt())
+        stop_after_pass(patch, 3, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt) as stopped:
             _resume(r, kept.id)
     assert stopped.value.kept_fit == fit_state.KeptNote(kept.id, 3, True, True, 2), stopped.value.kept_fit
@@ -2569,7 +2531,7 @@ def test_the_stop_the_training_stage_raises_names_the_training_it_kept(tiny_run,
 
     obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_noted_round_obs")
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt) as stopped:
             orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, n_directions=1, num_runs=3, run_size_cap=8,
                                      name="fit_noted_round", fig_sink=r.sink, store=r.store, **_TRAINING)
@@ -2589,7 +2551,7 @@ def test_a_kept_narrowing_round_handed_to_a_plain_training_is_refused_before_any
     r = tiny_run
     obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="fit_round_handed_on_obs")
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, obs, n_directions=1, num_runs=4, run_size_cap=8,
                                      name="fit_round_handed_on", fig_sink=r.sink, store=r.store, **_TRAINING)
@@ -2700,7 +2662,7 @@ def test_the_note_and_the_listing_carry_how_a_training_stopped(tiny_run, fits_le
     assert stopped.value.kept_fit.wall_seconds == kept.wall_seconds, "nothing of this process counts until it saves"
 
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, RuntimeError("the flow diverged"))
+        stop_after_pass(patch, 1, RuntimeError("the flow diverged"))
         with pytest.raises(RuntimeError) as stopped:
             _train(r, 6, 7, name="fit_how_it_failed")
     failed = listed(stopped.value.kept_fit.id)
@@ -2825,7 +2787,7 @@ def test_a_name_given_at_a_resume_is_carried_into_the_kept_record(tiny_run, fits
             _resume(r, kept.id, name="fit_named_again")
     assert _bytes(kept.path) == found
     with monkeypatch.context() as patch:
-        _stop_after(patch, 2, KeyboardInterrupt())
+        stop_after_pass(patch, 2, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _resume(r, kept.id, name="fit_named_again", note="a note given at the resume")
     record = r.store.get("fit", kept.id)
@@ -2833,7 +2795,7 @@ def test_a_name_given_at_a_resume_is_carried_into_the_kept_record(tiny_run, fits
     assert record.body["progress"]["processes"] == 2
     assert _row(r, kept.id).fit_for == "fit_named_again"
     with monkeypatch.context() as patch:
-        _stop_after(patch, 3, KeyboardInterrupt())
+        stop_after_pass(patch, 3, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _resume(r, kept.id, name="fit_named_twice")
     assert r.store.get("fit", kept.id).body["posterior_name"] == "fit_named_twice"
@@ -2853,7 +2815,7 @@ def test_a_kept_training_renamed_keeps_its_name_through_the_passes_saved_after(t
     folder = r.store.path("fit", row.id)
     assert (renamed.id, renamed.name) == (row.id, "kept_by_hand")
     with monkeypatch.context() as patch:
-        _stop_after(patch, 2, KeyboardInterrupt())
+        stop_after_pass(patch, 2, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             _resume(r, row.id)
     record = r.store.get("fit", row.id)

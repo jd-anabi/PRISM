@@ -12,6 +12,8 @@ and the checkpoint resume.
 """
 import pytest
 
+from tests._fixtures import stop_after_pass
+
 pytestmark = pytest.mark.gpu
 
 
@@ -46,21 +48,6 @@ def test_inference_runs_on_cuda_with_a_loaded_observation(tiny_run_cuda):
     assert inf.results["n_samples"] == 20 and inf.results["accepted"] == []
 
 
-def _stop_after(patch, at: int, exc: BaseException) -> None:
-    """Stop the training with ``exc`` right after pass ``at`` is saved, as a Ctrl-C between two passes
-    would: the pass's save runs whole (its state, its record and its line), then ``exc`` is raised where
-    the trainer hands the pass on."""
-    from core.SBI import fit_state
-    real = fit_state.FitSession.save_pass
-
-    def save_pass(self, take):
-        real(self, take)
-        if self.passes == at:
-            raise exc
-
-    patch.setattr(fit_state.FitSession, "save_pass", save_pass)
-
-
 def test_a_training_stopped_on_the_card_resumes_with_its_split_counters_and_optimizer_on_the_device(
         tiny_run_cuda, monkeypatch):
     """A training on the card, its rows in a kept simulation set, stopped by a Ctrl-C after its second
@@ -80,7 +67,7 @@ def test_a_training_stopped_on_the_card_resumes_with_its_split_counters_and_opti
     r = tiny_run_cuda
     assert r.cfg.hw.device.type == "cuda"
     with monkeypatch.context() as patch:
-        _stop_after(patch, 2, KeyboardInterrupt())
+        stop_after_pass(patch, 2, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, store=r.store,
                                          name="card_resumed", num_runs=3, run_size_cap=8, hidden_features=8,
@@ -143,7 +130,7 @@ def test_a_kept_training_resumes_through_the_windows_call_with_a_posterior_held(
     held = r.posterior                                   # the module's posterior, on the card, held through the resume
     assert r.cfg.hw.device.type == "cuda"
     with monkeypatch.context() as patch:
-        _stop_after(patch, 1, KeyboardInterrupt())
+        stop_after_pass(patch, 1, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, store=r.store,
                                          name="window_resumed", num_runs=3, run_size_cap=8, hidden_features=8,
@@ -193,7 +180,7 @@ def test_a_kept_round_resumes_through_the_windows_call(tiny_run_cuda, monkeypatc
     assert r.cfg.hw.device.type == "cuda"
     observation = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="round_observation")
     with monkeypatch.context() as patch:
-        _stop_after(patch, 2, KeyboardInterrupt())
+        stop_after_pass(patch, 2, KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             orchestrator.tsnpe_round(r.cfg, r.posterior, r.prior, observation, n_directions=1, level=0.9, num_runs=3,
                                      run_size_cap=8, hidden_features=8, num_transforms=1, stop_after_epochs=3,

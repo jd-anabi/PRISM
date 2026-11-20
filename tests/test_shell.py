@@ -25,7 +25,7 @@ from core.gui.screens.home_screen import HomeFacts, HomeScreen, RecordRow
 from core.gui.widgets.page import Columns, PageHead, Sentence
 from core.gui.widgets.rule_table import StateCell, TextCell
 from tests._fixtures import (build_part, build_run_host, build_step_page, build_window,
-                             card_and_programs as _card_and_programs, install_config, qt_app)
+                             card_and_programs as _card_and_programs, install_config, out_of_memory, qt_app)
 from tests._dialogs import all_asked, asked, choose
 from tests._runs import (BUDGET as _BUDGET, ROTATED as _ROTATED, ROTATING as _ROTATING, RunText, StandIn,
                          a_worker_that_cannot_be_made, at as _at, epoch_line as _epoch, running, start_run,
@@ -9318,17 +9318,6 @@ def _set_of(tmp_path, batches, *, complete=False):
     return folder
 
 
-def _out_of_memory():
-    """The error a simulation fails with when the graphics card runs out of memory, as the engine chains it."""
-    try:
-        raise RuntimeError("CUDA error: out of memory")
-    except RuntimeError as card:
-        try:
-            raise RuntimeError("the simulation of batch 237 failed") from card
-        except RuntimeError as raised:
-            return raised
-
-
 def test_home_presses_the_pages_own_offer_for_a_training_of_this_launch(store, tmp_path, monkeypatch):
     """A training of this launch that fails with batches saved, a posterior held: Home's "Continue from batch N" opens
     the run's page and presses its own button, which repeats the run's own call into the session as it stands, the
@@ -9408,7 +9397,7 @@ def test_the_repeats_of_a_continue_after_a_reopening_send_its_own_call(store, tm
     turn_until(app, lambda: not controller().is_live())
     page.run_view.continue_button.click()
     turn_until(app, lambda: len(training.calls) == 2)
-    training.fail(_out_of_memory())
+    training.fail(out_of_memory())
     turn_until(app, lambda: controller().status.state == "retrying")
     controller()._clock.advance(60)
     controller().tick()

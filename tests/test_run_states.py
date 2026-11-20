@@ -5723,16 +5723,6 @@ def _in_the_look_at(room, tmp_path, place):
     return window, host, opening, least
 
 
-def _the_most_rows_in_error(page) -> None:
-    """The Checks list with the check of the most rows open, the card test, its fold open and its recording length
-    emptied, in error under its field."""
-    page.open_check("card_test")
-    page.form.fold.set_open(True)
-    page.form.rows["t_obs"].widget.setText("")
-    page.redraw()
-    assert page.form.rows["t_obs"].in_error(), page.form.rows["t_obs"].line.words
-
-
 @pytest.mark.parametrize("step", ["the stand-in", "Prior", "Training", "a list beside its detail",
                                   "a list with its detail in its place", "the Checks list beside a check",
                                   "the Checks list with a check in its place", "the Narrowing round", "Inference"])
@@ -5754,7 +5744,7 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
     from core.gui import design
     from core.gui.run import history
     from core.gui.run.controller import controller
-    from tests._fixtures import build_step_page, build_window, qt_app, stand_in_list_page
+    from tests._fixtures import build_step_page, build_window, qt_app, stand_in_list_page, the_most_rows_in_error
     from tests._look_helpers import _settle, _the_look, text_size
     from tests._runs import Clock, StandIn, start_run, turn_until
     from tests._window_helpers import shown_off_screen
@@ -5812,7 +5802,7 @@ def test_nothing_of_the_run_page_is_cut_on_a_step_page_at_any_width(factor, room
 
         if checks:
             _settle()
-            _the_most_rows_in_error(host)
+            the_most_rows_in_error(host, fold_open=True)
             _settle()
             as_the_width_says("opened")
         elif listed:
