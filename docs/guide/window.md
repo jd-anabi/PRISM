@@ -227,7 +227,7 @@ otherwise Windows pages the batch into shared system memory and it runs up to ni
 nothing in the log to say why. Set it to about the free memory `nvidia-smi` reports, minus about
 1 GiB for the CUDA context; 0, the default, is right on an idle card. On the command line the same
 ceiling is the `PRISM_VRAM_CEILING_GIB` environment variable, which the planner reads in the same
-way; when it is set it wins over the field, and the note under the field says so. The field opens
+way; when it holds a number it wins over the field, and the note under the field says so. The field opens
 at the environment variable's value when that is set, else at 0.
 
 ## Settings that are not speed dials

@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit ce9af6c4.
+Checked against commit eff0bb70.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -917,8 +917,9 @@ stage without freezing, shows its output and stops it.
     `except Exception` in the pipeline and in sbi; `Worker.run` catches it by name.
   - Latency is about a second almost everywhere, and longer only where a run writes nothing for a
     while: up to one training epoch while the flow trains, the calibration's C2ST block, and in the
-    repeated calibration each repeat's ranks and its check (with its C2ST), one call of the training
-    library each, before each of which the repeat says a line: a stop waits for the one in progress.
+    repeated calibration each repeat's ranks (sbi's `run_sbc`) and its check (the reference sample,
+    then sbi's `check_sbc` with its C2ST), each run to its end once begun, with a line before each: a
+    stop waits for the one in progress.
     `pipeline._cancellable_wait` sleeps in one-second slices and logs every five, so a waiting retry
     is cancellable too.
   - A stop asked for can be withdrawn until it is taken (`CancelToken.withdraw`): the token reads the
@@ -1153,10 +1154,12 @@ module constants of `core.SBI.pipeline`.
   and releases after the `except` clause has closed, when the failed attempt's tensors are gone.
   `_release_device_memory` never raises: the allocator cache, the cuFFT plan cache and the captured
   graphs are released under separate guards. The plan cache and the graphs go first and the
-  allocator's cache last: a dropped graph's private pool comes back to the allocator as cached
-  blocks, which only an `empty_cache` made after the drop returns to the driver. A hot loop passes
-  `plans=False, graphs=False`, and the per-batch tail clears the cuFFT plan cache but keeps the
-  captured graphs.
+  allocator's cache last, so that what the graph drop lets go is in what it returns: emptied first,
+  the dropped graphs' pools stayed reserved until the next capture emptied the cache as it began
+  (`torch.cuda.graph` does), and the `[mem]` line, `_we_are_the_holder`, the wait and the retry's
+  own allocations that follow a release ran with them still held. It is a few MiB a graph, at most
+  eight. A hot loop passes `plans=False, graphs=False`, and the per-batch tail clears the cuFFT plan
+  cache but keeps the captured graphs.
 - **The rows matter more than the restore point.** Resuming without a restore point draws fresh
   noise from that batch on, a reproducibility loss; a skipped write throws away hours of simulation.
   So a failed per-batch snapshot leaves that batch with no restore point rather than a wrong one
