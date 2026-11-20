@@ -251,8 +251,8 @@ class RunController(QObject):
     # deleted by "Discard", for what reads the kept trainings to read them again.
     offer_pressed = Signal(object)
     kept_changed = Signal()
-    # A stop asked for, heard on the window's thread, from whichever thread asked; one asked for too late; and one
-    # asked of a training saving its posterior.
+    # A stop asked for; one asked for too late; and one asked of a training saving its posterior: each heard on the
+    # window's thread, where every stop is asked.
     _stopping = Signal()
     _late = Signal()
     _unstoppable = Signal()
@@ -499,9 +499,10 @@ class RunController(QObject):
         closes once the posterior is saved and the run has ended; with ``reason`` its text says the save goes on, and
         its history keeps the reason only should the run not finish; a stop asked for with neither comes too late and
         says so on the run's page. A stop asked of a run that has ended does nothing and says so on its page; nothing
-        at all before the process's first run. Safe from any thread: the run's token is set at once, and the run's
-        state, its history and its page follow on the window's thread (at once when asked there). Asked while the run
-        waits to be tried again, it ends the tries, as "Stop trying" does."""
+        at all before the process's first run. Asked on the window's thread alone, as every control of the window asks
+        it: the run's flags are written here with no lock. The run's token is set at once, and the run's state, its
+        history and its page follow at once. Asked while the run waits to be tried again, it ends the tries, as "Stop
+        trying" does."""
         run = self._run
         if reason and run is not None and self.is_live() and not run.stop_reason:
             run.stop_reason = reason
@@ -1039,7 +1040,8 @@ class RunController(QObject):
         """The worker's end: how it ended said on ``lines``, after every line it said before it; then, for a
         training that failed or was stopped, the batches its simulation set holds, read from the set now that the
         worker has ended; then, for a failure the window tries again, the run's pause (``_pause``), else the run's
-        end (``_end``)."""
+        end (``_end``). A run whose worker ended with none of the three outcomes ends failed, through its end: it left
+        no failure to try again."""
         run = self._run
         if run is None or run.worker is None:
             return
@@ -1057,7 +1059,7 @@ class RunController(QObject):
             batches, complete = self._set_holds(run)
             run.continue_from = batches if batches and not complete else None
             run.kept_now = (batches, int(getattr(run.kept_fit, "passes", 0) or 0))
-            if run.outcome == "failed" and self._tried_again(run):
+            if run.outcome == "failed" and failure is not None and self._tried_again(run):
                 return
         self._end(run, refused_early)
 
@@ -1119,7 +1121,7 @@ class RunController(QObject):
         run.try_at, run.attempt_open = None, True
         run.tried += 1
         run.attempt_started, run.attempt_before = (self._clock or _local_now)(), run.last_kept
-        run.outcome = run.failure = None
+        run.outcome = run.failure = run.failure_kind = None           # a try's failure is not the next try's
         said = SEPARATOR_TEXT.format(len(run.attempts) + 1)
         if run.text is not None:
             run.text.separator(len(run.attempts) + 1)

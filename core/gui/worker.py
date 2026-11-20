@@ -27,8 +27,12 @@ STOPPED_TEXT = "The run stopped: a stop was asked for."
 FAILED_TEXT = "The run failed: {}"
 # The failure of a run whose output could not be captured; filled with the reason the capture gave.
 NO_CAPTURE_TEXT = "The run could not start: PRISM could not capture its output ({})."
-# A run that ended with none of the three outcomes (a library's SystemExit passed every handler, or the capture's
-# own exit failed): written before ``finished`` is said, so the run's text file never stops without an ending.
+# The failure of a run that asked to end the process (a library's own exit, an argument parser's error among them),
+# which ends the run alone; filled with the exit's kind and its code or message.
+EXITED_TEXT = "The run asked to close PRISM ({}); only the run ended."
+# A run that ended with none of the three outcomes (an exception of a kind no clause of the run takes, an interrupt
+# among them, passed every handler, or the capture's own exit failed): written before ``finished`` is said, so the
+# run's text file never stops without an ending.
 UNSAID_TEXT = "The run ended without saying how."
 
 
@@ -82,14 +86,19 @@ def _pending_failure(cancel: BaseException) -> "BaseException | None":
     return None
 
 
-def _failed_text(exc: BaseException) -> str:
-    """A failure as the run's text file says it: its kind always, then its message when it has one. A message that
-    cannot be had (the exception's ``str`` raises) is left out, so the failure is still written and said."""
+def _said(exc: BaseException) -> str:
+    """An exception as the window's words name it: its kind always, then its message when it has one. A message that
+    cannot be had (the exception's ``str`` raises) is left out, so the exception is still named."""
     try:
         message = str(exc)
-    except Exception:                         # noqa: BLE001 -- the failure is said by its kind alone
+    except Exception:                         # noqa: BLE001 -- the exception is named by its kind alone
         message = ""
-    return FAILED_TEXT.format(f"{type(exc).__name__}: {message}" if message else type(exc).__name__)
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
+def _failed_text(exc: BaseException) -> str:
+    """A failure as the run's text file says it: its kind always, then its message when it has one (``_said``)."""
+    return FAILED_TEXT.format(_said(exc))
 
 
 class WorkerSignals(QObject):
@@ -126,7 +135,8 @@ class Worker(QRunnable):
     reach it too, and how the run ended, each written before any signal says it (a run that ended
     with none of the three outcomes is written as one that ended without saying how, before
     ``finished``). ``cancelled`` and ``error`` carry the kept training a stop or a failure in the
-    fit names (``kept_fit`` on the exception the training stage raises), or None.
+    fit names (``kept_fit`` on the exception the training stage raises), or None. A ``SystemExit``
+    the callable raises ends the run alone, as a failure (``EXITED_TEXT``), never the process.
     """
 
     def __init__(self, fn, *args, cancel=None, run_text=None, **kwargs):
@@ -206,6 +216,15 @@ class Worker(QRunnable):
                         # while `failure` holds the exception: a cycle only a full collection frees.
                         # The panel needs the type, message, field and the text formatted above.
                         _drop_tracebacks(e)
+                    except SystemExit as e:
+                        # A library's own exit (an argument parser's error, say) ends the run, never PRISM: left to
+                        # leave the callable, it would reach the toolkit from the pool's thread, which ends the process
+                        # with it. A failure said in the window's words, the exit's own traceback under them; the
+                        # cancel noted and the kept training are read as the failure above reads them.
+                        failure = (RuntimeError(EXITED_TEXT.format(_said(e))), traceback.format_exc())
+                        cancel_noted = self.cancel is not None and self.cancel.requested.is_set()
+                        kept_fit = getattr(e, "kept_fit", None)
+                        _drop_tracebacks(e)
                     finally:
                         # Stray figures a stage built but never handed to the sink (e.g. it unwound on a
                         # cancel before _emit): harmless under Agg, but they pile up across cancelled runs.
@@ -275,9 +294,9 @@ class Worker(QRunnable):
             # so the QApplication and our WorkerSignals are already gone. Nothing to report to.
             return
         finally:
-            # None of the three outcomes was written: a BaseException no clause above takes (a library's
-            # SystemExit) left the callable, or the capture's exit raised. The file still says the run ended,
-            # before `finished` says it; whatever is propagating goes on as it would have.
+            # None of the three outcomes was written: a BaseException no clause above takes (an interrupt) left
+            # the callable, or the capture's exit raised. The file still says the run ended, before `finished`
+            # says it; whatever is propagating goes on as it would have.
             if text is not None and not ended:
                 text.outcome(UNSAID_TEXT, "window")
             try:

@@ -25,9 +25,20 @@ import pytest
 from core.gui import texts
 from core.gui.run import model, readings
 from core.gui.run.model import FIT_ENDED, SIMULATION_ROW, RunModel, RunSpec, Stage
-from tests._runs import at as _at, controller_on as _controller_on, epoch_line as _epoch, training_spec
+from tests._runs import (at as _at, controller_on as _controller_on, epoch_line as _epoch,
+                         stops_off_the_windows_thread, training_spec)
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _every_stop_is_asked_on_the_windows_thread(monkeypatch):
+    """No test of this suite asks the run's controller to stop from a thread other than the window's: a stop asked
+    from inside a run goes through ``tests/_runs.py``'s ``WindowsStop``, as the window's own controls ask one on its
+    thread."""
+    off = stops_off_the_windows_thread(monkeypatch)
+    yield
+    assert off == [], f"a stop was asked of the run's controller off the window's thread, from {off}"
 
 # a simulation set's folder as the engine names it
 _FOLDER = r"C:\Users\J\PRISM\Artifacts\simulations\_unnamed__20261008T190211"
@@ -3007,9 +3018,9 @@ def test_a_stop_over_a_failure_and_a_stop_too_late_leave_the_full_text_in_the_fi
     from core.gui.streams import WorkerCancelled
     from core.gui.worker import CANCEL_TOO_LATE_TEXT, IN_FLIGHT_TEXT
     from tests._fixtures import build_run_host, qt_app
-    from tests._runs import Clock, RunText, start_run, turn_until
+    from tests._runs import Clock, RunText, WindowsStop, start_run, turn_until
     app = qt_app()
-    held = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11)))
+    held, stop = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), WindowsStop()
 
     def stopped_over_a_failure():
         try:
@@ -3021,7 +3032,7 @@ def test_a_stop_over_a_failure_and_a_stop_too_late_leave_the_full_text_in_the_fi
         try:
             raise RuntimeError("something the run recovered from")
         except RuntimeError:
-            held.request_stop()                       # inside a handler: deferred, and nothing checks again
+            stop()                                    # inside a handler: deferred, and nothing checks again
             print("the last thing the run writes")
         return "the payload"
 
@@ -3440,6 +3451,49 @@ def test_the_computer_is_kept_awake_from_the_start_of_a_run_to_its_end(tmp_path,
         assert ends.asked == [awake()] == [[(True, "MainThread"), (False, "MainThread")]], (
             f"{ending}: not asked once each way from the window's thread, or let sleep after the end was published: "
             f"{ends.asked}, {awake()}")
+
+
+@pytest.mark.parametrize("kind", ["a training", "a narrowing round", "an inference", "a check"])
+def test_a_run_that_ends_with_no_outcome_ends_failed_and_lets_go_of_everything(kind, tmp_path, windows_asked):
+    """A run's worker can end with none of the three outcomes, no result, no error and no stop, when an exception of a
+    kind no clause of the run takes, or the capture's own exit, passes every handler. Such a run ends failed through
+    the run's end, as any run ends: its history says it failed, with no failure of its own to try again, its full text
+    and its text file that it ended without saying how; every panel is free again, the computer let sleep, the reason
+    against ending the session, registered while the run was live, withdrawn, and its page ended, with no stop to
+    press. A training and a narrowing round, whose failure after a lack of the card's memory the window tries again,
+    end so too."""
+    from core.gui.panels.run_host import RunHost
+    from core.gui.run import history
+    from core.gui.worker import UNSAID_TEXT
+    from tests._fixtures import build_run_host, qt_app
+    from tests._runs import Clock, RunText, StandIn, runs_that_end_unsaid, start_run, turn_until
+    app = qt_app()
+    held, host = _controller_on(tmp_path, Clock(_at(8, 19, 2, 11))), build_run_host()
+    text, view = RunText(held), host.run_view
+    spec = {"a training": training_spec(), "a narrowing round": training_spec("Narrowing round"),
+            "an inference": RunSpec("Inference", ("inference", "infer"), name="cell_b",
+                                    stop_button="Stop the inference…"),
+            "a check": RunSpec("Check", ("inference", "checks"), name="Calibration",
+                               stop_button="Stop the calibration…")}[kind]
+    with runs_that_end_unsaid():
+        start_run(host, StandIn(word=spec.word), spec=spec)
+        turn_until(app, lambda: not held.is_live(), 10)
+    run = held.status.run
+    record = history.read(tmp_path / "runs" / f"{run}.json")
+    filed = (tmp_path / "runs" / f"{run}.txt").read_text(encoding="utf-8").splitlines()
+    assert (held.status.state, held.status.outcome, record["outcome"], record["failure"],
+            record["ended"] is not None) == ("ended", "failed", "failed", None, True), (held.status, record)
+    assert (text.texts()[-1], filed[-1].endswith(f" window {UNSAID_TEXT}")) == (UNSAID_TEXT, True), (
+        text.texts()[-3:], filed[-3:])
+    assert all(panel.controls.isEnabled() for panel in RunHost._instances if hasattr(panel, "controls")), (
+        "a panel was left locked")
+    awake = [(args[0], thread) for name, args, thread in windows_asked if name == "keep_awake"]
+    reasons = [args[1] for name, args, _thread in windows_asked if name == "block_shutdown"]
+    assert awake == [(True, "MainThread"), (False, "MainThread")], awake
+    assert (bool(reasons) and bool(reasons[0]), reasons[-1:]) == (True, [None]), (
+        "the reason against ending the session was not registered while the run was live, or not withdrawn", reasons)
+    assert (view.mode, view.stop_button.isVisibleTo(view), view.sentence.text()) == (
+        "ended", False, f"{spec.word} {spec.name} failed."), view.sentence.text()
 
 
 def test_the_reason_against_shutting_down_follows_the_runs_stage(tmp_path, windows_asked):

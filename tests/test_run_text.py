@@ -478,25 +478,53 @@ def test_a_run_whose_output_cannot_be_captured_fails_and_says_why(tmp_path, monk
 
 
 def test_a_run_that_ends_with_no_outcome_says_so_before_it_is_finished(tmp_path):
-    """A run can end with none of its three outcomes: a library that ends the process its own way
-    (``SystemExit``) passes every handler of the run. Its text file still says that the run ended without saying
-    how, in the window's words, before ``finished`` is said, and nothing else is said."""
+    """A run can end with none of its three outcomes: an exception of a kind no clause of the run takes, as an
+    interrupt is, passes every handler of the run, and leaves it. Its text file still says that the run ended without
+    saying how, in the window's words, before ``finished`` is said, and nothing else is said."""
+    qt_app()
+    text = RunTextFile(tmp_path / "run.txt", clock=_Clock())
+    said = []
+
+    class PassesEveryClause(BaseException):
+        """An exception of a kind no clause of a run takes."""
+
+    def leaves():
+        print("Simulating batch 1 of 4")
+        raise PassesEveryClause()
+
+    with pytest.raises(PassesEveryClause):
+        _run(leaves, text, **{signal: (lambda *args, signal=signal: said.append((signal, _lines(text.path))))
+                              for signal in ("log", "error", "cancelled", "result", "finished")})
+    text.close()
+    assert said == [("finished", [f"{STAMP} info Simulating batch 1 of 4",
+                                  f"{STAMP} window The run ended without saying how."])], said
+
+
+def test_a_run_that_asks_to_end_the_process_fails_and_ends_only_itself(tmp_path):
+    """A library inside a run that ends the process its own way (``SystemExit``, as an argument parser's error does)
+    ends the run alone, never PRISM: on a thread of the pool the exit would reach the toolkit, which ends the process
+    with it. The run fails in the window's words, which name the exit: ``error`` carries the failure, with the exit's
+    own traceback, and ``finished`` follows; nothing leaves the worker; and the run's text file says how it ended."""
     qt_app()
     text = RunTextFile(tmp_path / "run.txt", clock=_Clock())
     said = []
 
     def exits():
         print("Simulating batch 1 of 4")
-        raise SystemExit(3)
+        raise SystemExit(2)
 
-    try:
-        _run(exits, text, **{signal: (lambda *args, signal=signal: said.append((signal, _lines(text.path))))
-                             for signal in ("log", "error", "cancelled", "result", "finished")})
-    except SystemExit:
-        pass
+    _run(exits, text, **{signal: (lambda *args, signal=signal: said.append((signal, args)))
+                         for signal in ("error", "cancelled", "result", "finished")})
     text.close()
-    assert said == [("finished", [f"{STAMP} info Simulating batch 1 of 4",
-                                  f"{STAMP} window The run ended without saying how."])], said
+    from core.gui.worker import EXITED_TEXT
+    words = "The run asked to close PRISM (SystemExit: 2); only the run ended."
+    assert [signal for signal, _ in said] == ["error", "finished"], said
+    exc, trace, noted, kept = said[0][1]
+    assert (EXITED_TEXT.format("SystemExit: 2"), type(exc), str(exc), noted, kept) == (
+        words, RuntimeError, words, False, None), said[0]
+    assert trace.rstrip().endswith("SystemExit: 2"), trace
+    assert _lines(text.path)[:2] == [f"{STAMP} info Simulating batch 1 of 4",
+                                     f"{STAMP} error The run failed: RuntimeError: {words}"], _lines(text.path)
 
 
 def test_a_line_written_to_the_runs_streams_after_the_run_is_not_in_its_file(tmp_path):

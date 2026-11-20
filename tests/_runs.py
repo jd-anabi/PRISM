@@ -20,6 +20,10 @@ check and of a narrowing round stand ready to be said: ``masked_line`` and ``mas
 unusable driven recordings, in each form it is written), ``progress_frame``, ``CALIBRATION_LINES``, ``region_line``
 and ``ROUND_LINES``.
 
+A stop asked from a point inside a run is asked on the window's thread, as the window's own controls ask it
+(``WindowsStop``), and a test can note every stop asked from any other thread (``stops_off_the_windows_thread``); a
+run's worker can be made to end with none of the three outcomes (``runs_that_end_unsaid``).
+
 At module level this file imports the standard library and the toolkit's core, nothing of torch and nothing of the
 program: what it needs of the program it imports where it needs it.
 """
@@ -31,7 +35,7 @@ from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from PySide6.QtCore import QEventLoop, QObject, QTimer
+from PySide6.QtCore import QEventLoop, QObject, QTimer, Signal
 
 #: Where the window places each panel's runs, by the panel's class: what a stand-in run on such a panel is told,
 #: unless its test hands it a spec of its own. A bare run host has no place; a panel of any other class is refused by
@@ -318,6 +322,78 @@ def a_worker_that_cannot_be_made():
         yield
     finally:
         RunController._worker = made
+
+
+@contextmanager
+def runs_that_end_unsaid():
+    """Inside the block every run's worker the run's controller makes ends with none of the three outcomes, as a worker
+    does when an exception of a kind no clause of the run takes, or the capture's own exit, passes every handler: it
+    says one line of the run (``BUDGET``), writes as the run's outcome that it ended without saying how, and says
+    ``finished`` alone. The run's own call never runs, and nothing leaves the pool's thread."""
+    from core.gui.run import controller as made
+    from core.gui.worker import UNSAID_TEXT, Worker
+
+    class Unsaid(Worker):
+        def run(self):
+            self.signals.log_batch.emit([(BUDGET, "info")])
+            if self.run_text is not None:
+                self.run_text.outcome(UNSAID_TEXT, "window")
+            self.signals.finished.emit()
+
+    real = made.Worker
+    made.Worker = Unsaid
+    try:
+        yield
+    finally:
+        made.Worker = real
+
+
+class WindowsStop(QObject):
+    """A stop asked of the run's controller from a point inside a run that its test chooses, and asked on the window's
+    thread, as every control of the window asks one (the controller writes a stop's flags there, with no lock). Called
+    on the run's thread, it hands the ask to the window's thread, which makes it at its next turn of the event loop
+    (``turn_until`` turns it), and waits until it has been made: the run then goes on, its token set. Its keywords are
+    the stop's own (``closing``, ``reason``). Made on the window's thread before its run starts, and let go when its
+    test ends, as what the builders make is."""
+
+    _asking = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        from tests import _built
+        self._asked = threading.Event()
+        self._asking.connect(self._ask)
+        _built.keep(self)
+
+    def __call__(self, **kwargs) -> None:
+        self._asked.clear()
+        self._asking.emit(kwargs)
+        if not self._asked.wait(WAIT_LIMIT_S):
+            raise RuntimeError(f"the window's thread did not ask for the stop within {WAIT_LIMIT_S:g} s")
+
+    # A method of this object's own: the queued call lands on the window's thread, where the object lives.
+    def _ask(self, kwargs) -> None:
+        from core.gui.run.controller import controller
+        try:
+            controller().request_stop(**kwargs)
+        finally:
+            self._asked.set()
+
+
+def stops_off_the_windows_thread(monkeypatch) -> list:
+    """Every stop asked of the run's controller from now on, to the test's end, by a thread that is not the window's:
+    the thread's name, each, in the list handed back, and the stop asked as it was. A test reads the list at its end and
+    finds none: the controller writes a stop's flags on the window's thread, with no lock."""
+    from core.gui.run.controller import RunController
+    off, real = [], RunController.request_stop
+
+    def asked(held, *args, **kwargs):
+        if threading.current_thread() is not threading.main_thread():
+            off.append(threading.current_thread().name)
+        return real(held, *args, **kwargs)
+
+    monkeypatch.setattr(RunController, "request_stop", asked)
+    return off
 
 
 def start_run(host, stand_in, *, spec=None, **kwargs) -> None:

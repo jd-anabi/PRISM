@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import matplotlib                                                 # noqa: E402
 matplotlib.use("Agg")                                            # match the app (core/gui/__main__.py forces it)
 
+import pytest                                                     # noqa: E402
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
@@ -36,8 +37,17 @@ from core.gui.widgets import artifact_table as at                 # noqa: E402
 from core.gui.widgets.artifact_table import ArtifactTable, cells_for, columns_for   # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import build_inference, build_run_host, qt_app, pump  # noqa: E402
-from tests._runs import RunText, turn_until                       # noqa: E402
+from tests._runs import RunText, WindowsStop, stops_off_the_windows_thread, turn_until   # noqa: E402
 import contextlib                                                  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _every_stop_is_asked_on_the_windows_thread(monkeypatch):
+    """No test of this suite asks the run's controller to stop from a thread other than the window's: a stop asked
+    from inside a run goes through ``WindowsStop``, as the window's own controls ask one on its thread."""
+    off = stops_off_the_windows_thread(monkeypatch)
+    yield
+    assert off == [], f"a stop was asked of the run's controller off the window's thread, from {off}"
 
 
 def test_worker_payload_is_released_after_the_run():
@@ -2382,9 +2392,9 @@ def _reported_as_a_crash(panel, pane, text, message):
 def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     """Every leg runs through the WINDOW'S OWN channels -- a real ``print`` and a real ``core`` record
     under the ``redirect_streams`` the dispatch installs -- and asks the run's controller for the stop
-    from inside the run (``controller().request_stop()``, which sets the run's own token, the one
-    ``Worker.run`` holds as ``self.cancel``, at once, from any thread), so a Worker.run that decides
-    anything from its token is exercised for real.
+    at a point inside the run, on the window's thread, as the window asks one (``WindowsStop``: the run
+    waits there until the stop is asked, which sets the run's own token, the one ``Worker.run`` holds
+    as ``self.cancel``), so a Worker.run that decides anything from its token is exercised for real.
 
     The rule under test is the raise-time deferral (``core.runs.cancel_is_deferred``): no cancel
     checkpoint fires while THIS thread is handling an exception -- inside an ``except``, a ``finally``
@@ -2433,10 +2443,10 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
     panel = build_run_host()
     pane, text = PaneCapture(panel), RunText(controller())
     log = logging.getLogger("core.SBI.pipeline")
-    reached = []
+    reached, stop = [], WindowsStop()
 
     def crash_behind_the_section():
-        controller().request_stop()            # a stop asked for just before the failure
+        stop()                                 # a stop asked for just before the failure
         try:
             raise RuntimeError("the batch failed")
         except RuntimeError:
@@ -2446,7 +2456,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
             raise                              # the ORIGINAL exception, unconditionally
 
     def crash_through_a_finally_that_speaks():
-        controller().request_stop()
+        stop()
         try:
             raise RuntimeError("the graphed solver failed")
         finally:                               # sdeint.euler_compiled: `finally: bar.close()`
@@ -2454,7 +2464,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
             logging.getLogger("core.Solvers.sdeint").info("closing the solver's bar")
 
     def recovered_guard_then_normal_flow():
-        controller().request_stop()
+        stop()
         try:
             raise RuntimeError("empty_cache() on a starved card")
         except RuntimeError:
@@ -2464,7 +2474,7 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
         reached.append("past the first check")
 
     def cancel_in_normal_flow():
-        controller().request_stop()
+        stop()
         print("the first print after Cancel")          # taken at this very write
         reached.append("past the first check")
 
@@ -2534,7 +2544,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
 
     panel = build_run_host()
     pane, text = PaneCapture(panel), RunText(controller())
-    results = []
+    results, stop = [], WindowsStop()
 
     def _drive(fn):
         forget_asked()
@@ -2550,7 +2560,7 @@ def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_succes
         try:
             raise RuntimeError("something the run recovered from")
         except RuntimeError:
-            controller().request_stop()             # a stop, inside a deferral window
+            stop()                                  # a stop, inside a deferral window
             print("the last thing the run writes")  # deferred: no checkpoint fires here
         return "the payload"                        # ... and nothing checks the token again
 
@@ -2590,13 +2600,13 @@ def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(mon
 
     panel = build_run_host()
     pane, text = PaneCapture(panel), RunText(controller())
-    tokens = []
+    tokens, stop = [], WindowsStop()
 
     def crash_under_a_live_bar():
         tokens.append(sys.stdout._cancel)      # the run's own token, as its stream holds it
         for i in tqdm(range(1000), desc="a live bar"):
             if i == 3:
-                controller().request_stop()
+                stop()
                 raise RuntimeError("the batch failed under a live bar")
 
     _run_leg(app, panel, pane, text, crash_under_a_live_bar)

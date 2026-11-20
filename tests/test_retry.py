@@ -473,6 +473,37 @@ def test_stop_trying_pressed_as_the_pause_runs_out_begins_no_try(tmp_path):
         "a try began though 'Stop trying' was pressed in the turn its pause ran out")
 
 
+def test_a_try_that_ends_with_no_outcome_is_not_the_lack_of_memory_before_it(tmp_path):
+    """A training whose graphics card ran out of memory is tried again, and its try ends with none of the three
+    outcomes (an exception of a kind no clause of the run takes, or the capture's own exit, passed every handler). The
+    run ends failed and is not tried again: that try left no failure to say it was a lack of memory. Its history says no
+    lack of memory either, nor does Settings' sentence of the last run on this computer: the lack was the try before
+    it's, which the history's tries keep."""
+    from core.gui.run import ends, history
+    from tests._runs import runs_that_end_unsaid
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text = RunText(held)
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    _to_the_simulation(app, stand_in, text, held, _set(tmp_path, 236), 236)
+    stand_in.fail(_out_of_memory())
+    _waiting(app, held)
+    clock.advance(60)
+    with runs_that_end_unsaid():
+        held.tick()                                     # the next try begins, and ends with no outcome
+        _ended(app, held)
+    record = history.read(tmp_path / "runs" / f"{held.status.run}.json")
+    assert (held.status.outcome, len(stand_in.calls), record["outcome"], record["failure"]) == (
+        "failed", 1, "failed", None), record
+    assert [(one["outcome"], one["failure"]) for one in record["tries"]] == [
+        ("failed", "RuntimeError"), ("failed", None)], record["tries"]
+    lacked = (record["health"] or {}).get("out_of_memory") is True
+    assert (lacked, ends.ENDED_FOR_LACK_TEXT in ends.last_run_sentence(record)) == (False, False), (
+        "a try with no outcome was taken for the lack of memory before it", record["health"])
+
+
 _REPORTED_AT_ONCE = {
     "a full disk": (lambda: OSError(28, "No space left on device"), "[Errno 28] No space left on device", False),
     "a programming error": (lambda: TypeError("unsupported operand type(s) for +: 'int' and 'NoneType'"),
