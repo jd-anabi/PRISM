@@ -1119,6 +1119,32 @@ def test_the_health_table_reads_its_four_measures():
     assert RunModel(RunSpec("Check", ("inference", "checks")), clock=clock).health() == ()
 
 
+def test_a_runs_failed_simulations_are_counted_over_every_try_it_made():
+    """The engine counts a run's failed simulations from nought in each of its calls, and each try of a run the window
+    tries again after the graphics card ran out of memory is a call of its own. The run counts them over every try it
+    made, each try's last count added to those of the tries before it, since the batch its first try resumed its
+    simulation set at, wherever a later try resumed it: its health says so, and the count its history keeps
+    (``failed``) is the same. A batch a later try simulates again is counted again, as it was simulated again. A run
+    tried again that has counted nothing has no count."""
+    clock = _Clock(_at(8, 19, 2, 11))
+    run = RunModel(_training(facts={"observation": "forced"}), clock=clock)
+    _feed(run, _LINES["budget"], _LINES["simulation_resuming"], _LINES["patho_batch"])
+    assert (run.failed(), _health(run)[0]) == ((18_450, 12_595_200), ("Failed simulations", "0.15 % since batch 236",
+                                                                       "Fine"))
+    run.trying(True)
+    run.trying(False)                                  # the next try, a new call of the engine's, counting from nought
+    _feed(run, _LINES["simulation_resuming"].replace("236/10000", "300/10000"),
+          "[patho] batch 320: 2 new pathological trajectorie(s) -- 1,000 non-finite, 50 exactly constant, 0 over 1e+06 "
+          "in magnitude, of 409,600 simulated")
+    assert (run.failed(), _health(run)[0]) == ((19_500, 13_004_800), ("Failed simulations", "0.15 % since batch 236",
+                                                                       "Fine")), "the last try's count alone"
+    untried = RunModel(_training(facts={"observation": "forced"}), clock=clock)
+    _feed(untried, _LINES["budget"])
+    untried.trying(True)
+    untried.trying(False)
+    assert (untried.failed(), _health(untried)[0]) == (None, ("Failed simulations", "None so far", "Fine"))
+
+
 def _openings(run, now) -> list:
     from core.gui.widgets.message_row import opening
     return [opening(model.LEADS[message.kind], message.when, now) for message in run.messages()]
@@ -4453,6 +4479,28 @@ def test_a_figure_closed_on_its_runs_page_takes_its_frame_and_the_way_back_still
     assert seen == (True, False, [], True, True), (
         "a figure that came was not shown at once, a closed one left its frame, or the way back raised or kept the "
         "run's page", seen)
+
+
+def test_the_run_page_hears_its_figures_tabs_only_while_it_holds_them(monkeypatch):
+    """The run's page lays itself out again at each tab added or removed among the figures it holds, and once it has
+    handed them back to their page it hears their tabs no more: a tab's change then lays out no run page that does not
+    hold them, which nobody would see."""
+    from core.gui.run.view import RunView
+    from tests._fixtures import build_run_host, qt_app
+    qt_app()
+    arranged, real = [], RunView._arrange
+    monkeypatch.setattr(RunView, "_arrange", lambda page: (arranged.append(page), real(page))[1])
+    host = build_run_host()
+    view, stack = host.run_view, host.figure_stack
+    host.show_run()                                         # the run's page holds the figures
+    del arranged[:]
+    stack.tabs_changed.emit()
+    held = view in arranged
+    host.show_figures()                                     # and hands them back
+    del arranged[:]
+    stack.tabs_changed.emit()
+    assert (held, view in arranged) == (True, False), (
+        "the run's page did not hear the tabs of the figures it holds, or heard them once it held them no more")
 
 
 def test_the_way_back_from_a_run_with_no_figure_puts_the_figure_in_front_before_it_in_front_again(tmp_path):

@@ -314,6 +314,12 @@ class RunModel:
         self._fit_ended_after: int | None = None
         self._fit_ended_by: str | None = None
         self._failed: tuple[int, int] | None = None
+        # Each try of a run counts its failed simulations from nought, as the engine does in each of its calls: the
+        # counts of the tries before the one in progress, summed; whether a try after the first has begun; and the
+        # batch the run's first try resumed its simulation set at, which the run's count is since.
+        self._tries_failed: tuple[int, int] | None = None
+        self._again = False
+        self._first_resumed_at: int | None = None
         self._earlier: tuple[tuple[int, int], ...] | None = None
         self._masked: Masked | None = None
         self._compared = None                # the comparison with the audit, made once at the first total
@@ -419,13 +425,19 @@ class RunModel:
 
     def trying(self, on: bool) -> None:
         """The run failed and waits to be tried again (True), or its next try has begun (False). While it waits
-        nothing computes, so no silence is said; its next try is heard from the moment it begins."""
+        nothing computes, so no silence is said; its next try is heard from the moment it begins, and counts its failed
+        simulations from nought, the run's count kept over every try (``failed``)."""
         if on and self._state in ("starting", "running", "stopping"):
             self._state = "retrying"
             self._silence, self._silence_needs_you = None, False
         elif not on and self._state == "retrying":
             self._state = "running"
             self._heard = self._clock()
+            if not self._again:
+                self._again, self._first_resumed_at = True, self._resumed_at
+            if self._failed is not None:
+                bad, made = self._tries_failed or (0, 0)
+                self._tries_failed, self._failed = (bad + self._failed[0], made + self._failed[1]), None
 
     def ended(self, outcome: str, *, kept_fit=None) -> None:
         """The run has ended: one of ``OUTCOMES``, with the kept training's note when the run kept one. A finished
@@ -743,9 +755,13 @@ class RunModel:
         return None if self._budget is None else dict(self._budget)
 
     def failed(self) -> tuple[int, int] | None:
-        """The failed simulations and the simulations made, as this run has counted them so far; None before its
-        first count."""
-        return self._failed
+        """The failed simulations and the simulations made, as this run has counted them so far over every try it has
+        made, each try's last count added to those of the tries before it; None before its first count. A batch a
+        later try simulates again is counted again, as it was simulated again."""
+        if self._tries_failed is None:
+            return self._failed
+        bad, made = self._failed or (0, 0)
+        return self._tries_failed[0] + bad, self._tries_failed[1] + made
 
     def memory_peak(self) -> float | None:
         """The largest memory peak the run's lines have said so far, in GiB; None before the first."""
@@ -1153,14 +1169,15 @@ class RunModel:
 
     # ── health ──
     def _failed_row(self) -> HealthRow:
-        bad, rows = self._failed or (0, 0)
+        bad, rows = self.failed() or (0, 0)
+        since = self._first_resumed_at if self._again else self._resumed_at
         over = ""
         if self._earlier is not None:
             bad += sum(b for b, _ in self._earlier)
             rows += sum(r for _, r in self._earlier)
             over = f" over {len(self._earlier) + 1} runs"
-        elif self._resumed_at:
-            over = f" since batch {number_text(self._resumed_at)}"
+        elif since:
+            over = f" since batch {number_text(since)}"
         if not rows:
             return HealthRow("Failed simulations", "None so far", "Fine")
         share = bad / rows

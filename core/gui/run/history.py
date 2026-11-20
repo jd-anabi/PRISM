@@ -33,7 +33,9 @@ A file holds every name of ``FIELDS``, in that order, None where its run has not
   check's own result, the record the run wrote (its kind, its id, its name and the name it was asked to have, which
   differ when another record took the name while the run was going), how it failed, and its text file's name.
   ``health`` is ``{"failed", "simulated", "memory_peak", "batches_split", "out_of_memory", "comparison"}`` once any of
-  it is known, else None; a file written before these were kept holds the first two alone. ``comparison``, of
+  it is known, else None; a file written before these were kept holds the first two alone. ``failed`` and
+  ``simulated`` count every try of the run, each try counting from nought as the engine does in each of its calls; a
+  file written before they were summed holds its last try's alone. ``comparison``, of
   ``COMPARISON_FIELDS``, is a training's or a narrowing round's first total of unusable driven recordings against the
   audit it was handed, with the answers given to it; None for any other run, and before the total.
   ``check``, of ``CHECK_FIELDS``, is a check's run's: which check (its key) and at what sizes, as its page handed

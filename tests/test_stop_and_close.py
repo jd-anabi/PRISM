@@ -584,6 +584,117 @@ def test_a_discard_whose_history_cannot_be_written_again_still_says_the_training
         held.status.sentence)
 
 
+def test_a_discard_of_the_run_the_controller_holds_says_its_end_again_however_that_end_stands(tmp_path, monkeypatch,
+                                                                                            store):
+    """A Discard of the training the run the controller holds kept deletes it, however that run's end stands. A run
+    that failed in its fit keeps its sentence beside its error: nothing is handed back for its page to say, and the
+    status keeps the sentence. An end someone has seen already leaves the controller idle, and its words are handed
+    back with the training gone. An end whose history could not be put together hands back nothing, and the page keeps
+    its words. A run that keeps no file, whose page names no run, deletes the training by the note its stop handed
+    back."""
+    from core.gui.run.controller import IDLE, RunController
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    choose(monkeypatch, words="Stop training")
+    discarded = "the training was discarded, as you asked."
+
+    def kept():
+        return [summary.id for summary in store.list("fit")]
+
+    def in_the_fit(spec, end) -> None:
+        stand_in = StandIn()
+        stand_in.kept_fit = _note(build_fit_record(store, passes=62))
+        start_run(host, stand_in, spec=spec)
+        _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+        turn_until(app, lambda: len(held.model.epochs()) == 3)
+        end(stand_in)
+        _ended(app, held)
+
+    in_the_fit(_training(), lambda stand_in: stand_in.fail(RuntimeError("the fit broke")))
+    failed = held.status.sentence
+    assert (held.discard(held.status.run), kept(), held.status.sentence) == (
+        (True, "The training was discarded.", ""), [], failed), "a failure's sentence was said again, or went"
+
+    in_the_fit(_training(), lambda stand_in: view.stop_button.click())
+    run = held.status.run
+    held.acknowledge(run)
+    gone, words, ended = held.discard(run)
+    assert (gone, words, kept(), held.status == IDLE, ended.endswith(discarded)) == (
+        True, "The training was discarded.", [], True, True), ("an end already seen was said again", ended)
+
+    def unwritten(self, run):
+        raise RuntimeError("the history cannot be put together")
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(RunController, "_record", unwritten)
+        in_the_fit(_training(), lambda stand_in: view.stop_button.click())
+    said = view.sentence.text()
+    view.discard_button.click()
+    assert (kept(), view.notice.text(), view.sentence.text()) == ([], "The training was discarded.", said), (
+        "the Discard of a run whose end wrote no history went wrong, or the page did not keep its words")
+
+    held.acknowledge(held.status.run)
+    in_the_fit(_training(keeps_files=False), lambda stand_in: view.stop_button.click())
+    assert (held.status == IDLE, len(kept())) == (True, 1), "the run that keeps no file left an end, or kept nothing"
+    view.discard_button.click()
+    assert (kept(), view.notice.text()) == ([], "The training was discarded."), (
+        "the training a run that keeps no file kept was not deleted by the note its stop handed back")
+
+
+def test_a_discard_of_an_earlier_run_says_its_end_again_from_its_history_however_that_stands(tmp_path, monkeypatch,
+                                                                                           store):
+    """A Discard of the training a run of an earlier launch kept deletes the training its history names, and that run's
+    end is said again from its history as the Discard leaves it: in the status, when its end is the one the status
+    says, and in the words handed to its page, but for a run that failed, whose sentence stays beside its error. A
+    history file that holds another run than its name says, and a history whose words cannot be said, hand back
+    nothing for the page to say; the training goes all the same, and a history that holds another run is left as it
+    was."""
+    from core.gui.run import ends, history
+    from core.gui.run.controller import IDLE
+    from tests._fixtures import write_history
+    held = _controller_on(tmp_path, Clock(_at(9, 10, 0)))
+    folder = tmp_path / "runs"
+
+    def earlier(run, outcome) -> None:
+        fit = build_fit_record(store, passes=62)
+        write_history(folder, id=run, word="Training", name="retrain_3", place=["inference", "training"],
+                      records_root=str(store.root), started=_at(8, 19, 2, 11), ended=_at(8, 20, 5, 11),
+                      outcome=outcome, stage="Fitting", fit={"epochs": 62, "kept_id": fit, "passes": 62,
+                                                             "discarded": False})
+
+    def kept():
+        return [summary.id for summary in store.list("fit")]
+
+    assert held.status == IDLE
+    earlier("20261008T190211-training", "stopped")
+    held.recall(str(store.root))                         # its end the status, as a reopened window says it
+    gone, words, ended = held.discard("20261008T190211-training")
+    assert (gone, words, kept(), ended.endswith("the training was discarded, as you asked."), held.status.sentence) == (
+        True, "The training was discarded.", [], True, ended), ended
+    held.acknowledge("20261008T190211-training")
+
+    earlier("20261008T200000-training", "failed")
+    assert (held.discard("20261008T200000-training"), kept(), held.status == IDLE) == (
+        (True, "The training was discarded.", ""), [], True), "a failure's sentence was handed back to be said"
+    assert history.read(folder / "20261008T200000-training.json")["fit"]["discarded"] is True
+
+    earlier("20261008T210000-training", "stopped")
+    moved = folder / "20261008T220000-training.json"
+    (folder / "20261008T210000-training.json").rename(moved)
+    before = moved.read_bytes()
+    assert (held.discard("20261008T220000-training"), kept(), moved.read_bytes() == before) == (
+        (True, "The training was discarded.", ""), [], True), "a history holding another run was said or written"
+
+    def unsaid(record, now, **_):
+        raise ValueError("these words cannot be said")
+
+    earlier("20261008T230000-training", "stopped")
+    monkeypatch.setattr(ends, "words", unsaid)
+    assert (held.discard("20261008T230000-training"), kept()) == ((True, "The training was discarded.", ""), [])
+
+
 def test_discard_of_a_resumed_training_says_it_deletes_every_epoch_kept_since_it_began(tmp_path, monkeypatch, store):
     """A training that was resumed and kept nothing new in this process before it was stopped is the earlier
     training as it was: the question says that Discard deletes the whole of it, its epochs and the sessions that

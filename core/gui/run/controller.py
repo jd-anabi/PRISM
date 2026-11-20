@@ -657,13 +657,13 @@ class RunController(QObject):
         with the offer when its page offered nothing else; its history says it was discarded, nothing else changed
         (the history its end wrote, ``_write_ended``, for the run the controller holds; else its file, ``_rewrite``),
         and its end's words, read from that history as the discard leaves it, whether or not its file could be written
-        again, say so too: in the status while its end waits to be seen; in the
-        end a live run noted as it started, which that run gives back as the status should it end into idle; and on
-        its page, which is drawn here for the run the controller holds, and draws the words handed back for any
-        other. They are dated against the moment the run ended for the run the controller holds, as its end dated
-        them, and against the moment now for any other, as a run read back from its history is. A failed run's
-        sentence stays, beside its error: "" is handed back for it, as when the history cannot be read again or put
-        into words."""
+        again, say so too: in the status while its end waits to be seen, and on its page, which is drawn here for the
+        run the controller holds, and draws the words handed back for any other. Nothing is live then (``discard``
+        does nothing while a run is), so the end a run noted as it started has been given back or set aside already
+        and is read by nothing: it is not said again. They are dated against the moment the run ended for the run the
+        controller holds, as its end dated them, and against the moment now for any other, as a run read back from its
+        history is. A failed run's sentence stays, beside its error: "" is handed back for it, as when the history
+        cannot be read again or put into words."""
         offered = self._offers.get(run)
         if offered is not None and offered.continue_from is None:
             del self._offers[run]
@@ -688,8 +688,6 @@ class RunController(QObject):
         if self._status.run == run and self._status.unacknowledged_end:
             self._status = _said_again(self._status, record, now)
             self.status_changed.emit(self._status)
-        if held is not None and held.waiting is not None and held.waiting.run == run:
-            held.waiting = _said_again(held.waiting, record, now)
         try:
             sentence = ends.words(record, now)[0]
         except Exception:                        # noqa: BLE001 -- the page's words stay as its end said them

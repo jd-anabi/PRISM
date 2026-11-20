@@ -957,6 +957,31 @@ def test_resume_the_training_repeats_the_runs_own_call_with_the_kept_training_na
         [], False, False), "a training Discard deleted was still offered to resume"
 
 
+def test_a_discard_leaves_the_page_offering_to_continue_from_the_batches_its_set_holds(tmp_path, monkeypatch,
+                                                                                       store):
+    """A training stopped in its fit with its training kept and its simulation set unfinished offers to continue from
+    the batches its set holds, and to resume the training. Discard deletes the training: the page then offers to
+    continue still, the run's own call kept for that, and to resume no more."""
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    choose(monkeypatch, words="Stop training")
+    folder = _set(tmp_path, 236)
+    stand_in = StandIn()
+    stand_in.kept_fit = _note(build_fit_record(store, passes=3), 3)
+    start_run(host, stand_in, spec=_training())
+    _to_the_fit(app, stand_in, text, clock, folder, [(1, 0), (2, 1), (3, 2)])
+    view.stop_button.click()
+    _ended(app, held)
+    run = held.status.run
+    assert (held.offered(run), view.continue_button.text()) == (True, "Continue from batch 236")
+    view.discard_button.click()
+    assert (store.list("fit"), held.offered(run), view.continue_button.isVisibleTo(view),
+            view.resume_button.isVisibleTo(view)) == ([], True, True, False), (
+        "the Discard took the offer to continue with it, or the page still offers to resume")
+
+
 def test_continue_and_resume_start_nothing_once_the_page_holds_another_model_or_prior(tmp_path, monkeypatch, store):
     """"Continue from batch N" and "Resume the training" repeat the run's own call, made with the model and the prior
     its page's session held then. While the session still holds them, the press starts the run; once it holds another
