@@ -8763,14 +8763,16 @@ def test_a_rounds_continue_whose_records_are_gone_says_so_and_lets_nothing_go(go
 
 @pytest.mark.parametrize("cause", ["bounds edited", "bounds gone", "bounds renamed in its capitals", "units gone",
                                    "units changed", "typed limits with a forcing section", "prior deleted",
-                                   "card gone", "a library changed", "model gone"])
+                                   "card gone", "a library changed", "model gone", "a bounds line its reader refuses"])
 def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read(cause, store, tmp_path, monkeypatch):
     """A kept training whose world has moved since it was kept, after a reopening, each cause alone: its Resume says
-    why on its row, in words, and nothing is read, applied, loaded or started; nothing raises. What is said is the
-    cause's sentence and nothing more. A library changed is the record's own reason, said before any Resume is offered:
-    Home offers it not; and so is its prior deleted, which the reading of what is offered finds: Home offers no Resume,
-    and the row says why before any press. A bounds file renamed in its capitals alone is the same file on Windows:
-    nothing is said, and the press goes on."""
+    why on its row, in words, and nothing is read, applied, loaded or started, and the store is as it was; nothing
+    raises. What is said is the cause's sentence and nothing more. A library changed is the record's own reason, said
+    before any Resume is offered: Home offers it not; and so is its prior deleted, which the reading of what is offered
+    finds: Home offers no Resume, and the row says why before any press. A bounds file renamed in its capitals alone is
+    the same file on Windows: nothing is said, and the press goes on. A bounds file unchanged since the training was
+    kept, holding a line its reader refuses, is read as the configuration's builder reads it, and the reader's own
+    sentence is said."""
     import shutil
     import sys
     from core import cli, config, registry
@@ -8794,6 +8796,9 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
     else:
         cfg = cli.make_sim_config("NADROWSKI", labels, drift, str(copy), hw=config.cpu_device(),
                                   units_override=str(units) if cause.startswith("units") else None)
+    if cause == "a bounds line its reader refuses":
+        # Before the record is written, so the record holds this file's hash: the file reads as unchanged.
+        copy.write_bytes(copy.read_bytes().replace(b"k in (0.01, 5)", b"k 0.01 5"))
     kept = _a_kept_training(store, held, cfg=cfg,
                             config={"device": "cuda"} if cause == "card gone" else {"model": "GONE"}
                             if cause == "model gone" else None,
@@ -8808,7 +8813,10 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
             "prior deleted": "The prior it was trained with is no longer in Records.",
             "card gone": "It was trained on the graphics card; this computer has none now.",
             "a library changed": None,
-            "model gone": "Its model, GONE, is no longer one PRISM can train."}[cause]
+            "model gone": "Its model, GONE, is no longer one PRISM can train.",
+            "a bounds line its reader refuses": ("The bounds file 'master copy.txt' cannot be read at line 2: "
+                                                 "'k 0.01 5' is not a parameter with its two limits, written as "
+                                                 "'name in (lower, upper)'.")}[cause]
     if cause == "a library changed":
         said = continuing.as_sentence(fit_state.kept_fit(store, kept).why_not)
         assert said.startswith("Torch was 0.0 when this training was kept, and is"), said
@@ -8842,10 +8850,13 @@ def test_a_kept_training_whose_files_have_moved_says_why_before_anything_is_read
         _settle(app, inference, posterior_load)
         assert posterior_load.calls[-1][1] == {"resume_fit": kept, "if_name_taken": "unnamed"}
         return
+    kinds = ("prior", "simulation", "posterior", "observation", "fit")
+    records = {kind: sorted(s.id for s in store.list(kind)) for kind in kinds}
     assert inference.resume_kept(kept) is None
     assert page._said_on_row.get(kept, "") == said, page._said_on_row
     assert (prior_load.calls, posterior_load.calls, controller().is_live(), inference.session.draft) == (
         [], [], False, None), "something was read, applied or started"
+    assert {kind: sorted(s.id for s in store.list(kind)) for kind in kinds} == records, "the store changed"
 
 
 def test_a_torn_kept_training_is_refused_and_offers_delete(store, tmp_path, monkeypatch):

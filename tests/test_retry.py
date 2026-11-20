@@ -1799,20 +1799,25 @@ def _nothing_started(monkeypatch) -> list:
 
 
 @pytest.mark.parametrize("cause", ["parent posterior gone", "prior gone", "observation gone", "bounds file changed",
-                                   "card gone", "no parent posterior named"])
+                                   "card gone", "no parent posterior named", "a bounds line its reader refuses"])
 def test_a_kept_round_whose_records_have_moved_says_why_before_anything_is_read(cause, store, tmp_path, monkeypatch):
     """A kept narrowing round whose world has moved since it was kept, each cause alone: its Resume says why on its row
     of the round's page, as the row draws it, the page shown with its form, and nothing is read, applied, loaded or
-    started; nothing raises. A record that names no posterior it narrows says so in a sentence of its own."""
+    started, and the store is as it was; nothing raises. A record that names no posterior it narrows says so in a
+    sentence of its own. A bounds file unchanged since the round was kept, holding a line its reader refuses, is read as
+    the configuration's builder reads it, and the reader's own sentence is said."""
     import shutil
     from core import cli, config, registry
     cfg = None
-    if cause == "bounds file changed":
+    if cause in ("bounds file changed", "a bounds line its reader refuses"):
         copy = tmp_path / "bounds" / "master copy.txt"
         copy.parent.mkdir()
         shutil.copyfile(config.BOUNDS_PATH / "nadrowski" / "master.txt", copy)
         cfg = cli.make_sim_config("NADROWSKI", config.VALID_LABELS[config.VALID_MODELS.index("NADROWSKI")],
                                   registry.state_dep_drift("NADROWSKI"), str(copy), hw=config.cpu_device())
+    if cause == "a bounds line its reader refuses":
+        # Before the record is written, so the record holds this file's hash: the file reads as unchanged.
+        copy.write_bytes(copy.read_bytes().replace(b"k in (0.01, 5)", b"k 0.01 5"))
     held, kept, observed, window, inference = _a_kept_round(store, tmp_path, monkeypatch, cfg=cfg,
                                                             config={"device": "cuda"} if cause == "card gone" else None,
                                                             parent=cause != "no parent posterior named")
@@ -1831,8 +1836,13 @@ def test_a_kept_round_whose_records_have_moved_says_why_before_anything_is_read(
             "observation gone": "The observation it was trained around is no longer in Records.",
             "bounds file changed": "The bounds file master copy.txt has changed since this training began.",
             "card gone": "It was trained on the graphics card; this computer has none now.",
-            "no parent posterior named": "Its record names no posterior it narrows."}[cause]
+            "no parent posterior named": "Its record names no posterior it narrows.",
+            "a bounds line its reader refuses": ("The bounds file 'master copy.txt' cannot be read at line 2: "
+                                                 "'k 0.01 5' is not a parameter with its two limits, written as "
+                                                 "'name in (lower, upper)'.")}[cause]
     asked = _nothing_started(monkeypatch)
+    kinds = ("prior", "simulation", "posterior", "observation", "fit")
+    records = {kind: sorted(s.id for s in store.list(kind)) for kind in kinds}
     assert inference.resume_round(kept) is None
     page = inference.tsnpe_panel
     assert page.said_on_row(kept) == said, page.said_on_row(kept)
@@ -1841,6 +1851,7 @@ def test_a_kept_round_whose_records_have_moved_says_why_before_anything_is_read(
     assert parts["why"].isVisibleTo(page.kept_block) and not parts["resume"].isVisibleTo(page.kept_block)
     assert asked == [] and inference.current_step() == "narrowing"
     assert inference.session.draft is None, "something was applied"
+    assert {kind: sorted(s.id for s in store.list(kind)) for kind in kinds} == records, "the store changed"
 
 
 def test_a_kept_round_whose_name_was_taken_asks_for_a_name(store, tmp_path, monkeypatch):

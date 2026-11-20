@@ -150,12 +150,26 @@ def records_gone(kept, present) -> tuple[str, ...]:
     return found
 
 
+def _bounds_refused(path: Path) -> tuple[str, ...]:
+    """The bounds file at ``path``, there and unchanged, read as the configuration's builder will read it: its reader's
+    refusal of a line it cannot read, the reader's own sentence, which the press would otherwise meet only as it builds
+    the configuration; none when it reads."""
+    from core.Helpers import file_manager
+    from core.refusals import Refusal
+    try:
+        file_manager.parse_bounds_file(str(path))
+    except Refusal as refused:
+        return (refused.message,)
+    return ()
+
+
 def resume_problems(kept, *, device, store) -> tuple[str, ...]:
-    """What stops the Resume of ``kept`` before anything is read, each a sentence: its bounds file gone or changed since
-    it began, or limits typed by hand with a forcing section, which its record cannot rebuild; its units file gone or
-    changed; its prior gone from Records (``prior_gone``); its model no longer one PRISM can train; a training kept on
-    the graphics card on a computer that has none now (``device``, the device check's answer). A library or the
-    training code changed is the kept training's own ``why_not``, said before any Resume is offered."""
+    """What stops the Resume of ``kept`` before anything is loaded, each a sentence: its bounds file gone or changed
+    since it began, or there and unchanged with a line its reader refuses (``_bounds_refused``), or limits typed by hand
+    with a forcing section, which its record cannot rebuild; its units file gone or changed; its prior gone from
+    Records (``prior_gone``); its model no longer one PRISM can train; a training kept on the graphics card on a
+    computer that has none now (``device``, the device check's answer). A library or the training code changed is the
+    kept training's own ``why_not``, said before any Resume is offered."""
     found = []
     record = getattr(kept, "config", None) or {}
     model = record.get("model")
@@ -169,6 +183,8 @@ def resume_problems(kept, *, device, store) -> tuple[str, ...]:
         found.append(BOUNDS_GONE_TEXT.format(bounds[0].name))
     elif bounds[1] is not None and _sha(bounds[0]) != bounds[1]:
         found.append(BOUNDS_CHANGED_TEXT.format(bounds[0].name))
+    else:
+        found += _bounds_refused(bounds[0])
     units = _input(kept, "units")
     if units is not None:
         if not units[0].is_file():

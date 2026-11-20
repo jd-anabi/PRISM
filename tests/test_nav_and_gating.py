@@ -1912,10 +1912,10 @@ def test_what_the_bounds_file_is_is_said_under_its_list(chi, name, reads, store)
     ("k in (2, 2)", "The bounds file cannot be used. The lower limit of k, 2, must be less than its upper limit, 2."),
 ], ids=["no numbers", "crossed", "equal"])
 def test_a_malformed_bounds_file_is_refused_beside_the_list(line, said, tmp_path, store):
-    """The builder takes a line it cannot read as a parameter with no limits, so the page holds the limits a bounds file
-    gives to the rule the limits typed by hand are held to: the first broken is said under the list, as an "Error."
-    that greys the build, and nothing raises. Ticked, the limits typed by hand start from the file, the line it could not
-    read blank, and say so under the tick; another file mends both."""
+    """The page reads the file as it stands and holds the limits it gives to the rule the limits typed by hand are held
+    to, before the builder, which refuses a line it cannot read: the first broken is said under the list, in the page's
+    own words, as an "Error." that greys the build, and nothing raises. Ticked, the limits typed by hand start from the
+    file, the line it could not read blank, and say so under the tick; another file mends both."""
     screen, page = _prior_step()
     master = (Path(page.bounds_picker.base_path) / "master.txt").read_text(encoding="utf-8")
     (tmp_path / "broken.txt").write_text(master.replace("k in (0.01, 5)", line), encoding="utf-8")

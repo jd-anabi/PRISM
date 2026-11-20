@@ -3777,6 +3777,32 @@ def test_recordings_for_another_observation_of_a_narrowed_posterior_are_refused_
     assert inferred[1]["accept"] == Accept(other_observation=True)
 
 
+def test_a_narrowed_posteriors_own_recordings_built_again_pass_and_others_are_refused(store, tmp_path):
+    """The recordings a narrowed posterior's region was drawn around, built again by the real builder, build the very
+    digest their first observation carries, so the observation stage's check before the write lets them through and
+    writes them: a person's own recordings are never refused. The same recordings handed another digest are refused
+    under the consent that answers it, and nothing is written."""
+    import numpy as np
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    cfg = _spont_cfg()
+    count = int(1.0 * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)
+    rng = np.random.default_rng(7)
+    trace = np.sin(np.arange(count) * 0.05) + 0.1 * rng.normal(size=count)
+    spont = tmp_path / "spont.npy"
+    np.save(spont, trace.astype(np.float32))
+    rec = RecordingSet(spont=str(spont), T_obs_s=1.0)
+    first = orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close, store=store)
+    again = orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close, store=store,
+                                                      drawn_around=first.digest)
+    assert again.digest == first.digest and again.id != first.id
+    with pytest.raises(Refusal) as e:
+        orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close, store=store, drawn_around="d" * 16)
+    assert e.value.field == "accept_other_observation", e.value.field
+    assert f"the observation supplied has digest {first.digest}." in str(e.value), str(e.value)
+    assert sorted(s.id for s in store.list("observation")) == sorted((first.id, again.id))
+
+
 def _observation_body() -> dict:
     """An observation record's body at its smallest."""
     return {"mode": "spontaneous", "conditioning": {"width": 50, "forcing_dim": 1}, "x_obs_digest": "0" * 16,
