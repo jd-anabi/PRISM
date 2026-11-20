@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit ce0d6d7f.
+Checked against commit 2d8d2157.
 
 The next full-size training: a posterior of the frequency response on the tier-1 box, 10,000 batches
 of 2,048 simulations, with a network 256 wide and 10 deep, followed by one narrowing round that
@@ -19,9 +19,11 @@ Each decision, with its reason.
 exact time scale: every recorded point is exactly one frame after the last in the cell's own time,
 where each frame once took the nearest whole number of fixed steps
 ([Nondimensionalisation](science.md#nondimensionalisation),
-[The record clock](architecture.md#the-record-clock)). A simulation set's identity names the clock it
-was made with, so the finished set of the last full-size training, made at the earlier fixed step,
-is not continued, and nothing of it is read again. It stays on disk; Records lists it with the other
+[The record clock](architecture.md#the-record-clock)). Every step is the corrected one, which
+removes nearly all the error the plain step left on stiff cells, at about 1.7 times its card time per
+step. A simulation set's identity names the clock it was made with and the step that integrates it,
+so the finished set of the last full-size training, made at the earlier fixed step, is not
+continued, and nothing of it is read again. It stays on disk; Records lists it with the other
 simulation sets.
 
 **The tier-1 box, `master_tier1.txt`.** The master box samples the gating-spring energy twice, and
@@ -111,23 +113,28 @@ general rule). Turning the saving of the simulations off would also stay clear o
 These figures move whenever the simulator's step or its rule for taking a step changes, and they are
 kept in this one place. At this commit:
 
-- **Generation**, 10,000 batches of 2,048 at a memory limit of 6 GiB: about 29 card hours, about
-  10 s a batch. An estimate, not yet measured on this code: the solver's steps counted over a fresh
-  draw of 10,000 batches, a count that gives the last full-size set's measured 26.85 hours at the
-  earlier fixed step. A narrowing round of 10,000 batches simulates at about the same pace.
-- **A full-size calibration**, 2,000 test datasets at 200 operating points: under an hour (43
-  minutes, measured at the earlier fixed step). Each repeat of a calibration at a fixed number of
-  driven recordings costs about as much, so the four calibrations at fixed numbers (2, 6 and 12
-  driven recordings, and mixed), each of ten repeats, take about 30 hours.
-- **The audit of unusable driven recordings**, 100 batches of 32: about six minutes.
+- **Generation**, 10,000 batches of 2,048 at a memory limit of 6 GiB: about 46 card hours, about
+  17 s a batch. An estimate, not yet measured on a full batch of this code: the solver's steps counted
+  over a fresh draw of 10,000 batches, a count that gives the last full-size set's measured
+  26.85 hours at the earlier fixed step (29 hours at the clock's step), with the solver's share of a
+  batch's card time made 1.67 times longer, the corrected step's measured cost on the card (13.9
+  against 8.3 µs a step at a batch of 2,048). A narrowing round of 10,000 batches simulates at about
+  the same pace.
+- **A full-size calibration**, 2,000 test datasets at 200 operating points: a little over an hour
+  (43 minutes measured at the earlier fixed step, about 1.6 times that with every step corrected).
+  Each repeat of a calibration at a fixed number of driven recordings costs about as much, so the four
+  calibrations at fixed numbers (2, 6 and 12 driven recordings, and mixed), each of ten repeats, take
+  about 48 hours.
+- **The audit of unusable driven recordings**, 100 batches of 32: about 13 minutes (measured on this
+  code).
 - **The set on disk**: about 10.3 GiB. The run's full text states the size and the free space when
   the set starts.
 - **The last full-size set's readings**, at the earlier fixed step: 0.15 % failed simulations, and
   0.083 % of its summary elements clipped to their percentiles.
-- **The rest of the programme**: about 95 hours, the two generations, the calibrations and a few
-  hours for the inferences and the other checks. Each fit may then take about 290 hours,
-  (672 − 95) ÷ 2: about 2.2 hours an epoch over 130 epochs, which the timing of a short fit reaches
-  at about 16 s an epoch (2.2 hours ÷ 500).
+- **The rest of the programme**: about 147 hours, the two generations, the calibrations and a few
+  hours for the inferences and the other checks. Each fit may then take about 260 hours,
+  (672 − 147) ÷ 2: about 2.0 hours an epoch over 130 epochs, which the timing of a short fit reaches
+  at about 14.5 s an epoch (2.0 hours ÷ 500).
 
 ## Pre-flight
 
@@ -581,9 +588,9 @@ moving an overlapping shard aside, are made in Explorer, as the engine's message
 The code at this commit is ready for this run from the window: the plan holds every setting it needs,
 the twelve checks hold the pre-flight's readings and the six gates, the run's page watches the
 simulation, the comparison and the fit, the fit is saved after every epoch, and a kept training or
-round resumes from the window. The simulator integrates each cell at its exact time scale, so the
-finished simulation set of the last full-size training no longer matches, and this run simulates its
-set again from the start. A long run is started by its owner, from the window.
+round resumes from the window. The simulator integrates each cell at its exact time scale, with
+every step corrected, so the finished simulation set of the last full-size training no longer
+matches, and this run simulates its set again from the start. A long run is started by its owner, from the window.
 
 It is not ready for an inference on bench recordings: PRISM reads every recording as sampled exactly
 once a millisecond, and a bench recording is to be read at its camera's own measured frame interval

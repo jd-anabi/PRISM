@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit 98882115.
+Checked against commit 2d8d2157.
 
 ## Nondimensionalisation
 
@@ -43,7 +43,8 @@ frequencies is in
 `SimConfig.dt_nd_min`, the camera frame interval divided by the upper bound of `t_scale`'s box:
 1 ms / 40 = 0.025 on the master boxes. It is the step the prior's stability screen integrates every
 parameter set at, so no simulation of a screened set takes a coarser one: an explicit
-Euler–Maruyama step coarser than the screen's can blow up on a set the prior admitted. This is a
+Euler–Maruyama step coarser than the screen's can blow up on a set the prior admitted (the corrected
+step every simulation takes, below, is stable wherever the screen's step is). This is a
 sampling constraint wearing an integration constraint's clothes. Widening `t_scale`'s box from 40
 to 80 would silently halve every step, double every simulation's cost and change its accuracy, with
 no change to any physics.
@@ -76,13 +77,59 @@ records a cell at the bench:
   then is kept but never continued or trained on as one of today's
   ([The artifact store](architecture.md#the-artifact-store)).
 
-**The step's error, measured.** The recorded step now changes with t_scale, which this page once
-warned against: an integration error that is a function of t_scale, an inferred parameter, is a
-signal the network can learn, present in training and absent from real data. It was measured, before
-the clock was built, by a paired test: nine cells (eight parameter sets from a training set's rows
-and the master tier-1 cell), 64 rows each, 3-s recordings at twelve time scales from 3.73 to 40 ms,
-each simulated at h and at a quarter of h on one Brownian path, each feature's difference in units
-of its spread over a training set. A difference larger than 0.05 of a spread counts as a bias.
+**The corrected step.** Every simulation that makes a recording takes the stochastic Heun step
+(`core.Solvers.sdeint.Solver.heun`;
+[The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility)),
+through the settling as through the recorded part: the plain Euler–Maruyama step as a prediction,
+then the drift and the noise evaluated again where it lands, under the drive at the step's end, and
+the two averaged on the same random increment. Its prediction is the plain step bit for bit, and it
+draws the same random numbers. It corrects the drift to second order: with the noise off its error
+falls fourfold each time the step halves, against twofold for the plain step. Averaging the noise
+integrates the same equation as the plain step only where no variable's noise depends on that
+variable itself (the Itô–Stratonovich correction, half of g ∂g/∂x in each component, is then zero),
+which the Nadrowski cell meets (the channel's noise depends on the bundle and the motor, never on the
+channel's own variable) and the Hopf model meets (its noise is constant). A model of your own takes
+the corrected step unless the noise strength D of a variable names that variable itself; such a
+model keeps the plain Euler–Maruyama step, because averaging over the step a noise that depends on
+its own variable would integrate another equation than the one typed. BP keeps the plain step too.
+The prior's stability screen keeps the plain step: the corrected step's stable region contains the
+plain step's, so every parameter set the screen admits stays stable, and the prior stays as it was.
+On the card a corrected step costs about 1.67 times a plain one (13.9 against 8.3 µs at a batch of
+2,048), and a 10,000-batch training set about 46 card hours instead of 29
+([The figures that depend on the simulator's step](retrain.md#the-figures-that-depend-on-the-simulators-step)).
+
+**The step's error, measured.** The recorded step changes with t_scale, which this page once warned
+against: an integration error that is a function of t_scale, an inferred parameter, is a signal the
+network can learn, present in training and absent from real data. It was measured by a paired test:
+nine cells (eight parameter sets from a training set's rows and the master tier-1 cell), 64 rows each,
+3-s recordings at twelve time scales from 3.73 to 40 ms, each against a reference 16 times finer on
+one Brownian path, its settling 16 times finer too, each feature's difference in units of its spread
+over a training set. A difference larger than 0.05 of a spread counts as a bias.
+
+- **The corrected step leaves about what the yardstick itself can see.** 16 of the 360 (feature,
+  time scale) pairs of the passive features and 12 of the 132 forced-response pairs cross the bound.
+  Six of the sixteen are `C5_env_skew`, whose per-row differences are heavy-tailed (median about 0.01
+  to 0.05 of a spread, 99th percentile 7 to 11); five are rows whose valid flag differs between the
+  two runs (`C6_log_slowenv_corrtime` three times, `B1_log_Q` and `E2_log_h3` once each), and over the
+  rows whose flag agrees each of those reads within 0.006 of a spread of zero; the other five
+  (`C4_mode_ratio` four times, `F2_corr_omega_A2` once) lie between 0.056 and 0.071, each interval
+  reaching zero. The forced twelve lie between 0.050 and 0.084, of either sign. The stiff cell
+  (beta 90) reads 0.08 ± 0.31 of a spread in `F2_corr_omega_A2` at 30 ms, the forced response's
+  phase lag is at worst −0.09 ± 0.11 rad, and the jump across a whole r is under 0.13 of a spread
+  but for `C5_env_skew`'s noise.
+- **The plain step at the same h** leaves 81 of the 360 passive pairs and 27 of the 132 forced pairs
+  biased against the same reference: `F2_corr_omega_A2` up to 0.59 of a spread at 30 ms,
+  `B6_low_freq_frac` −0.27, `C3_env_onset` 0.27, `B7_log_sec_freq_ratio` 0.22, `C4_mode_ratio` 0.20,
+  up to 3.1 spreads in the stiff cell, and the forced response's phase lagging by up to a third of a
+  radian at the fastest drives on the slowest cells.
+- **The settling matters too.** Settled on the plain step at `dt_nd_min`, even the reference differs
+  from one settled 16 times finer in 14 of the 360 passive and 17 of the 132 forced pairs: a
+  recording that starts from the plain step's settled state relaxes from it in its first frames. A
+  settling on the plain step and a recording on the corrected step leave 19 and 20 pairs biased
+  against the converged reference, against the corrected settling's 16 and 12.
+
+**The plain step's error, as first measured** (each against a reference whose settling took the plain
+step, at h and at a quarter of h on one Brownian path):
 
 - **The chi block does not see the step.** log |χ| moved by at most 0.002 of its spread at every
   probe and time scale; the phase's sine carried a small, consistent lag, at most 0.016 of its spread
@@ -118,10 +165,12 @@ of its spread over a training set. A difference larger than 0.05 of a spread cou
   T_obs) training covers shrinks to 0.86 and 0.69 of the old clock's.
 - **One band converges at none of these steps.** `E2_log_h3` at 3.73 ms reads about a third of a
   spread off the reference at every step tried, the old one included: one 156-Hz cell, whose third
-  harmonic sits at 0.93 of the frames' Nyquist frequency, carries it.
+  harmonic sits at 0.93 of the frames' Nyquist frequency, carries it. It is the rows whose third
+  harmonic counts as measurable that differ: over the rows whose valid flag agrees with the
+  reference's, the difference is within 0.01 of a spread, under either step.
 
-The recorded step is h = Δ / s, with no finer step and no setting for it. A scheme that corrects for
-the step is an open question ([Open questions](#open-questions)).
+The recorded step is h = Δ / s, with no finer step and no setting for it, and every step is the
+corrected one wherever the model admits it.
 
 ## Conditioning features
 
@@ -419,6 +468,12 @@ ceiling shortens; the master cell and its tier-1 twin are the same cell declared
   0.015 and 65 over the whole recording. The points a ceiling shortens change down the table, which
   is why its rows are not one population; each point's own readings fall steadily. The band and the
   drive hold for the cell on the record clock as they did on the old one.
+- **The corrected step changes none of it.** Measured again with every step corrected (20 November
+  2026), the wall still lies above 128 cycles for both cells, and at 64 cycles the worst spread,
+  signal and phase scatter read 0.027, 38.5 and 0.023 on the master cell and 0.026, 38.6 and 0.024 on
+  its twin, against the table's 0.023, 38.6 and 0.028 and 0.022, 38.4 and 0.022: within the runs'
+  own noise, about a tenth of a spread estimated from 48 runs. The band and the drive hold, and the
+  weakest drive that captures the cell is still 0.15.
 - **The old clock's wall was its own.** The last two rows are the same re-lock measurement on the
   old clock (in-band probes only, 48 runs), where the spread climbed from 0.06 at 20 cycles to 0.46
   at 36 and the ceiling was 20, below the climb. The climb is what that clock's 2.6 % frequency
@@ -560,9 +615,11 @@ The two boxes share the non-dimensional block, the `t_scale` range and the recor
 new prior fit can shift the fraction, as any rebuild of a prior can; how much two builds differ has
 not been measured, and up to about 2 points is not excluded. Every reading behind 37 % was also made
 on priors of the older construction, before the prior's walk was made even and confined to the box
-([The prior](#the-prior)), so the retrain's own audit is the first reading on the new construction.
-The older walk's clumps sat on census points spread evenly over the box, so no systematic shift is
-expected, but that is reasoning, not a measurement.
+([The prior](#the-prior)). The older walk's clumps sat on census points spread evenly over the box,
+so no systematic shift was expected, and the readings made on the new construction bear that out:
+the audit of the retrain's prior over 100 batches read 37.9 % on 1 October 2026, on the clock of the
+time, 36.8 % on 18 November 2026, on the record clock, and 36.8 % again on 20 November 2026, with
+every step corrected.
 
 The retrain checks the fraction twice ([Pre-flight](retrain.md#pre-flight) and
 [Gates](retrain.md#gates) in the runbook):
@@ -577,8 +634,9 @@ The retrain checks the fraction twice ([Pre-flight](retrain.md#pre-flight) and
   reading, not against 37 %. Both read the same prior, so neither the reference's uncertainty nor the
   prior's build enters, and the full run's own spread over 10,000 batches is far smaller: the
   difference spreads as the audit does, about 1.2 to 1.6 points. Within 3 points the fit goes on;
-  between 3 and 5 it is looked at more closely; beyond 5 the run stops, its simulation cache
-  complete, so the fit can be run later without simulating again.
+  between 3 and 5 it is looked at more closely; beyond 5 the window advises a stop and asks for an
+  answer, but never stops the fit itself. A stop then keeps the simulation set complete, so the fit
+  can be run again later without simulating.
 
 The posterior predictive check at inference masks about 80 %, by design, because it reads the
 posterior rather than the probe machinery. It drives every posterior sample at the observation's
@@ -1157,7 +1215,8 @@ calibration or informativeness exists for it, and its artifacts are gone too.
 
 ## The solver's physics check
 
-The solver replays its Euler–Maruyama step loop from captured CUDA graphs by default
+The solver replays its step loop, the plain step's and the corrected step's, from captured CUDA graphs
+by default
 (`core.config.SOLVER_CUDA_GRAPHS`;
 [The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility)).
 Measured in August 2026 on the card (an RTX 5070 Ti, a batch of 2,048, 100,000 steps), it ran
@@ -1165,16 +1224,19 @@ Measured in August 2026 on the card (an RTX 5070 Ti, a batch of 2,048, 100,000 s
 trusting it with the physics:
 
 - **A bitwise test, with the noise off.** `test_the_cuda_graph_step_matches_the_eager_step_bitwise`
-  (gpu-marked) integrates a Nadrowski model with every noise channel zeroed and a time-varying drive,
-  over two full graph chunks and a short eager tail, and requires the graphed and eager trajectories
+  and, for the corrected step, `test_the_corrected_steps_cuda_graph_matches_its_eager_loop_bitwise`
+  (both gpu-marked) integrate a Nadrowski model with every noise channel zeroed and a time-varying drive,
+  over two full graph chunks and a short eager tail, and require the graphed and eager trajectories
   to be equal bit for bit. With noise live the two paths draw their random numbers in a different
   order and can only be compared statistically, so the bitwise test covers only a noise-zeroed model.
-- **A statistical test, with the noise live.** In August 2026: graphs on against graphs off, 3,072
-  rows per arm, both random streams seeded. Ω₀, the quantity that drives chi masking, was
-  indistinguishable: a two-sample z of −0.01, and a KS D of 0.0020 against a 5 % critical value of
-  0.0347. The traces' mean and standard deviation agreed to 0.05 % and 0.025 % of one standard
-  deviation. It is the only evidence with noise live that the default solver did not change the
-  simulated physics.
+- **A statistical test, with the noise live.** In August 2026, for the plain step: graphs on against
+  graphs off, 3,072 rows per arm, both random streams seeded. Ω₀, the quantity that drives chi
+  masking, was indistinguishable: a two-sample z of −0.01, and a KS D of 0.0020 against a 5 % critical
+  value of 0.0347. The traces' mean and standard deviation agreed to 0.05 % and 0.025 % of one
+  standard deviation. It is the only evidence with noise live that the graphed solver did not change
+  the simulated physics. For the corrected step, its compiled form on the card was checked step by
+  step against the same rule written apart, from the same states with the same draws: 49 of 50 steps
+  bit for bit, the 50th within one unit in the last place.
 
 **Batch count against width.** The solver's time is set by its sequential steps, not by its rows, so
 a batch's width is nearly free in simulation time
@@ -1289,14 +1351,14 @@ drawn from it live in. The honest test of a change is to build the rotation both
 operating points and compare the eigenbases.
 
 **The step the dynamics need.** The solver's largest non-dimensional step comes from a prior bound,
-not from the dynamics, and on cells with a stiff gating nonlinearity the recorded step leaves a bias
-of up to about half a spread in several passive features and a lag in the forced response's phase
-([Nondimensionalisation](#nondimensionalisation) has the measurement). Halving the step and halving
-it again shrinks the bias slowly, and under the per-batch cap shortens the recordings training draws.
-A scheme that corrects for the step, a higher-order one or one that integrates the stiff gating term
-exactly, might remove it at little cost; the same paired test, a candidate against a reference
-sixteen times finer on one Brownian path, would show whether it does. The band of `E2_log_h3` near
-the frames' Nyquist frequency needs a far finer step than any tried.
+not from the dynamics. On cells with a stiff gating nonlinearity the plain step left a bias of up to
+about half a spread in several passive features and a lag in the forced response's phase; the
+corrected step removes nearly all of it at the same step
+([Nondimensionalisation](#nondimensionalisation) has the measurement). Two things stay open. Which
+rows have a measurable third harmonic (`E2_log_h3`'s valid flag, near the frames' Nyquist frequency
+at the shortest time scales) is not settled at the clock's step under either rule. And a model of
+your own whose noise depends on its own variable keeps the plain step: the corrected step would serve
+it once its drift carries the correction −½ ∂D/∂x for that variable, which nobody has measured.
 
 **Two chi measurements left open** ([Chi probe design](#chi-probe-design)):
 

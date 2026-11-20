@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 38d60981.
+Checked against commit 2d8d2157.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -93,9 +93,10 @@ and the session guards).
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
     present, the gpu-marked tests run on it inside every fast gate: four in `tests/test_gpu_paths.py`
     (an inference on the card, a training stopped on it and resumed, and a kept training and a kept
-    narrowing round each resumed through the window's own call, all tiny), seven in
+    narrowing round each resumed through the window's own call, all tiny), nine in
     `tests/test_user_sbi.py` (among them that two batches at different steps share one graph
-    capture) and one in `tests/test_diagnostics.py`;
+    capture, and that the corrected step's graph equals its eager loop) and one in
+    `tests/test_diagnostics.py`;
   - `display`: needs a real screen, and is skipped offscreen. In PowerShell,
     `$env:QT_QPA_PLATFORM = "windows"; python -m pytest -m display; Remove-Item Env:QT_QPA_PLATFORM`
     runs these on the real screen, since the root `conftest.py` only defaults the variable; they
@@ -231,6 +232,10 @@ and the session guards).
   - `tests/test_record_clock.py::test_every_simulation_in_core_hands_gen_obs_a_clock_or_a_step`: every
     `gen_obs` call under `core/` names the run's record clock or its step
     ([The record clock](architecture.md#the-record-clock));
+  - `tests/test_user_sbi.py::test_each_built_in_model_takes_the_step_its_noise_admits_and_the_screen_the_plain_one`
+    (in part): every call of the simulator under `core/` hands it a plan, but the prior's stability
+    screens, which keep the plain step
+    ([The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility));
   - `tests/test_docs.py`: every relative link in this guide and the root `README.md` resolves, every
     page opens with its commit stamp, and the command-line page names every subcommand and flag, with
     each default as its `--help` states it.
@@ -503,9 +508,10 @@ Then delete the scratch folder, as the recipe says.
 - **The step's accuracy.** `tests/test_record_clock.py` pins the record clock's arithmetic: the
   stride and the recorded step at every time scale, the transient at the certified step, the drive's
   origin at the first frame, a probe and a forced drive read at their known phase, the schedule's
-  filter and the batch loop agreeing. No suite measures how far the Euler step's own error moves a
-  feature; that was measured once, by hand, and is stated in
-  [Nondimensionalisation](science.md#nondimensionalisation).
+  filter and the batch loop agreeing. `tests/test_user_sbi.py` pins the corrected step's order two
+  with the noise off, its prediction equal to the plain step bit for bit, and its drive read at both
+  ends of every step across seams. No suite measures how far either step's own error moves a feature;
+  that was measured by hand, and is stated in [Nondimensionalisation](science.md#nondimensionalisation).
 - **The window on a screen.** Offscreen tests cannot see layout, painting or a native dialog. Window
   features are checked by hand on a real screen, and the display-marked tests run only with
   `QT_QPA_PLATFORM=windows`.

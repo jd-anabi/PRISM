@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit 9e7d8c49.
+Checked against commit 2d8d2157.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, which bounds file a cell is checked against, the three observation modes and
@@ -544,6 +544,11 @@ Full settings…) with Open model builder, or with Edit on a saved model
 Training, the prior's stability sweep and the Fisher rotation start a user model from the initial
 conditions its definition declares; a simulated observation starts it from its cell file's
 (`core.registry`). So an edit to the cell file's initial conditions does not reach training.
+
+A model of your own is simulated with the corrected step unless the noise strength D of a variable
+names that variable itself (D of `x` written with `x` in it); such a model keeps the plain
+Euler–Maruyama step, and nothing in the window says so
+([Nondimensionalisation](science.md#nondimensionalisation) gives the reason).
 
 The rules the builder keeps (`core.Models.user_model.parse_user_model`,
 `core.Helpers.model_store.save_user_model`), which a hand edit can break:

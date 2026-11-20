@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit eff0bb70.
+Checked against commit 2d8d2157.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -122,24 +122,28 @@ when it holds nothing but a docstring.
 ### `core/Simulator`, `core/Solvers` and `core/Models`
 
 - `Simulator/simulator.py`: `Simulator`, which integrates a batch segment by segment, each segment
-  at the step its plan hands it, and picks `euler` or `euler_compiled`, and `SimulationError`.
+  at the step its plan hands it, and picks the rule (`heun` or `heun_compiled` for a model that admits
+  the corrected step and is handed a plan, `euler` or `euler_compiled` otherwise), and `SimulationError`.
 - `Simulator/nadrowski_simulator.py`: binds the Nadrowski parameter columns, by position, to
   `NadrowskiModel`.
 - `Simulator/hopf_simulator.py`: the same for `HopfModel`.
 - `Simulator/bp_simulator.py`: the same for the BP model, choosing the full or the steady-state form
   by the number of parameters.
 - `Simulator/user_simulator.py`: the same for a user model.
-- `Solvers/sdeint.py`: the Itô Euler–Maruyama solver: a plain Python loop (`euler`), and a
-  TorchScript step (`euler_compiled`) replayed from CUDA graphs where it can be; both take the step
-  from their caller (`step_tensors`).
-- `Models/nadrowski_model.py`: the Nadrowski model's drift and noise, and its TorchScript step
-  (`compiled_step`).
+- `Solvers/sdeint.py`: the solver, two rules each in two forms: the plain Itô Euler–Maruyama step
+  (`euler`, a Python loop, and `euler_compiled`, a TorchScript step replayed from CUDA graphs where it
+  can be) and the corrected step, stochastic Heun (`heun` and `heun_compiled`, the same two forms); all
+  take the step from their caller (`step_tensors`).
+- `Models/nadrowski_model.py`: the Nadrowski model's drift and noise, its two TorchScript steps
+  (`compiled_step`, `compiled_corrected_step`) and its declaration that it admits the corrected step
+  (`admits_corrected_step`).
 - `Models/hopf_model.py`: the same for the Hopf normal form.
 - `Models/bp_model.py`: the BP model in full; it has no TorchScript step, so BP runs the plain Python
   loop on every device.
 - `Models/bp_model_steady.py`: the BP model with its fourth time constant at zero.
 - `Models/user_model.py`: a user model: its equations parsed with sympy into a torch model that meets
-  the solver's contract.
+  the solver's contract, its two generated TorchScript steps, and whether it admits the corrected step
+  (`self_dependent_noise`).
 
 ### `core/artifacts`
 
@@ -652,14 +656,14 @@ is how the store is built, in `core/artifacts/`.
   warns, if any lie past the count. `load_rows` refuses two shards whose ranges overlap, naming both
   and the folder to move the stray one into.
 - **The cache's identity** (`core.artifacts.identity.SimulationIdentity`, `FORMAT` =
-  `"training-rows/4"`) names its directory by a 12-character digest of these fields: the format; the
+  `"training-rows/5"`) names its directory by a 12-character digest of these fields: the format; the
   model; the prior's fingerprint; the observation mode; the parameter keys and both boxes; the log-box
   parameters; the rotation switch; the rows per batch and the batch count; the time grid's settings;
   whether the box declares a drive; the summary flags and `feature_set_version`; in chi mode the
   layout, slots, channel width, drive, band and lock-in ceiling; the device type and number type; the
   truncation region, None when the run is amortized; `units_sha256`, the units declaration's
-  fingerprint; and `record_clock`, the clock its rows are simulated on (`core.SBI.clock.RECORD_CLOCK`,
-  `"frame-exact/1"`).
+  fingerprint; and `record_clock`, the clock its rows are simulated on and the step that integrates it
+  (`core.SBI.clock.RECORD_CLOCK`, `"frame-exact/2"`).
   - Bumping `statistics.FEATURE_SET_VERSION` re-keys every cache: a changed feature definition behind
     an unchanged label would otherwise resume onto rows that meant something else.
   - The record clock moved the format from `"training-rows/3"` to `"training-rows/4"`. Rows made on
@@ -668,6 +672,12 @@ is how the store is built, in `core/artifacts/`.
     rows. The format and the clock move together, so a set made before differs in two fields: it is
     never one setting away, never resumed, and the window's list of saved sets says it was "Made by
     another version of PRISM" (`core.gui.fields.IDENTITY_ROWS`). It is kept as it is.
+  - The corrected step moved the format from `"training-rows/4"` to `"training-rows/5"`, and the
+    record clock's name from `"frame-exact/1"` to `"frame-exact/2"`: rows made before took the plain
+    step at every step, where a row now takes the corrected step wherever its model admits it
+    ([The solver, CUDA graphs and reproducibility](#the-solver-cuda-graphs-and-reproducibility)), so
+    the same settings simulate other rows. The two move together, for the reason above, and a
+    posterior trained on rows of `"frame-exact/1"` is refused at load, as one of any other clock is.
   - The prior's fit (`prior_fingerprint`) is part of the identity because a resume under another
     prior would splice rows drawn from two priors into one training set, silently changing the
     proposal the flow trains against.
@@ -955,24 +965,46 @@ stage without freezing, shows its output and stops it.
 
 ## The solver, CUDA graphs and reproducibility
 
-- **The solver.** `core.Solvers.sdeint` integrates the stochastic differential equations by Itô
-  Euler–Maruyama with diagonal noise. `Simulator` integrates a batch one time segment at a time and
-  chooses `euler_compiled` when the device is CUDA and the model exposes a TorchScript
-  `compiled_step` (Nadrowski, Hopf, and a user model whose step could be generated; never BP), and
-  the plain Python loop, `euler`, otherwise.
+- **The solver.** `core.Solvers.sdeint` integrates the stochastic differential equations with
+  diagonal noise by one of two rules:
+  - **the plain step**, Itô Euler–Maruyama: x′ = x + f(x, Fᵢ) dt + g(x) dW;
+  - **the corrected step**, stochastic Heun: the plain step as a prediction x*, then
+    x′ = x + (f(x, Fᵢ) + f(x*, Fᵢ₊₁)) dt / 2 + (g(x) + g(x*)) dW / 2, on the same increment. Its
+    prediction is the plain step bit for bit (on the CPU), it draws the same one normal per variable
+    per step, and it reads the drive at the step's start and at its end. It corrects the drift to second
+    order, and its stable region contains the plain step's.
+- **Which rule.** `Simulator.simulate` handed a plan, as every simulated row is, takes the corrected
+  step for a model that declares `admits_corrected_step` and the plain step for any other; handed none,
+  as the prior's stability screens call it, it takes the plain step for every model, so the screen and
+  the prior stay as they were. A model admits the corrected step when no variable's noise depends on
+  that variable itself: then the Itô–Stratonovich correction, half of g ∂g/∂x in each component, is
+  zero, and averaging the noise over the step integrates the same equation as the plain step. The
+  Nadrowski model (its channel's noise depends on the bundle and the motor only) and the Hopf model
+  (constant noise) declare it, and a test checks each declaration against the model's noise by
+  autograd. BP declares nothing, and keeps the plain step. A user model admits it unless some
+  variable's D names that variable itself (`CompiledUserModel.self_dependent_noise`, read off the
+  typed expressions when the model is parsed); one that does keeps the plain step.
+- **Which form.** `Simulator` takes the TorchScript form of its rule (`euler_compiled` with the model's
+  `compiled_step`, `heun_compiled` with its `compiled_corrected_step`) when the device is CUDA and the
+  model exposes it (Nadrowski, Hopf, and a user model whose steps could be generated; never BP), and
+  the Python loop (`euler`, `heun`) otherwise.
 - **The caller hands the step; the solver never derives one from times.** `Simulator.simulate` takes
   a plan, `[(a, b, dt), ...]`: segment k takes b − a steps of dt from the state at index a, the
   segments contiguous over the grid, each at its own constant step (the record clock's plan is the
   transient at `dt_nd_min`, then the recorded segments at the recorded step;
-  [The record clock](#the-record-clock)). `euler` and `euler_compiled` take the step as an argument,
+  [The record clock](#the-record-clock)). Every solver method takes the step as an argument,
   and `step_tensors` makes it and its square root `(B, 1)` tensors of the state's dtype, one value per
   row, each computed in double and rounded once, so a step given as a float and the same step given as
   a tensor give the same numbers. Only `Simulator.simulate` handed no plan, as the prior's stability
   screens call it, still reads a step from the grid: once, from its first interval, and uses it in
   every segment (`legacy_plan`).
-- **CUDA graphs.** `euler_compiled` captures `SOLVER_GRAPH_CHUNK` (50) Euler steps into a CUDA graph
-  and replays it; the last steps that do not fill a chunk run the TorchScript step without a graph,
-  and so does the whole of a call shorter than one chunk. `config.SOLVER_CUDA_GRAPHS` turns the
+- **CUDA graphs.** `euler_compiled` and `heun_compiled` capture `SOLVER_GRAPH_CHUNK` (50) steps into a
+  CUDA graph and replay it; the last steps that do not fill a chunk run the TorchScript step without a
+  graph, and so does the whole of a call shorter than one chunk. The corrected step's capture holds one
+  drive point more than its steps, step j reading points j and j + 1, and each replay is filled with
+  one point more than it integrates
+  (`tests/test_user_sbi.py::test_the_corrected_steps_cuda_graph_matches_its_eager_loop_bitwise`,
+  gpu-marked). `config.SOLVER_CUDA_GRAPHS` turns the
   graphs off, and is read at each call. The reason: TorchScript removes Python overhead but not
   kernel-launch overhead, and launch overhead was 88 % of solver time. Per step, at a batch of 2,048,
   54.87 µs became 6.65 µs (8.25×); end to end, a simulator call at a batch of 2,048 and 100,000
@@ -1014,10 +1046,14 @@ stage without freezing, shows its output and stops it.
   (`test_solver_failure_raises_instead_of_killing_the_process`). A solver failure is raised as a
   `SimulationError` chained to its cause.
 - **The segment seam.** Segment k starts from the state at the previous segment's last index and is
-  handed the drive from that index; it integrates its own steps and writes only its new states. So
-  index g holds the state after g steps in every segment, drive index m serves step m → m+1, and a run
-  cut into segments equals one long run, bit for bit on the CPU with the same draws in the same order
-  (`tests/test_user_sbi.py::test_a_segmented_run_equals_one_long_run_bitwise`). Before the record
+  handed the drive from that index through its last, one point more than its steps; it integrates its
+  own steps and writes only its new states. So index g holds the state after g steps in every segment,
+  the plain step from g reads drive index g, the corrected step from g reads drive indices g and g + 1
+  (the drive at a seam ends one segment's last step and starts the next one's first), and a run cut
+  into segments equals one long run, bit for bit on the CPU with the same draws in the same order
+  (`tests/test_user_sbi.py::test_a_segmented_run_equals_one_long_run_bitwise`,
+  `::test_the_corrected_step_reads_the_drive_at_both_ends_across_seams`). A corrected run handed a
+  drive with fewer points than its grid is refused before it integrates. Before the record
   clock every seam repeated a sample, and every segment after the first took a step read off its own
   float32 slice of the grid, up to 0.4 % away from the first segment's.
 - **Seeding.** `core.rng.seeded(seed, device)` seeds torch and numpy for a block and restores both
@@ -1075,9 +1111,11 @@ predictive check's bins, the Fisher rotation, the identifiability checks and the
   loop's `frame_clock` does; the probe checks' geometry (`core.diagnostics.probe_math`) reads the same
   clock; and the bench's out-of-distribution warning names the shortest time scale the filter admits
   for a recording's length (`shortest_trained_t_scale`).
-- **`RECORD_CLOCK`** (`"frame-exact/1"`) is recorded in the simulation set's identity and in a
-  posterior's and an observation's conditioning block ([The artifact store](#the-artifact-store)). A
-  change to what a row holds under this clock takes a new name, and the format with it.
+- **`RECORD_CLOCK`** (`"frame-exact/2"`) names this clock and the step that integrates it, and is
+  recorded in the simulation set's identity and in a posterior's and an observation's conditioning
+  block ([The artifact store](#the-artifact-store)). A change to what a row holds under this clock
+  takes a new name, and the format with it: `"frame-exact/1"` was this clock with the plain step at
+  every step.
 
 ## Memory planning and out-of-memory recovery
 

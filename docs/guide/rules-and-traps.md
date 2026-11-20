@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit c2422d9e.
+Checked against commit 2d8d2157.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -41,18 +41,21 @@ silently.
   `var_idx=0`, so that only that variable is copied; the identifiability Jacobians take row 0 of the
   full result; and the prior screens index row 0 of what
   `Simulator.simulate` returns. A user model's first variable is its observable.
-- The solver is Itô Euler–Maruyama and takes its step from its caller; it never derives one from
-  times. A run on a recording's frames hands `Simulator.simulate` the record clock's plan, the
-  transient at `dt_nd_min` and the recorded part at its own step, and `core.SBI.pipeline.gen_obs`
-  refuses a call that names neither a clock nor a step, so a step read off the time grid cannot slip
-  back in. Only the prior's stability screens, which hand no plan, read the step once from the grid's
-  first interval
+- The solver takes its step from its caller; it never derives one from times. A run on a recording's
+  frames hands `Simulator.simulate` the record clock's plan, the transient at `dt_nd_min` and the
+  recorded part at its own step, and `core.SBI.pipeline.gen_obs` refuses a call that names neither a
+  clock nor a step, so a step read off the time grid cannot slip back in. Handed a plan, it takes the
+  corrected step (stochastic Heun) for a model that declares `admits_corrected_step` and the plain Itô
+  Euler–Maruyama step for any other; a new model, or a model of your own whose noise for a variable
+  names that variable, keeps the plain step. Only the prior's stability screens, which hand no plan,
+  take the plain step for every model and read the step once from the grid's first interval
   ([The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility),
   [The record clock](architecture.md#the-record-clock)).
-- On CUDA a model that has a TorchScript `compiled_step` takes the compiled path
-  (`sdeint.Solver.euler_compiled`), which never calls `f`: it passes `compiled_params()` into the
-  step by position, so that tuple's order is load-bearing and a new parameter is only ever appended
-  (`NadrowskiModel.compiled_params`). A reordering binds parameters to the wrong names with no error,
+- On CUDA a model that has a TorchScript `compiled_step` (and, for the corrected step,
+  `compiled_corrected_step`) takes the compiled path (`sdeint.Solver.euler_compiled`,
+  `heun_compiled`), which never calls `f`: it passes `compiled_params()` into the step by position,
+  the same tuple into both steps, so that tuple's order is load-bearing and a new parameter is only
+  ever appended (`NadrowskiModel.compiled_params`). A reordering binds parameters to the wrong names with no error,
   and the CPU suites, which run the plain loop, never see it.
 
 **The force-channel rule.** `core.forcing.n_force_channels` is the one answer to how wide a drive
