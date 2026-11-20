@@ -148,7 +148,7 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
             f"({cfg.chi_k_pad}); got {int(chi_k_fixed)}. A calibration stratum cannot ask for more "
             f"probes than the network has slots, and 0 probes is an all-masked observation.",
             field="chi_k_fixed")
-    orch._assert_prior_used_matches_posterior(posterior.posterior, prior.prior, "SBC")
+    orch.assert_prior_used_matches_posterior(posterior.posterior, prior.prior, "SBC")
 
     labels = list(cfg.params_dict) + list(cfg.rescale_params)
     # Keys reported as assumed inputs: they stay in the table, the figure, the records and the rank

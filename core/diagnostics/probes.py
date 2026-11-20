@@ -163,7 +163,7 @@ def _what(key: str) -> str:
     return what[0].upper() + what[1:]
 
 
-def _configured(cfg) -> dict:
+def configured_chi_settings(cfg) -> dict:
     """The configured chi settings a check judged, as its record states them: the drive, the band,
     the slot count, the cycle floor and ceiling, and the probe count an observation supplies."""
     from core import config
@@ -595,7 +595,7 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
     configured_cap = float(cfg.chi_max_cycles)
     caps = sorted(set(cycle_caps or ()) | {configured_cap})
     band = tuple(float(v) for v in cfg.chi_freq_bounds)
-    configured = _configured(cfg)
+    configured = configured_chi_settings(cfg)
     settings = {"lengths": lengths, "multipliers": multipliers, "drives": drives, "repeats": repeats,
                 "cycle_caps": caps, "cv_max": cv_max, "phase_max": phase_max, "snr_min": snr_min,
                 "sup_min": sup_min, "peak_window": peak_window, "seed": seed, "drive_phase": DRIVE_PHASE,
@@ -1146,7 +1146,7 @@ def probe_mask(cfg, prior, *, num_runs: int = 12, run_size: int = 32, chi_k_fixe
     # The probe count the audit judged, in place of the one an observation supplies: training draws a
     # count per batch unless one is held fixed. Each batch's own count is in the results.
     drawn = [int(config.CHI_K_MIN_TRAIN), int(cfg.chi_k_pad)]
-    configured = {**_configured(cfg),
+    configured = {**configured_chi_settings(cfg),
                   "probe_count": chi_k_fixed if chi_k_fixed is not None else {"drawn_per_batch_from": drawn}}
     settings = {"num_runs": num_runs, "run_size": run_size, "chi_k_fixed": chi_k_fixed, "seed": seed,
                 "configured": configured, "probe_layout": PROBE_LAYOUT}
@@ -1444,7 +1444,7 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
     if strengths is None:
         # the configured chi drive is measured at its own value, never read off a neighbouring strength
         strengths = sorted(set(_DRIVE_STRENGTHS) | {float(cfg.chi_f0)})
-    configured = _configured(cfg)
+    configured = configured_chi_settings(cfg)
     settings = {"t_obs_s": t_obs_s, "repeats": repeats, "detune": detune, "strengths": strengths,
                 "free_min": free_min, "captured_max": captured_max, "peak_window": peak_window,
                 "clarity_min": clarity_min, "seed": seed, "drive_phase": DRIVE_PHASE,

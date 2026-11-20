@@ -240,14 +240,14 @@ def test_a_prior_the_posterior_was_not_trained_with_is_refused():
     # the fingerprint must see the SAME gmm through every wrapper shape it can arrive in
     assert len({orchestrator._gmm_fingerprint(x)
                 for x in (g1, phys1, _Product([phys1]), _Wrapper(_Product([g1])))}) == 1
-    orchestrator._assert_prior_used_matches_posterior(post, _Product([phys1]), "t")   # must not raise
+    orchestrator.assert_prior_used_matches_posterior(post, _Product([phys1]), "t")   # must not raise
     try:
-        orchestrator._assert_prior_used_matches_posterior(post, _Product([phys2]), "t")
+        orchestrator.assert_prior_used_matches_posterior(post, _Product([phys2]), "t")
         raise AssertionError("a foreign prior was accepted")
     except Refusal as e:
         assert e.field == "prior", e.field
     # unverifiable on either side => silence, not a false alarm (legacy artifacts land here)
-    orchestrator._assert_prior_used_matches_posterior(_Post(None), _Product([phys1]), "t")
+    orchestrator.assert_prior_used_matches_posterior(_Post(None), _Product([phys1]), "t")
 
 
 # ── the end-of-run artifact writes are atomic ─────────────────────────────────────────────────────

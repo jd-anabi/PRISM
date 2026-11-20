@@ -55,7 +55,7 @@ from .artifacts.provenance import file_ref as _file_ref
 from .runs import RUN_BOUNDARY_FILES, public_entry
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
-                             _assert_prior_used_matches_posterior, _assert_prior_matches_region,
+                             assert_prior_used_matches_posterior, _assert_prior_matches_region,
                              _assert_chi_config_is_deliberate, _assert_user_model_in_sync,
                              _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
@@ -2448,7 +2448,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     nps = require_at_least("num_posterior_samples", num_posterior_samples, 1)
     n_scales_used = require_at_least("cal_n_scales", CAL_N_SCALES if cal_n_scales is None else cal_n_scales, 1)
     seed_used = None if seed is None else require_seed(seed)
-    _assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
+    assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
     with store.create("calibration", cfg, name=name, note=note) as w:
         device = cfg.hw.device
         dtype = cfg.hw.dtype

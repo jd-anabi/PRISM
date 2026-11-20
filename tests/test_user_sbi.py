@@ -3403,7 +3403,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
     saved_gen_prior = orchestrator.pipeline.gen_prior
     real_gen_cal = orchestrator.analysis.gen_cal_data
     saved_info = orchestrator.analysis.informativeness
-    saved_guard = orchestrator._assert_prior_used_matches_posterior
+    saved_guard = orchestrator.assert_prior_used_matches_posterior
     names = ("run_sbc", "check_sbc", "sbc_rank_plot", "run_tarp", "check_tarp", "plot_tarp")
     saved = {n: getattr(orchestrator, n) for n in names}
     cap = {}
@@ -3459,7 +3459,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
         post = _rp.TransformedPosterior(_Lat(), T)
         orchestrator.analysis.gen_cal_data = _gen_cal
         orchestrator.analysis.informativeness = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stub"))
-        orchestrator._assert_prior_used_matches_posterior = lambda *a, **k: None
+        orchestrator.assert_prior_used_matches_posterior = lambda *a, **k: None
         for n, fn in stubs.items():
             setattr(orchestrator, n, fn)
 
@@ -3545,7 +3545,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.analysis.gen_cal_data = real_gen_cal
         orchestrator.analysis.informativeness = saved_info
-        orchestrator._assert_prior_used_matches_posterior = saved_guard
+        orchestrator.assert_prior_used_matches_posterior = saved_guard
         for n, fn in saved.items():
             setattr(orchestrator, n, fn)
         plt.close("all")

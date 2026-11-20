@@ -348,8 +348,8 @@ class InferenceScreen(QWidget):
                 block = None
             if getattr(cfg, "chi_mode", False) is True:
                 try:
-                    from core.diagnostics.probes import _configured
-                    configured = _configured(cfg)
+                    from core.diagnostics.probes import configured_chi_settings
+                    configured = configured_chi_settings(cfg)
                 except Exception:                # noqa: BLE001 -- as above
                     configured = None
         self._cfg_words = (cfg, block, configured)
@@ -405,9 +405,9 @@ class InferenceScreen(QWidget):
             return "", None, False, None
         refused = ""
         try:
-            from core.SBI.run_guards import _assert_prior_used_matches_posterior
-            _assert_prior_used_matches_posterior(getattr(posterior, "posterior", None), getattr(prior, "prior", None),
-                                                 "The calibration")
+            from core.SBI.run_guards import assert_prior_used_matches_posterior
+            assert_prior_used_matches_posterior(getattr(posterior, "posterior", None), getattr(prior, "prior", None),
+                                                "The calibration")
         except Exception as error:               # noqa: BLE001 -- the engine's refusal, or a pair it cannot read
             refused = str(getattr(error, "message", None) or error) if getattr(error, "field", None) == "prior" else ""
         counts, done, when = None, False, None
@@ -916,8 +916,11 @@ class InferenceScreen(QWidget):
                 loads.stopped.connect(lambda why: self._chain_stopped(loads, press, where, why, cannot))
         applied = not going and self.config_panel.apply_quietly(model, options, fill=fill)
         if applied and (bounds_file or candidate is not None):
-            # A configuration handed in stands for bounds the list may not hold: the list then selects none.
-            self.prior_panel.bounds_picker.restore_key(bounds_file or "")
+            # A configuration handed in stands for bounds the list may not hold: the list then selects none. The file
+            # is named with forward slashes, the list's entries with the computer's own separator: one in a subfolder
+            # is found by its name.
+            entry = self.prior_panel.entry_named(bounds_file) if bounds_file else ""
+            self.prior_panel.bounds_picker.restore_key(entry)
         links = [] if applied else [lambda: False]
 
         def at(step, kind, ref, call):

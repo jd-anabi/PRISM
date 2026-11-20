@@ -2736,7 +2736,7 @@ def test_a_parameters_unit_is_its_kinds_in_the_configuration():
     for box in ("master.txt", "master_tier1.txt"):
         cfg = cli.make_sim_config("NADROWSKI", model_labels, registry.state_dep_drift("NADROWSKI"),
                                   str(BOUNDS_PATH / "nadrowski" / box))
-        kinds = {name: labels._RESCALE_KIND.get(name) for name in cfg.rescale_idx}
+        kinds = {name: labels.RESCALE_KIND.get(name) for name in cfg.rescale_idx}
         units = {"length": cfg.length_unit, "time": cfg.time_unit, "force": cfg.force_unit}
         said[box] = parameter_units(kinds, units, cfg.assumed_params)
         assert "temp" in cfg.params_dict and said[box].get("temp", "") == ""

@@ -4638,15 +4638,37 @@ def _third_step_of_the_frequency_response(tmp_path, monkeypatch):
         monkeypatch.setattr(fixtures, "_nad_cfg", real)
 
 
+def test_a_bounds_file_in_a_subfolder_of_its_models_folder_is_selected_by_a_chain_of_loads(tmp_path, monkeypatch):
+    """A chain of loads names its bounds file by its path in its model's folder with forward slashes, as a kept
+    training's record gives it to a Resume: a file in a subfolder of that folder is selected in step 2's list, whose
+    entries are spelled with the computer's own separator, as a file at the top of the folder is."""
+    import os
+    import shutil
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference import prior_tab
+    folder = tmp_path / "Bounds" / "nadrowski"
+    (folder / "sub").mkdir(parents=True)
+    for path in (folder / "master.txt", folder / "sub" / "x.txt"):
+        shutil.copyfile(BOUNDS_PATH / "nadrowski" / "master.txt", path)
+    monkeypatch.setattr(prior_tab, "BOUNDS_PATH", tmp_path / "Bounds")
+    screen = build_inference()
+    selected = []
+    for named in ("master.txt", "sub/x.txt"):
+        screen.load_chain("NADROWSKI", {"chi_mode": False}, named, None)
+        selected.append(screen.prior_panel.bounds_picker.key())
+    assert selected == ["master.txt", os.path.join("sub", "x.txt")], selected
+
+
 def _an_audit(screen, *, prior=None, created=None, **given) -> str:
     """An audit of the prior in use (or of ``prior``, an id), as the probe check writes one on the configuration in use,
     reading as ``given`` makes it; its id."""
     from core.artifacts import default_store
-    from core.diagnostics.probes import _configured
+    from core.diagnostics.probes import configured_chi_settings
     from tests._fixtures import check_results, write_diagnostic
     cfg = screen.session.cfg
     held = check_results("audit", **given)
-    settings = {**held["settings"], "configured": {**_configured(cfg), "probe_count": {"drawn_per_batch_from": [2, 12]}}}
+    settings = {**held["settings"], "configured": {**configured_chi_settings(cfg),
+                                                   "probe_count": {"drawn_per_batch_from": [2, 12]}}}
     return write_diagnostic(default_store(), cfg, diagnostic="probes", variant="mask",
                             parents={"prior": prior or screen.session.inf_prior.id}, settings=settings,
                             results=held["results"], created=created)
@@ -4655,13 +4677,13 @@ def _an_audit(screen, *, prior=None, created=None, **given) -> str:
 def _a_band(screen, *, created=None, **given) -> str:
     """A frequency-band record made on the configuration in use, reading as ``given`` makes it; its id."""
     from core.artifacts import default_store
-    from core.diagnostics.probes import _configured
+    from core.diagnostics.probes import configured_chi_settings
     from tests._fixtures import check_results, write_diagnostic
     cfg = screen.session.cfg
     held = check_results("band", **given)
     return write_diagnostic(default_store(), cfg, diagnostic="probes", variant="band",
-                            settings={**held["settings"], "configured": _configured(cfg)}, results=held["results"],
-                            created=created)
+                            settings={**held["settings"], "configured": configured_chi_settings(cfg)},
+                            results=held["results"], created=created)
 
 
 def _checks_line(page) -> "tuple[int, str] | None":

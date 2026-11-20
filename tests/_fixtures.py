@@ -560,7 +560,7 @@ def stub_calibration_battery(monkeypatch, *, ks_pvals=None, tarp_ks_p=0.5) -> di
 
     for name, fn in {
         "_calibration_prior": lambda cfg, posterior, prior: (None, None, None),
-        "_assert_prior_used_matches_posterior": lambda *a, **k: None,
+        "assert_prior_used_matches_posterior": lambda *a, **k: None,
         "_draw_calibration_set": draw,
         "run_sbc": lambda thetas, xs, posterior, num_posterior_samples, **k: (
             torch.randint(0, num_posterior_samples + 1, tuple(thetas.shape)), torch.zeros(tuple(thetas.shape))),

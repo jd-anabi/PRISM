@@ -636,7 +636,7 @@ class ValidatePanel(StepPage):
         if cfg is None:
             return {}, ""
         try:
-            kinds = {name: labels._RESCALE_KIND.get(name) for name in cfg.rescale_idx}
+            kinds = {name: labels.RESCALE_KIND.get(name) for name in cfg.rescale_idx}
             units = {"length": cfg.length_unit, "time": cfg.time_unit, "force": cfg.force_unit}
             return parameter_units(kinds, units, cfg.assumed_params), cfg.force_unit or ""
         except Exception:                    # noqa: BLE001 -- a configuration that cannot say its units shows none

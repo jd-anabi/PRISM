@@ -61,7 +61,7 @@ def _gmm_fingerprint(obj) -> str | None:
     return h.hexdigest()[:16]
 
 
-def _assert_prior_used_matches_posterior(posterior, inferred_prior, what: str) -> None:
+def assert_prior_used_matches_posterior(posterior, inferred_prior, what: str) -> None:
     """Refuse to run a posterior against a prior it was not trained with.
 
     SBC draws theta* from the TRAINING prior; run against a different one it is not a calibration
@@ -92,7 +92,7 @@ def _assert_prior_matches_region(region, inferred_prior, what: str) -> None:
     box, not the GMM. So the region carries the parent's GMM fingerprint (recorded by
     ``orchestrator.build_truncation_region`` from the prior pickled inside the posterior) and this
     compares it with the prior actually supplied. Same policy as
-    ``_assert_prior_used_matches_posterior``: unverifiable on either side (a region built before the
+    ``assert_prior_used_matches_posterior``: unverifiable on either side (a region built before the
     fingerprint travelled with it, a hand-built stand-in prior) is silence, not a false alarm.
     """
     want = getattr(region, "prior_fingerprint", None)

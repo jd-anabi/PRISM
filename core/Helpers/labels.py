@@ -15,12 +15,12 @@ RESCALE_LATEX = {
     "x_scale": r"x_{\mathrm{scale}}", "t_scale": r"t_{\mathrm{scale}}", "f_scale": r"f_{\mathrm{scale}}",
     "x_offset": r"x_{\mathrm{off}}",  "t_offset": r"t_{\mathrm{off}}",  "f_offset": r"f_{\mathrm{off}}",
     # Tier-1 boxes declare T in f_scale's place (f_scale is then derived). It is a bath temperature in
-    # KELVIN, which is not one of the four cell-file unit tokens, so _RESCALE_KIND deliberately
+    # KELVIN, which is not one of the four cell-file unit tokens, so RESCALE_KIND deliberately
     # has no entry for it and the label degrades to a bare symbol rather than inventing a unit.
     "T": r"T",
 }
-_RESCALE_KIND = {"x_scale": "length", "x_offset": "length", "t_scale": "time",
-                 "t_offset": "time", "f_scale": "force", "f_offset": "force"}
+RESCALE_KIND = {"x_scale": "length", "x_offset": "length", "t_scale": "time",
+                "t_offset": "time", "f_scale": "force", "f_offset": "force"}
 
 def axis_label(symbol_latex: str, unit: str | None = None) -> str:
     """A matplotlib axis label ``"$sym$ (unit)"`` -- or ``"$sym$ (ND)"`` for a dimensionless axis."""
@@ -38,7 +38,7 @@ def rescale_axis_label(name: str, *, length_unit: str | None = None, time_unit: 
     if sym is None:
         return f"${name.replace('_', r'\_')}$"      # escape '_' so mathtext doesn't read it as a subscript
     unit = {"length": length_unit, "time": time_unit,
-            "force": force_unit}.get(_RESCALE_KIND.get(name))
+            "force": force_unit}.get(RESCALE_KIND.get(name))
     if unit is None:
         return f"${sym}$"
     return f"${sym}$ ({unit}/ND)" if name.endswith("scale") else f"${sym}$ ({unit})"

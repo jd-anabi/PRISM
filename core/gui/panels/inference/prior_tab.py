@@ -845,7 +845,7 @@ class PriorPanel(StepPage):
             key = self._bounds_pick[1]
         self.bounds_picker.repoint(folder, key)
         if pending is not None:
-            found = self._entry_named(pending)
+            found = self.entry_named(pending)
             self.bounds_picker.restore_key(found)
             said, kept = ("" if found else PLAN_GONE_TEXT.format(pending)), False
         else:
@@ -863,7 +863,7 @@ class PriorPanel(StepPage):
         self._edited()
 
     # ── a plan's bounds file ──
-    def _entry_named(self, name: str) -> str:
+    def entry_named(self, name: str) -> str:
         """The list's entry whose name, with forward slashes, is ``name``; "" when it lists none."""
         combo = self.bounds_picker.combo
         return next((combo.itemData(at) for at in range(combo.count())
@@ -880,7 +880,7 @@ class PriorPanel(StepPage):
         if self._draft() is not None and shown is not None and applied == shown.currentText():
             self._stop_waiting()
             self.bounds_picker.refresh()
-            entry = self._entry_named(name)
+            entry = self.entry_named(name)
             self.bounds_picker.restore_key(entry)
             self.gone_line.set_text("" if entry else PLAN_GONE_TEXT.format(name))
             self.gone_line.setVisible(not entry)
