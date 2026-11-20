@@ -39,6 +39,11 @@ read off its own slice of the grid: the same settings now simulate other rows. T
 move together, so a set made before differs in two entries and is never offered as one setting away,
 a setting nobody could set to continue rows that mean something else.
 
+The step that integrates the clock moved the format from training-rows/4 to training-rows/5, and the clock's
+name from "frame-exact/1" to "frame-exact/2". Rows made before took the plain Euler-Maruyama step at every
+step; a row now takes the corrected step wherever its model admits it, so the same settings simulate other
+rows. The two move together for the reason above.
+
 A named file that cannot be read, and a config with neither a file nor tokens (a stand-in), fail open
 to None, as the GUI's pre-Train status line computes identities from stand-ins. A cache written
 under the older format keys a different directory, so it is never found for a resume, and a
@@ -50,7 +55,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-FORMAT = "training-rows/4"
+FORMAT = "training-rows/5"
 
 
 _TOKENS_PREFIX = "units-tokens:"

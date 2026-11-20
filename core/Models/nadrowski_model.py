@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import torch
 
 
@@ -33,8 +35,56 @@ def _nadrowski_compiled_step(
     return x + drift * dt + g * dW * sqrt_dt
 
 
+@torch.jit.script
+def _nadrowski_drift_noise(
+    x: torch.Tensor, force_step: torch.Tensor,
+    k: torch.Tensor, lam: torch.Tensor, f_max: torch.Tensor, tau: torch.Tensor,
+    tau_c: torch.Tensor, s: torch.Tensor, a: torch.Tensor, beta: torch.Tensor,
+    n: torch.Tensor, x_noise: torch.Tensor, y_noise: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """The drift and the noise amplitudes at ``x`` under the drive ``force_step`` (a (batch,) column), in the
+    plain compiled step's operation order."""
+    x0 = x[:, 0]
+    x1 = x[:, 1]
+    x2 = x[:, 2]
+    p = 1.0 / (1.0 + a * torch.exp(-beta * (x0 - x1)))
+    x_gs = x0 - x1 - p
+    dx = -(x_gs + k * x0) + force_step
+    dy = (x_gs - f_max * (1 - s * x2)) / lam
+    dc = (p - x2) / tau
+    drift = torch.stack((dx, dy, dc), dim=1)
+    c_noise = torch.sqrt(2.0 * tau_c * p * (1 - p) / n) / tau
+    g = torch.stack((x_noise, y_noise, c_noise), dim=-1)
+    return drift, g
+
+
+@torch.jit.script
+def _nadrowski_compiled_corrected_step(
+    x: torch.Tensor, force_now: torch.Tensor, force_next: torch.Tensor, dW: torch.Tensor,
+    k: torch.Tensor, lam: torch.Tensor, f_max: torch.Tensor, tau: torch.Tensor,
+    tau_c: torch.Tensor, s: torch.Tensor, a: torch.Tensor, beta: torch.Tensor,
+    n: torch.Tensor, temp: torch.Tensor,
+    x_noise: torch.Tensor, y_noise: torch.Tensor,
+    dt: torch.Tensor, sqrt_dt: torch.Tensor,
+) -> torch.Tensor:
+    """One stochastic Heun step for Nadrowski (``core.Solvers.sdeint.Solver.heun``), JIT-scripted: the plain step
+    as a prediction, then the drift and the noise again where it lands, under the drive at the step's end, and
+    the two averaged on the same increment. Its arguments are the plain compiled step's, with the drive at the
+    step's end after the drive at its start, so ``compiled_params()`` serves both."""
+    f0, g0 = _nadrowski_drift_noise(x, force_now[:, 0], k, lam, f_max, tau, tau_c, s, a, beta, n, x_noise, y_noise)
+    e0 = g0 * dW * sqrt_dt
+    xp = x + f0 * dt + e0
+    f1, g1 = _nadrowski_drift_noise(xp, force_next[:, 0], k, lam, f_max, tau, tau_c, s, a, beta, n, x_noise, y_noise)
+    return x + 0.5 * (f0 + f1) * dt + 0.5 * (e0 + g1 * dW * sqrt_dt)
+
+
 class NadrowskiModel:
     compiled_step = staticmethod(_nadrowski_compiled_step)
+    compiled_corrected_step = staticmethod(_nadrowski_compiled_corrected_step)
+    # The corrected step integrates this model's equation: the bundle's and the motor's noise are constants, and
+    # the channel's depends on the bundle and the motor only, never on the channel's own variable, so no
+    # variable's noise depends on that variable itself (core.Simulator.simulator.Simulator.simulate).
+    admits_corrected_step = True
 
     def __init__(self, k: torch.Tensor, lam: torch.Tensor, f: torch.Tensor, tau: torch.Tensor, tau_c: torch.Tensor,
                  s: torch.Tensor, delta_e: torch.Tensor, beta: torch.Tensor, n: torch.Tensor, temp: torch.Tensor,

@@ -51,8 +51,8 @@ def _step_bar(n: int, batch_size: int):
 
     It also stays ENABLED under the GUI, deliberately, rather than being quieted the way
     ``config.QUIET_SEGMENT_BAR`` quiets the segment bar: its redraws are the cooperative cancel's
-    most frequent checkpoint (trap C) and what feeds the stall detector's heartbeat through a long
-    batch. The checkpoints are in core/gui/streams.py, and the stall detector in core/gui/run/model.py.
+    most frequent checkpoint through a long batch, because each redraw is a write to the run's stream
+    and that write checks for a cancel (core/gui/streams.py).
     """
     return tqdm(total=n - 1, **_bar_kwargs(n, batch_size))
 
@@ -147,11 +147,14 @@ def drop_graph_cache() -> int:
     return n
 
 
-def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
-    """Capture (or fetch) a graph replaying ``chunk`` Euler steps. None => caller runs eager.
+def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk, ends: bool = False):
+    """Capture (or fetch) a graph replaying ``chunk`` steps of ``step``. None => caller runs eager.
 
     ``dt`` and ``sqrt_dt`` are this call's ``(batch, 1)`` step tensors; the capture reads static copies of
-    them, which the caller fills per call like the parameters."""
+    them, which the caller fills per call like the parameters. ``ends`` is the corrected step's: each of
+    its steps reads the drive at its start AND at its end, so the drive buffer holds ``chunk + 1`` points,
+    step j reading points j and j + 1, and the caller fills it with one point more than the chunk's steps
+    (the last point of one replay is the first of the next)."""
     global _GRAPH_DISABLED
     if _GRAPH_DISABLED or not getattr(config, "SOLVER_CUDA_GRAPHS", True):
         return None
@@ -167,10 +170,15 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
         kw = dict(dtype=x0.dtype, device=x0.device)
         x_s = torch.zeros((B, d), **kw)
         dW_s = torch.empty((B, d), **kw)
-        f_s = torch.zeros((B, n_ch, chunk), **kw)
+        f_s = torch.zeros((B, n_ch, chunk + 1 if ends else chunk), **kw)
         out_s = torch.empty((chunk, B, d), **kw)
         p_s = tuple(p.clone() for p in params)
         dt_s, sq_s = dt.clone(), sqrt_dt.clone()
+
+        def one(x, j):
+            if ends:
+                return step(x, f_s[:, :, j], f_s[:, :, j + 1], dW_s, *p_s, dt_s, sq_s)
+            return step(x, f_s[:, :, j], dW_s, *p_s, dt_s, sq_s)
 
         # Warm-up on a side stream is required before capture; three passes is the documented
         # minimum that lets lazy allocations and any autotuning settle.
@@ -181,7 +189,7 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
                 xx = x_s.clone()
                 for j in range(chunk):
                     dW_s.normal_()
-                    xx = step(xx, f_s[:, :, j], dW_s, *p_s, dt_s, sq_s)
+                    xx = one(xx, j)
         torch.cuda.current_stream().wait_stream(s)
         torch.cuda.synchronize()
 
@@ -190,7 +198,7 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
             cur = x_s
             for j in range(chunk):
                 dW_s.normal_()
-                cur = step(cur, f_s[:, :, j], dW_s, *p_s, dt_s, sq_s)
+                cur = one(cur, j)
                 out_s[j] = cur
             # Chain the state forward INSIDE the graph, so consecutive chunks need no copy between
             # replays -- x_s is both the graph's input and its output.
@@ -284,61 +292,136 @@ class Solver:
             against the eager model's drift and noise by
             ``test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity``.
             """
+            return _compiled_run(sde, x0, dt, n, sde.compiled_step, ends=False)
+
+        def heun(sde: Any, x0: torch.Tensor, dt, n: int, state_dep_drift: bool = False) -> torch.Tensor:
+            """
+            The stochastic Heun predictor-corrector: ``n`` points, ``n - 1`` steps of ``dt``, the step handed
+            in as in :func:`euler`. Each step takes the plain step as a prediction, evaluates the drift and the
+            noise again where it lands, and averages the two, on the same increment:
+
+                prediction  x* = x + f(x, F_i) dt + g(x) dW
+                step        x' = x + (f(x, F_i) + f(x*, F_i+1)) dt / 2 + (g(x) + g(x*)) dW / 2
+
+            The prediction is the plain step's arithmetic exactly, so it is that step bit for bit; the drive is
+            read at the step's start (index i) and at its end (i + 1), so ``sde.f`` must accept every index up
+            to ``n - 1``; and the step draws the one unit normal per variable the plain step draws, so the
+            random stream is the plain step's. The drift is corrected to second order. Averaging the noise
+            integrates the equation the plain step integrates only where no variable's noise depends on that
+            variable itself (the Ito-Stratonovich correction, half of g dg/dx in each component, is then
+            zero); a model says so by ``admits_corrected_step``, and ``Simulator.simulate`` hands this method
+            only such a model. The stable region of this step contains the plain step's.
+            """
             x0 = x0.to(sde.device)
             batch_size, d = x0.shape
             dt, sqrt_dt = step_tensors(dt, batch_size, x0.dtype, x0.device)
-
             # empty, not zeros -- same reasoning as the eager euler above.
             xs = torch.empty((n, batch_size, d), dtype=x0.dtype, device=x0.device)
             xs[0, :, :] = x0
-
-            step = sde.compiled_step
-            params = sde.compiled_params()
-
-            chunk = int(getattr(config, "SOLVER_GRAPH_CHUNK", 50))
-            n_steps = n - 1
-            ent = (_acquire_graph(step, params, x0, sde.force, dt, sqrt_dt, chunk)
-                   if n_steps >= chunk else None)
-
-            if ent is not None:
-                # Copy THIS call's parameters and step into the captured statics. The graph replays
-                # whatever is in these buffers, so this is what makes one capture serve every batch.
-                for ps, p in zip(ent["params"], params):
-                    ps.copy_(p)
-                ent["dt"].copy_(dt)
-                ent["sqrt_dt"].copy_(sqrt_dt)
-                ent["x"].copy_(x0)
-                f_s, out_s, g = ent["force"], ent["out"], ent["graph"]
-                n_full = n_steps // chunk
-                bar = _step_bar(n, batch_size)
-                try:
-                    for c in range(n_full):
-                        lo = c * chunk
-                        f_s.copy_(sde.force[:, :, lo:lo + chunk])
-                        g.replay()
-                        xs[lo + 1:lo + 1 + chunk, :, :].copy_(out_s)
-                        _advance(bar, chunk)
-                    # Tail: the last n_steps % chunk steps, eager, continuing from the graph's state.
-                    x = ent["x"].clone()
-                    dW_buf = torch.empty((batch_size, d), dtype=x0.dtype, device=x0.device)
-                    for i in range(n_full * chunk, n_steps):
-                        dW_buf.normal_()
-                        x = step(x, sde.force[:, :, i], dW_buf, *params, dt, sqrt_dt)
-                        xs[i + 1, :, :] = x
-                        _advance(bar, 1)
-                finally:
-                    bar.close()
-                return xs
-
             dW_buf = torch.empty((batch_size, d), dtype=x0.dtype, device=x0.device)
-            x = x0
-            for i in _step_iter(n, batch_size):
-                dW_buf.normal_()
-                force_step = sde.force[:, :, i]
-                x = step(x, force_step, dW_buf, *params, dt, sqrt_dt)
-                xs[i + 1, :, :] = x
+
+            if not state_dep_drift:
+                g = sde.g()  # (batch, d), the same at the step's end
+                for i in _step_iter(n, batch_size):
+                    x_curr = xs[i, :, :]
+                    dW_buf.normal_()
+                    eta = g * dW_buf * sqrt_dt
+                    f_now = sde.f(x_curr, i)
+                    x_pred = x_curr + f_now * dt + eta
+                    xs[i + 1, :, :] = x_curr + 0.5 * (f_now + sde.f(x_pred, i + 1)) * dt + 0.5 * (eta + eta)
+            else:
+                for i in _step_iter(n, batch_size):
+                    x_curr = xs[i, :, :]
+                    g = sde.g(x_curr)  # (batch, d)
+                    dW_buf.normal_()
+                    eta = g * dW_buf * sqrt_dt
+                    f_now = sde.f(x_curr, i)
+                    x_pred = x_curr + f_now * dt + eta
+                    f_end = sde.f(x_pred, i + 1)
+                    eta_end = sde.g(x_pred) * dW_buf * sqrt_dt
+                    xs[i + 1, :, :] = x_curr + 0.5 * (f_now + f_end) * dt + 0.5 * (eta + eta_end)
 
             return xs
 
+        def heun_compiled(sde: Any, x0: torch.Tensor, dt, n: int, state_dep_drift: bool = False) -> torch.Tensor:
+            """
+            :func:`heun` via the model's ``compiled_corrected_step``, replayed from a CUDA Graph where possible,
+            as :func:`euler_compiled` replays the plain step. The model exposes
+            ``compiled_corrected_step(x, force_now, force_next, dW, *params, dt, sqrt_dt) -> next_x``, a
+            ``@torch.jit.script`` function taking the plain compiled step's ``compiled_params()``, with the
+            drive at the step's end after the drive at its start. Each replay reads one drive point more than
+            its steps (:func:`_acquire_graph`'s ``ends``). ``state_dep_drift`` is accepted and unused, as in
+            :func:`euler_compiled`: the compiled step carries its noise law inline.
+            """
+            return _compiled_run(sde, x0, dt, n, sde.compiled_corrected_step, ends=True)
+
         self.euler = euler
         self.euler_compiled = euler_compiled
+        self.heun = heun
+        self.heun_compiled = heun_compiled
+
+
+def _compiled_run(sde: Any, x0: torch.Tensor, dt, n: int, step, ends: bool) -> torch.Tensor:
+    """The compiled loop both compiled methods share: ``n`` points, ``n - 1`` steps of ``step``, replayed from a
+    CUDA Graph where possible, eager otherwise. ``ends`` is the corrected step's: each step reads the drive at
+    its start and at its end (``sde.force`` indices i and i + 1), and each replay's drive buffer is one point
+    longer than its steps."""
+    x0 = x0.to(sde.device)
+    batch_size, d = x0.shape
+    dt, sqrt_dt = step_tensors(dt, batch_size, x0.dtype, x0.device)
+
+    # empty, not zeros -- same reasoning as the eager euler.
+    xs = torch.empty((n, batch_size, d), dtype=x0.dtype, device=x0.device)
+    xs[0, :, :] = x0
+
+    params = sde.compiled_params()
+
+    def one(x, i, dW):
+        if ends:
+            return step(x, sde.force[:, :, i], sde.force[:, :, i + 1], dW, *params, dt, sqrt_dt)
+        return step(x, sde.force[:, :, i], dW, *params, dt, sqrt_dt)
+
+    chunk = int(getattr(config, "SOLVER_GRAPH_CHUNK", 50))
+    n_steps = n - 1
+    ent = (_acquire_graph(step, params, x0, sde.force, dt, sqrt_dt, chunk, ends=ends)
+           if n_steps >= chunk else None)
+
+    if ent is not None:
+        # Copy THIS call's parameters and step into the captured statics. The graph replays
+        # whatever is in these buffers, so this is what makes one capture serve every batch.
+        for ps, p in zip(ent["params"], params):
+            ps.copy_(p)
+        ent["dt"].copy_(dt)
+        ent["sqrt_dt"].copy_(sqrt_dt)
+        ent["x"].copy_(x0)
+        f_s, out_s, g = ent["force"], ent["out"], ent["graph"]
+        width = chunk + 1 if ends else chunk
+        n_full = n_steps // chunk
+        bar = _step_bar(n, batch_size)
+        try:
+            for c in range(n_full):
+                lo = c * chunk
+                f_s.copy_(sde.force[:, :, lo:lo + width])
+                g.replay()
+                xs[lo + 1:lo + 1 + chunk, :, :].copy_(out_s)
+                _advance(bar, chunk)
+            # Tail: the last n_steps % chunk steps, eager, continuing from the graph's state.
+            x = ent["x"].clone()
+            dW_buf = torch.empty((batch_size, d), dtype=x0.dtype, device=x0.device)
+            for i in range(n_full * chunk, n_steps):
+                dW_buf.normal_()
+                x = one(x, i, dW_buf)
+                xs[i + 1, :, :] = x
+                _advance(bar, 1)
+        finally:
+            bar.close()
+        return xs
+
+    dW_buf = torch.empty((batch_size, d), dtype=x0.dtype, device=x0.device)
+    x = x0
+    for i in _step_iter(n, batch_size):
+        dW_buf.normal_()
+        x = one(x, i, dW_buf)
+        xs[i + 1, :, :] = x
+
+    return xs

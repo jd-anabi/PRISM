@@ -153,6 +153,87 @@ def test_compiled_step_matches_eager():
     assert torch.isfinite(solver.euler(um0, torch.zeros(4, 1), 0.05 / 9, 10)).all()
 
 
+def test_a_user_model_takes_the_corrected_step_unless_a_noise_names_its_own_variable(monkeypatch):
+    """A model of your own takes the corrected step unless the noise strength D of some variable names that
+    variable itself: averaging such a noise over the step would integrate another equation than the one typed,
+    so that model keeps the plain step. Read off the typed expressions when the model is parsed; a D that names
+    another variable is fine. Simulator.simulate follows it, and a model that keeps the plain step has no
+    compiled corrected step."""
+    from core.Models.user_model import build_corrected_step
+    from core.Simulator.user_simulator import UserSimulator
+    from core.Solvers import sdeint
+
+    cases = {
+        "additive noise": ([{"name": "x", "drift": "-k*x", "D": "d0"}], True),
+        "no noise": ([{"name": "x", "drift": "v", "D": "0"}, {"name": "v", "drift": "-k*x", "D": "0"}], True),
+        "noise of another variable": ([{"name": "x", "drift": "v", "D": "0"},
+                                       {"name": "v", "drift": "-k*x - c*v", "D": "d0*x^2"}], True),
+        "noise of its own variable": ([{"name": "x", "drift": "-k*x", "D": "0.5*x^2 + d0"}], False),
+        "one noise of its own variable": ([{"name": "x", "drift": "v", "D": "d0*x^2"},
+                                           {"name": "v", "drift": "-k*x", "D": "d0"}], False),
+    }
+    calls = []
+    real = sdeint.Solver
+
+    class Recording:
+        def __init__(self):
+            self._real = real()
+
+        def __getattr__(self, method):
+            fn = getattr(self._real, method)
+
+            def recorded(*a, **k):
+                calls.append(method)
+                return fn(*a, **k)
+            return recorded
+
+    monkeypatch.setattr(sdeint, "Solver", Recording)
+    B, n = 3, 30
+    for what, (variables, takes) in cases.items():
+        c = parse_user_model(variables)
+        assert c.self_dependent_noise is (not takes), what
+        assert (build_corrected_step(c) is None) is (not takes), what
+        params = torch.full((B, len(c.param_names)), 0.5)
+        um = UserModel(c, torch.unbind(params, dim=1), torch.zeros(B, len(variables), 4), batch_size=B)
+        assert um.admits_corrected_step is takes, what
+        calls.clear()
+        sim = UserSimulator(c, params, torch.zeros(B, len(variables), n), torch.full((B, len(variables)), 0.2),
+                            torch.zeros(n), segs=1, batch_size=B)
+        out = sim.simulate(state_dep_drift=c.state_dep_noise, plan=[(0, n - 1, 0.01)])
+        assert torch.isfinite(out).all(), what
+        assert calls == ["heun" if takes else "euler"], (what, calls)
+
+
+def test_the_compiled_corrected_step_matches_the_eager_one():
+    """The @torch.jit.script corrected step (the heun_compiled fast path) reproduces the eager corrected step under a
+    changing drive, for additive noise and for a noise that depends on another variable: same seed => same dW =>
+    the same arithmetic; the drive is read at each step's start and at its end in both."""
+    from core.Models.user_model import build_corrected_step
+    from core.Solvers import sdeint
+    solver = sdeint.Solver()
+    cases = [
+        ([{"name": "x", "drift": "mu*x - x^3", "D": "d0"}], [0.5, 0.05], False),
+        ([{"name": "x", "drift": "v", "D": "0"},
+          {"name": "v", "drift": "-k*x - c*v", "D": "d0"}], [1.0, 0.2, 0.05], False),
+        ([{"name": "x", "drift": "v", "D": "0"},
+          {"name": "v", "drift": "-k*x - c*v", "D": "d0*x^2 + d1"}], [1.0, 0.2, 0.05, 0.01], True),
+    ]
+    T = 50
+    for variables, pvals, sdd in cases:
+        c = parse_user_model(variables)
+        c.corrected_step_fn = build_corrected_step(c)
+        assert c.corrected_step_fn is not None, variables
+        n_vars, B = len(c.var_names), 5
+        drive = (0.2 * torch.sin(torch.arange(T) * 0.3)).reshape(1, 1, T).repeat(B, n_vars, 1)
+        um = UserModel(c, tuple(torch.full((B,), v) for v in pvals), drive, batch_size=B)
+        assert hasattr(um, "compiled_corrected_step") and um.compiled_params() == um.params
+        inits = torch.full((B, n_vars), 0.2)
+        torch.manual_seed(3); a = solver.heun(um, inits, 0.25 / 49, T, state_dep_drift=sdd)
+        torch.manual_seed(3); b = solver.heun_compiled(um, inits, 0.25 / 49, T, state_dep_drift=sdd)
+        assert float((a[-1] - a[0]).abs().max()) > 1e-3, variables
+        assert torch.allclose(a, b, atol=1e-5, rtol=1e-5), (variables, (a - b).abs().max().item())
+
+
 def test_user_model_constant_and_zero_noise_normalization():
     """Constant/param-only expressions come back as scalars -- they must normalize to (batch,), zero-D
     channels must zero-pad g (the BP convention), and a negative constant D yields NaN g (so the SBI

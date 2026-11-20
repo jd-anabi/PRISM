@@ -993,6 +993,8 @@ def test_solver_failure_raises_instead_of_killing_the_process():
         class _Stub:
             def euler(self, *a, **k): raise exc
             def euler_compiled(self, *a, **k): raise exc
+            def heun(self, *a, **k): raise exc
+            def heun_compiled(self, *a, **k): raise exc
         return _Stub
 
     assert run().shape == (1, 1, 45), "the unpatched path must still simulate normally"
@@ -1772,10 +1774,11 @@ def test_the_solver_takes_its_step_and_never_derives_one_from_times():
 
 def test_a_segmented_run_equals_one_long_run_bitwise():
     """Segment k starts from the state at the previous segment's last index and is handed the drive from
-    that index: index g holds the state after g steps in every segment, and drive index m serves step
-    m -> m+1. So a run cut into many segments equals the same steps in two, bit for bit on the CPU, with
-    a drive that changes every step and the noise on. (Each seam used to repeat a sample, and the drive's
-    index then led the state's by one.)"""
+    that index through its last: index g holds the state after g steps in every segment, and the corrected
+    step from g reads drive indices g and g + 1, the drive at a seam ending one segment's last step and
+    starting the next one's first. So a run cut into many segments equals the same steps in two, bit for bit
+    on the CPU, on the step-by-step loop and on the compiled one, with a drive that changes every step and the
+    noise on. (Each seam used to repeat a sample, and the drive's index then led the state's by one.)"""
     from core.Simulator.nadrowski_simulator import NadrowskiSimulator
     B, n, n_tr = 3, 241, 40
     p = torch.tensor([[0.8, 3.57, 1.32, 0.027, 0.268, 0.95, 10.0, 14.1, 50.0, 1.5]]).repeat(B, 1)
@@ -1785,15 +1788,19 @@ def test_a_segmented_run_equals_one_long_run_bitwise():
     many = [(0, n_tr, 0.025), (n_tr, 41, 0.0231), (41, 97, 0.0231), (97, 98, 0.0231), (98, 200, 0.0231),
             (200, n - 1, 0.0231)]
 
-    def run(plan):
-        sim = NadrowskiSimulator(p, force, inits, torch.zeros(n), segs=len(plan), batch_size=B)
+    def run(plan, use_compile):
+        sim = NadrowskiSimulator(p, force, inits, torch.zeros(n), segs=len(plan), batch_size=B,
+                                 use_compile=use_compile)
+        assert sim.sde.admits_corrected_step, "the Nadrowski cell takes the corrected step"
         torch.manual_seed(5)
         return sim.simulate(state_dep_drift=True, plan=plan)[:, 0]
 
-    a, b = run(two), run(many)
-    assert torch.equal(a, b), f"a segmented run differs from one long run, max|diff| {float((a - b).abs().max()):.3e}"
-    assert torch.equal(a[:, :, 0], inits.T), "index 0 must be the initial state"
-    assert bool((a[:, :, 1:] != a[:, :, :-1]).any(dim=(0, 1)).all()), "a seam repeated a sample"
+    for use_compile in (False, True):
+        a, b = run(two, use_compile), run(many, use_compile)
+        assert torch.equal(a, b), (f"a segmented run differs from one long run (compiled: {use_compile}), "
+                                   f"max|diff| {float((a - b).abs().max()):.3e}")
+        assert torch.equal(a[:, :, 0], inits.T), "index 0 must be the initial state"
+        assert bool((a[:, :, 1:] != a[:, :, :-1]).any(dim=(0, 1)).all()), "a seam repeated a sample"
 
 
 class _DriveSDE:
@@ -1812,10 +1819,11 @@ class _DriveSDE:
 
 
 def test_the_drive_index_serves_the_step_after_it_across_seams():
-    """Drive index m serves step m -> m+1 in every segment: a drive that switches on at fine index K first moves the
-    state at index K + 1, wherever K falls against the seams -- the transient's last step, a segment's first, one
-    a single step long, the middle of one, the run's last -- with the noise off. A drive handed to a segment one
-    index ahead (or behind) would move it at K (or K + 2): a phase of one fine step that depends on the stride."""
+    """On the plain step (the step of a model that declares nothing, as this one), drive index m serves step
+    m -> m+1 in every segment: a drive that switches on at fine index K first moves the state at index K + 1,
+    wherever K falls against the seams -- the transient's last step, a segment's first, one a single step long,
+    the middle of one, the run's last -- with the noise off. A drive handed to a segment one index ahead (or
+    behind) would move it at K (or K + 2): a phase of one fine step that depends on the stride."""
     from core.Simulator import simulator as _sim
 
     class DriveSim(_sim.Simulator):
@@ -1915,6 +1923,262 @@ def test_gen_obs_carries_a_per_row_step_through_its_splits():
                                      force=force[r:r + 1], n_segs=2, steady_idx=5, batch_size=1, dt=steps[r:r + 1])
         assert torch.equal(alone[:, 0], whole[:, r]), f"row {r} simulated alone differs"
     assert not torch.equal(whole[:, 0], whole[:, 1]) and float((whole[:, -1] - whole[:, 0]).abs().max()) > 1e-3
+
+
+def _quiet_nadrowski(corrected: bool):
+    """A Nadrowski simulator with every noise channel off (the bundle's and the motor's amplitudes zeroed, the
+    channel's by tau_c = 0), so a run is the step's own arithmetic alone; ``corrected`` False makes its model
+    declare nothing, so it keeps the plain step."""
+    from core.Simulator.nadrowski_simulator import NadrowskiSimulator
+
+    class Quiet(NadrowskiSimulator):
+        def _set_up_model(self):
+            super()._set_up_model()
+            self.sde._x_noise_const = torch.zeros_like(self.sde._x_noise_const)
+            self.sde._y_noise_const = torch.zeros_like(self.sde._y_noise_const)
+            if not corrected:
+                self.sde.admits_corrected_step = False
+
+    return Quiet
+
+
+def _quiet_run(corrected: bool, m: int, use_compile: bool, B: int = 3) -> torch.Tensor:
+    """The noise-off cell, float64, driven by a sinusoid, through Simulator.simulate's plan: a settling of 20 steps
+    of 0.02, then 400 recorded steps of 0.01 in three segments, every step made ``m`` times finer. Variable 0 at
+    the coarse grid's points, (B, 421)."""
+    n_tr, n_rec = 20 * m, 400 * m
+    n = n_tr + n_rec + 1
+    h_tr, h = 0.02 / m, 0.01 / m
+    plan = [(0, n_tr, h_tr), (n_tr, n_tr + 150 * m, h), (n_tr + 150 * m, n_tr + 300 * m, h),
+            (n_tr + 300 * m, n - 1, h)]
+    g = torch.arange(n, dtype=torch.float64)
+    t = torch.where(g <= n_tr, g * h_tr, n_tr * h_tr + (g - n_tr) * h)
+    force = (0.5 * torch.sin(2.0 * t)).reshape(1, 1, n).repeat(B, 1, 1)
+    p = torch.tensor([[0.8, 3.57, 1.32, 0.1, 0.0, 0.95, 10.0, 14.1, 50.0, 0.0]], dtype=torch.float64).repeat(B, 1)
+    p[:, 0] = torch.linspace(0.6, 1.0, B, dtype=torch.float64)
+    inits = torch.tensor([[-0.11, -1.32, 0.5]], dtype=torch.float64).repeat(B, 1)
+    sim = _quiet_nadrowski(corrected)(p, force, inits, torch.zeros(n, dtype=torch.float64), segs=len(plan),
+                                      batch_size=B, use_compile=use_compile)
+    return sim.simulate(state_dep_drift=True, plan=plan)[0, 0][:, ::m]
+
+
+def test_the_corrected_step_converges_at_order_two_with_the_noise_off():
+    """The corrected step, as Simulator.simulate takes it for the Nadrowski cell, with the noise off and a drive
+    that changes every step: its error against the same rule at a step 32 times finer falls fourfold each time
+    the step halves (order two), on the step-by-step loop and on the compiled one, where the plain step's
+    falls twofold (order one) on the same plan -- so the test tells the two apart. A corrector that read the
+    drive at the step's start twice, or no corrector at all, would fall twofold."""
+    for use_compile in (False, True):
+        for corrected, order in ((True, 4.0), (False, 2.0)):
+            ref = _quiet_run(corrected, 32, use_compile)
+            err = [float((_quiet_run(corrected, m, use_compile) - ref).abs().max()) for m in (1, 2, 4)]
+            ratios = [err[0] / err[1], err[1] / err[2]]
+            assert all(0.8 * order < r < 1.2 * order for r in ratios), \
+                f"compiled {use_compile}, corrected {corrected}: errors {err}, ratios {ratios} (order {order})"
+
+
+def test_the_corrected_steps_prediction_is_the_plain_step_bit_for_bit():
+    """The corrected step takes the plain step as its prediction, and that prediction IS the plain step, bit for
+    bit on the CPU: from the same state, under the same draw and the same drive index, the state the corrected
+    step evaluates its drift at second equals one plain step. Its compiled form equals its step-by-step form bit
+    for bit over a run with live noise and a changing drive, for each built-in model with a compiled step, and
+    takes the plain compiled step's parameters with the drive at the step's end after its start."""
+    from core.Models.hopf_model import HopfModel, _hopf_compiled_corrected_step
+    from core.Models.nadrowski_model import NadrowskiModel, _nadrowski_compiled_corrected_step
+
+    B, T, dt = 6, 40, 0.02
+    col = lambda v: torch.full((B,), float(v))                     # noqa: E731
+    drive = lambda ch: (0.3 * torch.sin(torch.arange(T) * 0.37)).reshape(1, 1, T).repeat(B, ch, 1)  # noqa: E731
+    makers = {
+        "NADROWSKI": (lambda: NadrowskiModel(
+            k=col(0.3), lam=col(10.0), f=col(0.5), tau=col(0.05), tau_c=col(0.5), s=col(0.6), delta_e=col(1.0),
+            beta=col(1.5), n=col(50.0), temp=col(1.2), force=drive(1), batch_size=B),
+            3, True, _nadrowski_compiled_corrected_step),
+        "HOPF": (lambda: HopfModel(col(0.2), col(0.5), col(0.3), col(0.4), drive(2), batch_size=B),
+                 2, False, _hopf_compiled_corrected_step),
+    }
+
+    class Spy:
+        """The model, its drift recording the state it is evaluated at."""
+
+        def __init__(self, sde):
+            self.sde, self.at = sde, []
+
+        def __getattr__(self, name):
+            return getattr(self.sde, name)
+
+        def f(self, x, i):
+            self.at.append(x.clone())
+            return self.sde.f(x, i)
+
+    solver = _sdeint_mod.Solver()
+    for name, (make, d, sdd, step) in makers.items():
+        model = make()
+        assert model.admits_corrected_step, name
+        assert len(model.compiled_params()) == len(list(step.graph.inputs())) - 6, \
+            f"{name}: compiled_params() does not bind between the corrected step's dW and dt"
+        x0 = torch.full((B, d), 0.1) + 0.02 * torch.arange(B, dtype=torch.float32).unsqueeze(1)
+        torch.manual_seed(1)
+        path = solver.euler(make(), x0.clone(), dt, T, state_dep_drift=sdd)
+        for k in (0, 7, 19, 31, T - 2):
+            starts_at = make()
+            starts_at.force = starts_at.force[:, :, k:]
+            spy = Spy(starts_at)
+            torch.manual_seed(100 + k)
+            solver.heun(spy, path[k].clone(), dt, 2, state_dep_drift=sdd)
+            fresh = make()
+            fresh.force = fresh.force[:, :, k:]
+            torch.manual_seed(100 + k)
+            plain = solver.euler(fresh, path[k].clone(), dt, 2, state_dep_drift=sdd)[1]
+            assert len(spy.at) == 2 and torch.equal(spy.at[0], path[k]), (name, k)
+            assert torch.equal(spy.at[1], plain), \
+                f"{name}, step {k}: the prediction is not the plain step, max|diff| {(spy.at[1] - plain).abs().max():g}"
+        torch.manual_seed(3)
+        eager = solver.heun(make(), x0.clone(), dt, T, state_dep_drift=sdd)
+        torch.manual_seed(3)
+        comp = solver.heun_compiled(make(), x0.clone(), dt, T, state_dep_drift=sdd)
+        assert float((eager[-1] - eager[0]).abs().max()) > 1e-3, f"{name}: nothing moved"
+        assert torch.equal(eager, comp), \
+            f"{name}: the compiled corrected step differs from the eager one, max|diff| {(eager - comp).abs().max():g}"
+
+
+class _DeclaredDriveSDE(_DriveSDE):
+    """_DriveSDE, declaring the corrected step: its drift is the drive, its noise none."""
+    admits_corrected_step = True
+
+
+def test_the_corrected_step_reads_the_drive_at_both_ends_across_seams():
+    """The corrected step from fine index g reads the drive at g and at g + 1, in every segment and across every
+    seam: with the drift equal to the drive and the noise off, the state is the trapezoid sum of the drive over
+    the steps taken, to 1e-12, wherever a drive that switches on at K falls against the seams -- the settling's
+    last step, a segment's first, one a single step long, the middle of one, the run's last -- so it first moves
+    at K, by half a step. A drive read at the step's start twice would first move it at K + 1, and a segment
+    handed its drive one point short would fail on its last step. A corrected run handed a drive with fewer
+    points than its grid is refused before anything is integrated."""
+    from core.Simulator import simulator as _sim
+
+    class DriveSim(_sim.Simulator):
+        def _set_up_model(self):
+            self.sde = _DeclaredDriveSDE()
+            self.sde.force = self._force
+
+    n, n_tr = 241, 40
+    plan = [(0, n_tr, 0.025), (n_tr, 41, 0.0231), (41, 97, 0.0231), (97, 98, 0.0231), (98, 200, 0.0231),
+            (200, n - 1, 0.0231)]
+    h = torch.tensor([0.025] * n_tr + [0.0231] * (n - 1 - n_tr), dtype=torch.float64)
+    for K in (39, 40, 41, 97, 98, 150, 239):
+        force = torch.zeros((1, 1, n), dtype=torch.float64)
+        force[..., K:] = 1.0
+        sim = DriveSim(torch.zeros((1, 1)), force, torch.zeros((1, 1), dtype=torch.float64),
+                       torch.zeros(n, dtype=torch.float64), segs=len(plan), batch_size=1)
+        x = sim.simulate(plan=plan)[0, 0, 0, :]
+        F = force[0, 0]
+        want = torch.cat([torch.zeros(1, dtype=torch.float64), torch.cumsum(h * (F[:-1] + F[1:]) / 2, 0)])
+        assert float((x - want).abs().max()) < 1e-12, (K, float((x - want).abs().max()))
+        moved = torch.nonzero(x).flatten()
+        assert len(moved) and int(moved[0]) == K, (K, moved[:3].tolist())
+    short = DriveSim(torch.zeros((1, 1)), torch.zeros((1, 1, n - 1), dtype=torch.float64),
+                     torch.zeros((1, 1), dtype=torch.float64), torch.zeros(n, dtype=torch.float64),
+                     segs=len(plan), batch_size=1)
+    with pytest.raises(ValueError, match="drive point for each of the grid's"):
+        short.simulate(plan=plan)
+
+
+def test_each_built_in_model_takes_the_step_its_noise_admits_and_the_screen_the_plain_one(monkeypatch):
+    """A built-in model takes the corrected step only where no variable's noise depends on that variable itself:
+    the Nadrowski cell's and the Hopf model's declarations are checked against their noise (each component's
+    derivative with respect to its own variable is zero at random states; the Hopf noise takes no state at
+    all), and BP declares nothing. Simulator.simulate follows the declaration when it is handed a plan -- every
+    simulated row is -- and takes the plain step for every model without one: the prior's stability screens,
+    whose every call hands none, keep the step they certify parameter sets at."""
+    from core.Models.bp_model import BPModel
+    from core.Models.hopf_model import HopfModel
+    from core.Models.nadrowski_model import NadrowskiModel
+    from core.Simulator import simulator as _sim
+    from core.Simulator.nadrowski_simulator import NadrowskiSimulator
+
+    B = 64
+    gen = torch.Generator().manual_seed(4)
+    u = lambda lo, hi: lo + (hi - lo) * torch.rand(B, generator=gen)  # noqa: E731
+    nad = NadrowskiModel(k=u(0.1, 1.0), lam=u(1.0, 10.0), f=u(0.5, 2.0), tau=u(0.01, 0.1), tau_c=u(0.1, 1.0),
+                         s=u(0.1, 1.0), delta_e=u(0.0, 5.0), beta=u(1.0, 90.0), n=u(10.0, 100.0), temp=u(0.5, 2.0),
+                         force=torch.zeros(B, 1, 2), batch_size=B)
+    # States about the channels' gating midpoint, so the channel's noise stays away from zero, where its square
+    # root's derivative is infinite and a gradient of zero would read as not-a-number.
+    x0 = torch.randn(B, generator=gen)
+    beta = nad.beta
+    x1 = x0 - (nad.delta_e + beta / 2) / beta + 0.5 * torch.randn(B, generator=gen) / beta
+    x = torch.stack([x0, x1, torch.rand(B, generator=gen)], dim=1)
+    x.requires_grad_(True)
+    g = nad.g(x)
+    for k in range(3):
+        (grad,) = torch.autograd.grad(g[:, k].sum(), x, retain_graph=True, allow_unused=True)
+        own = torch.zeros(B) if grad is None else grad[:, k]
+        assert torch.equal(own, torch.zeros(B)), f"the Nadrowski noise of variable {k} depends on that variable"
+    assert NadrowskiModel.admits_corrected_step is True
+    import inspect
+    assert list(inspect.signature(HopfModel.g).parameters) == ["self"], "the Hopf noise takes no state"
+    assert HopfModel.admits_corrected_step is True
+    assert not hasattr(BPModel, "admits_corrected_step"), "BP declares nothing, so it keeps the plain step"
+
+    calls = []
+    real = _sdeint_mod.Solver
+
+    class Recording:
+        def __init__(self):
+            self._real = real()
+
+        def __getattr__(self, method):
+            fn = getattr(self._real, method)
+
+            def recorded(*a, **k):
+                calls.append(method)
+                return fn(*a, **k)
+            return recorded
+
+    monkeypatch.setattr(_sdeint_mod, "Solver", Recording)
+    n = 120
+    p = torch.tensor([[0.8, 3.57, 1.32, 0.027, 0.268, 0.95, 10.0, 14.1, 50.0, 1.5]]).repeat(2, 1)
+    force = torch.zeros(2, 1, n)
+    inits = torch.tensor([[-0.11, -1.32, 0.5]]).repeat(2, 1)
+    plan = [(0, 40, 0.025), (40, n - 1, 0.0231)]
+
+    def method(use_compile, **kw):
+        calls.clear()
+        sim = NadrowskiSimulator(p, force, inits, torch.linspace(0, 3.0, n), segs=2, batch_size=2,
+                                 use_compile=use_compile)
+        sim.simulate(state_dep_drift=True, **kw)
+        return sorted(set(calls))
+
+    assert method(False, plan=plan) == ["heun"]
+    assert method(True, plan=plan) == ["heun_compiled"]
+    assert method(False) == ["euler"], "a call with no plan must keep the plain step"
+    assert method(True) == ["euler_compiled"], "a call with no plan must keep the plain step"
+
+    class Undeclared(_sim.Simulator):
+        def _set_up_model(self):
+            self.sde = _DriveSDE()
+            self.sde.force = self._force
+
+    calls.clear()
+    Undeclared(torch.zeros((1, 1)), torch.zeros((1, 1, n), dtype=torch.float64), torch.zeros((1, 1), dtype=torch.float64),
+               torch.zeros(n, dtype=torch.float64), segs=2, batch_size=1).simulate(plan=plan)
+    assert sorted(set(calls)) == ["euler"], "a model that declares nothing must keep the plain step"
+
+    # Every call of the simulator in the program hands it a plan, but the prior's stability screens, which hand none.
+    from tests._fixtures import CODE_ROOTS
+    repo = Path(__file__).resolve().parents[1]
+    planned, screens = [], []
+    for root in CODE_ROOTS:
+        for path in sorted((repo / root).rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "simulate":
+                    where = (path.relative_to(repo).as_posix(), node.lineno)
+                    named = {kw.arg for kw in node.keywords}
+                    (planned if "plan" in named or len(node.args) > 1 else screens).append(where)
+    assert planned, "no simulator call hands a plan"
+    assert len(screens) >= 6 and all(p.startswith("core/SBI/Priors/") for p, _ in screens), \
+        f"a simulator call other than a prior's screen hands no plan: {screens}"
 
 
 def test_box_roundtrip_never_yields_a_nonfinite_latent_target():
@@ -3062,12 +3326,15 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     assert ia["truncation"] is None, "an amortized identity records truncation=None"
     # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
     # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
-    # deliberately, with a migration for the checkpoints on disk. Belongs to training-rows/4: the
-    # record clock joined the identity, so that no set simulated under the older clock (each cell at
-    # a time scale near its own, its drive started before the first frame) is ever continued; such a
-    # set is kept and never resumed. The training-rows/3 digest this superseded was "1d799334fcf7"
-    # (the units file's fingerprint had joined it), and the training-rows/2 one "1912d2139359".
-    assert tc.identity_digest(ia) == "f553827c095b", \
+    # deliberately, with a migration for the checkpoints on disk. Belongs to training-rows/5: the
+    # record clock's name moved to "frame-exact/2" when every row took the corrected step wherever its
+    # model admits it, so that no set simulated with the plain step at every step is ever continued;
+    # such a set is kept and never resumed. The training-rows/4 digest this superseded was
+    # "f553827c095b" (the record clock had joined the identity, so that no set simulated under the
+    # older clock -- each cell at a time scale near its own, its drive started before the first frame
+    # -- is ever continued), the training-rows/3 one "1d799334fcf7" (the units file's fingerprint had
+    # joined it), and the training-rows/2 one "1912d2139359".
+    assert tc.identity_digest(ia) == "8ee1847dc2ce", \
         f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
     assert set(ia) == {
         "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs",
@@ -4140,6 +4407,81 @@ def test_two_batches_at_different_steps_share_one_capture():
         assert torch.equal(graphed[dt], eager[dt]), \
             f"step {dt}: the shared capture disagrees with the eager loop, max|diff| " \
             f"{float((graphed[dt] - eager[dt]).abs().max()):.3e}"
+
+
+@pytest.mark.gpu
+def test_the_corrected_steps_cuda_graph_matches_its_eager_loop_bitwise():
+    """The corrected step replayed from a captured graph integrates the SAME trajectory as its eager compiled loop.
+
+    Each corrected step reads the drive at its start and at its end, so the capture's drive buffer holds one
+    point more than its steps and each replay is filled with one point more than it integrates: exactly where an
+    off-by-one would hide, as slightly-wrong physics. A capture is made (a buffer too short fails the capture,
+    and the run falls back to the eager loop, which would pass the comparison unseen), and it equals the warm
+    eager loop bit for bit over two whole chunks and an eager tail, with the noise off and a changing drive."""
+    from core import config as _cfg
+    from core.Solvers import sdeint as _sd
+    if not torch.cuda.is_available():
+        print("      (no CUDA -- skipping the corrected step's graph/eager equivalence check)")
+        return
+    dev = torch.device("cuda")
+    B, T = 128, 2 * _cfg.SOLVER_GRAPH_CHUNK + 3        # 2 full chunks + a 2-step tail
+    x0 = torch.linspace(-0.2, 0.2, B, device=dev).unsqueeze(1).repeat(1, 3).contiguous()
+    dt = 0.001
+    prev, disabled = _cfg.SOLVER_CUDA_GRAPHS, _sd._GRAPH_DISABLED
+    try:
+        _cfg.SOLVER_CUDA_GRAPHS = False
+        for _ in range(3):                             # specialise the scripted step (see the plain step's test)
+            _sd.Solver().heun_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+        eager = _sd.Solver().heun_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+        _cfg.SOLVER_CUDA_GRAPHS = True
+        _sd._GRAPH_CACHE.clear()
+        graphed = _sd.Solver().heun_compiled(_graph_test_model(B, T, dev), x0.clone(), dt, T)
+        assert len(_sd._GRAPH_CACHE) == 1 and not _sd._GRAPH_DISABLED, "the corrected step was never captured"
+    finally:
+        _cfg.SOLVER_CUDA_GRAPHS, _sd._GRAPH_DISABLED = prev, disabled
+        _sd._GRAPH_CACHE.clear()
+    assert graphed.shape == eager.shape == (T, B, 3), (graphed.shape, eager.shape)
+    assert torch.isfinite(graphed).all() and float((graphed[-1] - graphed[0]).abs().max()) > 1e-3
+    assert torch.equal(graphed, eager), \
+        f"the corrected step's graph and eager loop disagree, max|diff|={float((graphed - eager).abs().max()):.3e}"
+
+
+@pytest.mark.gpu
+def test_the_corrected_steps_graph_keeps_the_rng_contract_a_cache_resume_depends_on():
+    """The corrected step's captured graph draws fresh noise on every replay, and restoring the card's random state
+    reproduces a run, as the plain step's graph does: a simulation-cache resume restores that state and expects
+    the noise to continue from there."""
+    from core import config as _cfg
+    from core.Solvers import sdeint as _sd
+    from core.Models.nadrowski_model import NadrowskiModel
+    if not torch.cuda.is_available():
+        print("      (no CUDA -- skipping the corrected step's graph RNG contract check)")
+        return
+    dev = torch.device("cuda")
+    B, T = 128, 2 * _cfg.SOLVER_GRAPH_CHUNK + 1
+    x0 = torch.zeros((B, 3), device=dev)
+
+    def run():
+        o = lambda v: torch.full((B,), float(v), device=dev)  # noqa: E731
+        m = NadrowskiModel(o(0.8), o(3.57), o(1.32), o(0.027), o(0.268), o(0.95), o(10.), o(14.1),
+                           o(50.), o(1.5), torch.zeros((B, 1, T), device=dev), batch_size=B, device=dev)
+        return _sd.Solver().heun_compiled(m, x0.clone(), 0.001, T)
+
+    prev, disabled = _cfg.SOLVER_CUDA_GRAPHS, _sd._GRAPH_DISABLED
+    try:
+        _cfg.SOLVER_CUDA_GRAPHS = True
+        _sd._GRAPH_CACHE.clear()
+        a, b = run(), run()
+        assert len(_sd._GRAPH_CACHE) == 1, "the corrected step was never captured"
+        assert not torch.equal(a, b), "consecutive graphed runs drew IDENTICAL noise -- the RNG is frozen in the graph"
+        state = torch.cuda.get_rng_state_all()
+        c = run()
+        torch.cuda.set_rng_state_all(state)
+        d = run()
+        assert torch.equal(c, d), "restoring the CUDA RNG state did not reproduce the run"
+    finally:
+        _cfg.SOLVER_CUDA_GRAPHS, _sd._GRAPH_DISABLED = prev, disabled
+        _sd._GRAPH_CACHE.clear()
 
 
 @pytest.mark.gpu

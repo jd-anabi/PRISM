@@ -84,17 +84,30 @@ class Simulator(ABC):
             the grid's first interval exactly as the first segment always has (:func:`legacy_plan`).
         :return: simulated solution with shape (N, FPB, B / FPB, T)
 
+        THE RULE. With a plan, every step is the model's own: the corrected step (``sdeint.Solver.heun``) for
+        a model that declares ``admits_corrected_step`` -- no variable's noise depends on that variable
+        itself, so averaging the noise over the step integrates the equation the plain step integrates --
+        and the plain Euler-Maruyama step for any other model, a model that declares nothing among them. With
+        no plan, the prior's stability screens, every model takes the plain step: the screen certifies the
+        largest step training takes against blowing up, the corrected step's stable region contains the
+        plain step's, so every set it admits stays stable, and keeping its rule leaves the prior as it is.
+
         THE SEAM. Segment k starts from the state at the previous segment's last index and is handed the
-        drive from that index; it integrates its own steps and writes only its new states. So index g
-        holds the state after g steps in every segment, drive index m serves step m -> m+1, and a run
-        cut into segments equals one long run, bit for bit on the CPU with the same draws in the same
+        drive from that index through its last, one point more than its steps; it integrates its own steps
+        and writes only its new states. So index g holds the state after g steps in every segment, the
+        plain step from g reads drive index g, the corrected step from g reads drive indices g and g + 1, and
+        a run cut into segments equals one long run, bit for bit on the CPU with the same draws in the same
         order. (Each seam used to repeat a sample, the drive's index then leading the state's by one.)
         """
         ensemble_size = self._batch_size // self.freqs_per_batch
         n_t = self.t.shape[0]
+        corrected = plan is not None and bool(getattr(self.sde, "admits_corrected_step", False))
         if plan is None:
             plan = self.legacy_plan()
         _check_plan(plan, n_t)
+        if corrected and self._force.shape[-1] < n_t:
+            raise ValueError(f"the corrected step reads the drive at each step's end, so it needs a drive point for "
+                             f"each of the grid's {n_t} points; this drive holds {self._force.shape[-1]}")
 
         n_vars = self.inits.shape[-1]
         curr_inits = self.inits
@@ -106,9 +119,10 @@ class Simulator(ABC):
         sol = torch.empty((n_vars, self._batch_size, n_t), dtype=self.t.dtype, device=self.t.device)
         sol[:, :, 0] = torch.transpose(self.inits, 0, 1).to(dtype=sol.dtype, device=sol.device)
 
-        # The SDE model indexes force with the solver's local step index (0..n_steps-1), not the
-        # absolute step across the full simulation, so each segment is handed the drive from its own
-        # first index; the full reference is restored after.
+        # The SDE model indexes force with the solver's local step index, not the absolute step across
+        # the full simulation, so each segment is handed the drive from its own first index through its
+        # last (a view, one point more than its steps, for the corrected step's end); the full reference
+        # is restored after.
         full_force = self._force
         # `disable` is passed only under the GUI (config.QUIET_SEGMENT_BAR). It must be a conditional
         # splat, not `disable=config.QUIET_SEGMENT_BAR`: tqdm.__init__ is @envwrap("TQDM_")-decorated
@@ -116,8 +130,8 @@ class Simulator(ABC):
         # a TQDM_DISABLE override that reaches this call today. Omitting it keeps the CLI byte-identical.
         for a, b, dt in tqdm(plan, desc="Running time segments", leave=False,
                              **({"disable": True} if config.QUIET_SEGMENT_BAR else {})):
-            self.sde.force = full_force[:, :, a:b]
-            results = self.__sols(b - a + 1, curr_inits, dt, state_dep_drift)  # (b - a + 1, batch, n_vars)
+            self.sde.force = full_force[:, :, a:b + 1]
+            results = self.__sols(b - a + 1, curr_inits, dt, state_dep_drift, corrected)  # (b - a + 1, batch, n_vars)
 
             # update initial conditions. The .clone() is load-bearing for MEMORY, not correctness:
             # results[-1, :, :] is a VIEW into this segment's (n, batch, n_vars) solver buffer, so
@@ -191,9 +205,10 @@ class Simulator(ABC):
         self._set_up_model()
 
     # --- PRIVATE METHODS --- #
-    def __sols(self, n: int, inits: torch.Tensor, dt, state_dep_drift: bool) -> torch.Tensor:
+    def __sols(self, n: int, inits: torch.Tensor, dt, state_dep_drift: bool, corrected: bool = False) -> torch.Tensor:
         """
-        Returns the sde solution over one segment: ``n`` points, ``n - 1`` steps of ``dt``, from ``inits``.
+        Returns the sde solution over one segment: ``n`` points, ``n - 1`` steps of ``dt``, from ``inits``,
+        each the corrected step when ``corrected`` (see :meth:`simulate`), the plain one otherwise.
         :return: a (n, batch, n_vars) tensor
         """
 
@@ -207,23 +222,20 @@ class Simulator(ABC):
         # the seam over.
         solver = sdeint.Solver()
 
-        # Pick eager vs compiled. Auto: CUDA + model exposes compiled_step.
+        # Pick eager vs compiled. Auto: CUDA + model exposes the compiled form of the step it takes.
         use_compile = self._use_compile
         if use_compile is None:
             use_compile = (self._device.type == "cuda"
-                           and hasattr(self.sde, "compiled_step"))
+                           and hasattr(self.sde, "compiled_corrected_step" if corrected else "compiled_step"))
+        method = ("heun" if corrected else "euler") + ("_compiled" if use_compile else "")
 
         with torch.no_grad():
             try:
-                if use_compile:
-                    sol = solver.euler_compiled(self.sde, inits, dt, n, state_dep_drift=state_dep_drift)
-                else:
-                    sol = solver.euler(self.sde, inits, dt, n, state_dep_drift=state_dep_drift)
+                sol = getattr(solver, method)(self.sde, inits, dt, n, state_dep_drift=state_dep_drift)
             # NOT BaseException: streams.WorkerCancelled derives from BaseException precisely so a
             # cooperative cancel sails through handlers like this one to reach Worker.run. Widening
             # here would turn every GUI cancel into a spurious simulation failure.
             except Exception as e:
-                method = "euler_compiled" if use_compile else "euler"
                 raise SimulationError(
                     f"{type(self.sde).__name__} {method} failed after {n} steps "
                     f"(batch={self._batch_size}, segs={self.segs}, device={self._device}, "

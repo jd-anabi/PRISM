@@ -741,7 +741,7 @@ def test_a_simulation_set_made_before_the_record_clock_is_never_one_setting_away
     from core.gui import fields as gui_fields
     from core.SBI import clock, training_checkpoint as tc
     mine = SimulationIdentity.from_cfg(_nad_cfg(chi_mode=True), None, 4, 10).to_dict()
-    assert FORMAT == "training-rows/4" and mine["format"] == FORMAT and mine["record_clock"] == clock.RECORD_CLOCK
+    assert FORMAT == "training-rows/5" and mine["format"] == FORMAT and mine["record_clock"] == clock.RECORD_CLOCK
     before = {key: value for key, value in mine.items() if key != "record_clock"}
     before["format"] = "training-rows/3"
     write_simulation_set(tmp_path, before, 10, complete=True)
@@ -750,6 +750,25 @@ def test_a_simulation_set_made_before_the_record_clock_is_never_one_setting_away
     assert [one["field"] for one in row.fields] == ["format", "record_clock"]
     assert gui_fields.difference_lines(row.fields, prior_label=lambda fp: None) == (gui_fields.OTHER_VERSION_TEXT,)
     assert f"{tc.identity_digest(before)} (10 batches, differs in format)" in tc.describe_siblings(mine, tmp_path)
+
+
+def test_a_set_of_the_plain_step_on_the_record_clock_is_never_one_setting_away(tmp_path):
+    """A set simulated on the record clock with the plain step at every step, before the corrected step joined it,
+    differs from today's in two entries, its format and its clock's name, so it is never offered as one setting
+    away (a setting nobody can set, to continue rows another step made); the run's log names it as differing in
+    its format, and the window says it was made by another version of PRISM."""
+    from core.artifacts.identity import FORMAT, SimulationIdentity
+    from core.gui import fields as gui_fields
+    from core.SBI import clock, training_checkpoint as tc
+    mine = SimulationIdentity.from_cfg(_nad_cfg(chi_mode=True), None, 4, 10).to_dict()
+    plain = dict(mine, format="training-rows/4", record_clock="frame-exact/1")
+    write_simulation_set(tmp_path, plain, 10, complete=True)
+    assert tc.near_miss_siblings(mine, tmp_path) == []
+    (row,) = tc.sibling_differences(mine, tmp_path)
+    assert [one["field"] for one in row.fields] == ["format", "record_clock"]
+    assert gui_fields.difference_lines(row.fields, prior_label=lambda fp: None) == (gui_fields.OTHER_VERSION_TEXT,)
+    assert f"{tc.identity_digest(plain)} (10 batches, differs in format)" in tc.describe_siblings(mine, tmp_path)
+    assert (FORMAT, clock.RECORD_CLOCK) == (mine["format"], mine["record_clock"]) == ("training-rows/5", "frame-exact/2")
 
 
 def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(tmp_path):
@@ -761,7 +780,7 @@ def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(t
     cfg = _nad_cfg()
     lf = Path(cfg.sources["units"]).read_bytes().replace(b"\r\n", b"\n")
     ident = SimulationIdentity.from_cfg(cfg, None, 4, 2).to_dict()
-    assert FORMAT == "training-rows/4" and ident["format"] == FORMAT
+    assert FORMAT == "training-rows/5" and ident["format"] == FORMAT
     assert ident["units_sha256"] == hashlib.sha256(lf).hexdigest()
     crlf, edited = tmp_path / "crlf.txt", tmp_path / "edited.txt"
     crlf.write_bytes(lf.replace(b"\n", b"\r\n"))
@@ -1537,9 +1556,10 @@ def test_load_posterior_refuses_each_mismatch_class(store):
 
 
 def test_load_posterior_refuses_a_posterior_trained_on_rows_of_another_clock(store, monkeypatch):
-    """A posterior records the clock its rows were simulated on. One whose record names no clock was trained on rows of
-    an older PRISM, which held each cell at a time scale near its own rather than at it, and one of another clock on
-    rows that mean something else: both are refused before the payload is read; today's loads."""
+    """A posterior records the clock its rows were simulated on and the step that integrated them. One whose record
+    names no clock was trained on rows of an older PRISM, which held each cell at a time scale near its own rather
+    than at it; one of "frame-exact/1" on rows of the plain step at every step; one of another clock on rows that
+    mean something else: each is refused before the payload is read, naming the clock it holds; today's loads."""
     from core.SBI import clock
     cfg = _nad_cfg(chi_mode=True)
     assert mf.conditioning_block(cfg)["record_clock"] == clock.RECORD_CLOCK
@@ -1551,6 +1571,7 @@ def test_load_posterior_refuses_a_posterior_trained_on_rows_of_another_clock(sto
     _posterior_artifact(store, cfg, name="before-the-clock")
     monkeypatch.setattr(mf, "conditioning_block", real)
     _posterior_artifact(store, cfg, name="another-clock", over={("conditioning", "record_clock"): "frame-exact/0"})
+    _posterior_artifact(store, cfg, name="the-plain-step", over={("conditioning", "record_clock"): "frame-exact/1"})
     real_load, unpickled = torch.load, []
 
     def spy_load(*a, **k):
@@ -1558,7 +1579,9 @@ def test_load_posterior_refuses_a_posterior_trained_on_rows_of_another_clock(sto
         return real_load(*a, **k)
 
     monkeypatch.setattr(torch, "load", spy_load)
-    for name, why in (("before-the-clock", "names no clock"), ("another-clock", "'frame-exact/0'")):
+    for name, why in (("before-the-clock", "names no clock"), ("another-clock", "'frame-exact/0'"),
+                      ("the-plain-step", "'frame-exact/1'; this version simulates every row on the record clock "
+                                         "'frame-exact/2'")):
         with pytest.raises(Refusal, match=why) as caught:
             store.load_posterior(cfg, name)
         assert caught.value.field == "posterior", name

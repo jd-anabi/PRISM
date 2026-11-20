@@ -23,8 +23,10 @@ the first frame.
 WHAT A ROW HOLDS. A kept trace is ``gen_obs(...)[..., ::s][..., :n_points]`` (gen_obs already drops the
 transient), one frame apart in the cell's time, read with ``dt_exp`` as its true spacing.
 
-``RECORD_CLOCK`` names this clock in a simulation set's identity, so that no set simulated on another is ever
-continued or trained on as one.
+``RECORD_CLOCK`` names this clock, and the step that integrates it, in a simulation set's identity, so that no set
+simulated on another is ever continued or trained on as one. "frame-exact/1" was this clock with the plain
+Euler-Maruyama step at every step; "frame-exact/2" takes the corrected step, settling included, wherever the model
+admits it (``core.Simulator.simulator.Simulator.simulate``).
 """
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ from dataclasses import dataclass
 
 import torch
 
-RECORD_CLOCK = "frame-exact/1"
+RECORD_CLOCK = "frame-exact/2"
 
 _BELOW_ONE = 1.0 - 1e-6
 

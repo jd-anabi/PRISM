@@ -17,9 +17,40 @@ def _hopf_compiled_step(
     return x + drift * dt + g * dW * sqrt_dt
 
 
+@torch.jit.script
+def _hopf_drift(x: torch.Tensor, force_step: torch.Tensor, mu: torch.Tensor, beta: torch.Tensor) -> torch.Tensor:
+    """The drift at ``x`` under the drive ``force_step``, in the plain compiled step's operation order."""
+    x0 = x[:, 0]
+    x1 = x[:, 1]
+    r2 = x0 * x0 + x1 * x1
+    dx = mu * x0 - x1 - (x0 - beta * x1) * r2 + force_step[:, 0]
+    dy = x0 + mu * x1 - (beta * x0 + x1) * r2 + force_step[:, 1]
+    return torch.stack((dx, dy), dim=1)
+
+
+@torch.jit.script
+def _hopf_compiled_corrected_step(
+    x: torch.Tensor, force_now: torch.Tensor, force_next: torch.Tensor, dW: torch.Tensor,
+    mu: torch.Tensor, beta: torch.Tensor, g: torch.Tensor,
+    dt: torch.Tensor, sqrt_dt: torch.Tensor,
+) -> torch.Tensor:
+    """One stochastic Heun step for Hopf (``core.Solvers.sdeint.Solver.heun``), JIT-scripted: the plain step as a
+    prediction, the drift again where it lands under the drive at the step's end, the two averaged; the noise is
+    constant, so its average is itself."""
+    f0 = _hopf_drift(x, force_now, mu, beta)
+    e0 = g * dW * sqrt_dt
+    xp = x + f0 * dt + e0
+    f1 = _hopf_drift(xp, force_next, mu, beta)
+    return x + 0.5 * (f0 + f1) * dt + 0.5 * (e0 + g * dW * sqrt_dt)
+
+
 class HopfModel:
-    # Module-level compiled step exposed for sdeint.euler_compiled.
+    # Module-level compiled steps exposed for sdeint.euler_compiled and sdeint.heun_compiled.
     compiled_step = staticmethod(_hopf_compiled_step)
+    compiled_corrected_step = staticmethod(_hopf_compiled_corrected_step)
+    # The corrected step integrates this model's equation: its noise is constant
+    # (core.Simulator.simulator.Simulator.simulate).
+    admits_corrected_step = True
 
     def __init__(self, mu: torch.Tensor, beta: torch.Tensor, sigma_x: torch.Tensor, sigma_y: torch.Tensor,
                  force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'), dtype: torch.dtype = torch.float32):

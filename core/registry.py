@@ -122,7 +122,7 @@ def load_user_models() -> None:
     """Scan config.MODELS_PATH (at CALL time -- tests monkeypatch the path) and register every valid
     saved model; collect per-file failures into ``load_errors``. Idempotent; never raises."""
     from core.Helpers import model_store
-    from core.Models.user_model import parse_user_model, build_compiled_step
+    from core.Models.user_model import parse_user_model, build_compiled_step, build_corrected_step
 
     load_errors.clear()
     for path in model_store.list_user_models():
@@ -132,6 +132,7 @@ def load_user_models() -> None:
             # Best-effort JIT fast path (used only on CUDA; None -> eager euler). Kept OUT of the
             # builder's validate (correctness-only) so the GUI thread never pays the torch.jit.script cost.
             compiled.compiled_step_fn = build_compiled_step(compiled)
+            compiled.corrected_step_fn = build_corrected_step(compiled)   # None: the plain step (or eager)
             register(ModelSpec(
                 name=doc["name"],
                 labels=list(compiled.param_names),

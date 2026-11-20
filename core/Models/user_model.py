@@ -233,6 +233,54 @@ def build_compiled_step(compiled: "CompiledUserModel"):
         return None
 
 
+def build_corrected_step(compiled: "CompiledUserModel"):
+    """Best-effort, as :func:`build_compiled_step`: emit a @torch.jit.script stochastic Heun step for the
+    heun_compiled fast path (core/Solvers/sdeint.py), or return None -- for a model that keeps the plain step
+    (``self_dependent_noise``) and on any codegen or script failure, when a model that takes the corrected step
+    runs it on the eager loop. Signature ``step(x, force_now, force_next, dW, *params, dt, sqrt_dt) -> next_x``,
+    the plain step's with the drive at the step's end after the drive at its start: the plain step's drift and
+    noise at ``x`` give the prediction, the same at the prediction under the drive at the step's end, and the two
+    are averaged on the same increment, with the noise law of :func:`build_compiled_step`."""
+    if compiled.self_dependent_noise:
+        return None
+    try:
+        var_names, param_names = compiled.var_names, compiled.param_names
+        n_vars = len(var_names)
+        name_src = {vn: f"x{j}" for j, vn in enumerate(var_names)}
+        name_src.update({pn: f"p{k}" for k, pn in enumerate(param_names)})
+        drift_src = [_print_torch(e, name_src) for e in compiled.drift_exprs]
+        diff_src = [_print_torch(e, name_src) for e in compiled.diff_exprs]
+
+        def at(state: str, force: str, drift: str, noise: str) -> list:
+            out = [f"    x{j} = {state}[:, {j}]" for j in range(n_vars)]
+            out += [f"    dx{j} = ({drift_src[j]}) + {force}[:, {j}]" for j in range(n_vars)]
+            out.append(f"    {drift} = torch.stack([" + ", ".join(f"dx{j}" for j in range(n_vars)) + "], dim=1)")
+            for j in range(n_vars):
+                two_d = f"2.0 * ({diff_src[j]}) + torch.zeros_like({state}[:, 0])"
+                out.append(f"    g{j} = torch.sqrt(torch.clamp({two_d}, min=0.0))"
+                           if compiled.state_dep_noise else f"    g{j} = torch.sqrt({two_d})")
+            out.append(f"    {noise} = torch.stack([" + ", ".join(f"g{j}" for j in range(n_vars)) + "], dim=-1)")
+            return out
+
+        params_sig = "".join(f", p{k}: torch.Tensor" for k in range(len(param_names)))
+        lines = [f"def _user_corrected_step(x: torch.Tensor, force_now: torch.Tensor, force_next: torch.Tensor, "
+                 f"dW: torch.Tensor{params_sig}, dt: torch.Tensor, sqrt_dt: torch.Tensor) -> torch.Tensor:"]
+        lines += at("x", "force_now", "drift", "g")
+        lines.append("    e0 = g * dW * sqrt_dt")
+        lines.append("    xp = x + drift * dt + e0")
+        lines += at("xp", "force_next", "drift_end", "g_end")
+        lines.append("    return x + 0.5 * (drift + drift_end) * dt + 0.5 * (e0 + g_end * dW * sqrt_dt)")
+
+        src = "\n".join(lines)
+        filename = f"<user_model_step_{next(_STEP_ID)}>"
+        linecache.cache[filename] = (len(src), None, [ln + "\n" for ln in src.split("\n")], filename)
+        g: dict = {"torch": torch, "math": math, "__name__": "core.Models._user_model_compiled"}
+        exec(compile(src, filename, "exec"), g, g)
+        return torch.jit.script(g["_user_corrected_step"])
+    except Exception:                                          # noqa: BLE001 -- any failure -> eager
+        return None
+
+
 @dataclass
 class CompiledUserModel:
     """The runnable form of a user model definition.
@@ -251,6 +299,14 @@ class CompiledUserModel:
     diff_exprs: list = field(default_factory=list)    # sympy Expr per variable
     compiled_step_fn: object = None                   # @torch.jit.script euler_compiled step, or None
                                                       # (built lazily by build_compiled_step; eager fallback)
+    # True if some variable's D names that variable itself. Averaging such a noise over a step integrates
+    # another equation than the one typed (its Ito-Stratonovich correction, half of dD/dx, is not zero), so
+    # the model keeps the plain Euler-Maruyama step; every other model takes the corrected one. Read off the
+    # typed expressions, conservatively: a D that names its own variable keeps the plain step even where its
+    # derivative happens to vanish.
+    self_dependent_noise: bool = False
+    corrected_step_fn: object = None                  # @torch.jit.script heun_compiled step, or None
+                                                      # (built by build_corrected_step; eager fallback)
 
 
 def parse_user_model(variables: list) -> CompiledUserModel:
@@ -323,6 +379,8 @@ def parse_user_model(variables: list) -> CompiledUserModel:
 
     # Multiplicative noise iff any diffusion expression references a state variable.
     state_dep_noise = any(bool(d.free_symbols & set(state_syms)) for d in diff_exprs)
+    # The plain step iff some variable's diffusion expression references that variable itself.
+    self_dependent_noise = any(sym in d.free_symbols for sym, d in zip(state_syms, diff_exprs))
 
     # Pass 2 -- compile against the final (state + used-param) argument layout.
     arg_index = {s: i for i, s in enumerate(state_syms + param_syms)}
@@ -333,7 +391,8 @@ def parse_user_model(variables: list) -> CompiledUserModel:
 
     return CompiledUserModel(var_names=var_names, param_names=param_names,
                              drift_fns=drift_fns, diff_fns=diff_fns, state_dep_noise=state_dep_noise,
-                             drift_exprs=drift_exprs, diff_exprs=diff_exprs)
+                             drift_exprs=drift_exprs, diff_exprs=diff_exprs,
+                             self_dependent_noise=self_dependent_noise)
 
 
 class UserModel:
@@ -377,10 +436,16 @@ class UserModel:
             cols = [torch.sqrt(2.0 * self._as_batch(fn(args))) for fn in compiled.diff_fns]
             self._g = torch.stack(cols, dim=-1)                  # (batch, d) diagonal amplitudes
 
+        # The corrected step unless some variable's noise names that variable (CompiledUserModel's field).
+        self.admits_corrected_step = not compiled.self_dependent_noise
+
         # Fast path: expose a @torch.jit.script step ONLY when one was built (registry.load_user_models).
-        # Its presence is what Simulator.__sols keys on to pick euler_compiled on CUDA; absent -> eager.
+        # Its presence is what Simulator.__sols keys on to pick euler_compiled (or heun_compiled, for the
+        # corrected step's) on CUDA; absent -> eager.
         if compiled.compiled_step_fn is not None:
             self.compiled_step = compiled.compiled_step_fn
+        if compiled.corrected_step_fn is not None:
+            self.compiled_corrected_step = compiled.corrected_step_fn
 
     def compiled_params(self) -> tuple:
         """The param tuple passed to compiled_step after (x, force_step, dW); g is recomputed inline."""
