@@ -32,6 +32,7 @@ the settings and results of each check as the engine writes them (``check_result
 simulation set's state carries (``write_simulation_set``).
 """
 import ast
+import importlib
 import inspect
 import os
 import textwrap
@@ -155,17 +156,26 @@ def calls_that_speak(source: str) -> list[str]:
 
 def run_by(fn) -> list:
     """``fn`` and every function of the program's own that its parsed code calls by name, and the ones those call in
-    turn: what runs when ``fn`` does, as far as a name can tell. A name a function imports inside itself, a call
-    through a module's name and a method are not followed."""
+    turn: what runs when ``fn`` does, as far as a name can tell. A name is looked up among the names the function
+    imports inside itself first, then among its module's; a call through a module's name and a method are not
+    followed."""
     found, todo = [], [fn]
     while todo:
         f = todo.pop()
         if f in found:
             continue
         found.append(f)
-        for node in ast.walk(ast.parse(code_only(f))):
+        tree = ast.parse(code_only(f))
+        names = dict(f.__globals__)
+        package = getattr(inspect.getmodule(f), "__package__", None)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                source = importlib.import_module("." * node.level + (node.module or ""), package=package)
+                for alias in node.names:
+                    names[alias.asname or alias.name] = getattr(source, alias.name, None)
+        for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                callee = f.__globals__.get(node.func.id)
+                callee = names.get(node.func.id)
                 if inspect.isfunction(callee) and callee.__module__.startswith("core."):
                     todo.append(callee)
     return found
@@ -460,14 +470,24 @@ def install_sbitest():
     ``--bounds``/``--cell`` exactly as an operator would drive it, instead of against a hand-built
     config no flag could have produced. ``teardown`` removes exactly what this helper wrote (the
     SBITEST bounds/cell/units files and the model JSON) and unregisters the model; call it from a
-    ``finally``, or install through ``sbitest_installed``, which does. An install that fails partway
-    (its files written, the model not yet loaded) takes out what it wrote before its failure goes on.
-    The session's guard over the inputs' folders (tests/conftest.py's ``_no_inputs_written``) fails a
-    run that ends with any of it left.
+    ``finally``, or install through ``sbitest_installed``, which does. An install that finds any of
+    those files there already -- a run killed partway leaves them -- refuses before it writes anything,
+    naming what it found, so that it never writes over them nor takes them out with its own; an
+    install that fails partway (its files written, the model not yet loaded) takes out what it wrote
+    before its failure goes on. The session's guard over the inputs' folders (tests/conftest.py's
+    ``_no_inputs_written``) fails a run that ends with any of it left.
     """
     from core import config, registry
     from core.Helpers import model_store
     name = "SBITEST"
+    found = [str(path) for path in (config.MODELS_PATH / f"{name}.json",
+                                    *(base / name.lower() for base in (config.BOUNDS_PATH, config.CELL_PATH,
+                                                                       config.UNITS_PATH)))
+             if path.exists()]
+    if found:
+        raise AssertionError(f"the test model's files are already among the program's inputs, most likely left by a "
+                             f"run killed partway: {found}; look at them and remove them by hand. Nothing was "
+                             f"written.")
     doc = {"schema_version": 1, "name": name,
            "variables": [{"name": "x", "drift": "-k*x", "D": "d0", "init": 0.5, "forcing": None}],
            "params": {"k": 1.0, "d0": 0.05}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}}

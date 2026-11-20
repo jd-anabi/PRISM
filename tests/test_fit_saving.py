@@ -422,7 +422,8 @@ _CALLED_BUT_NOT_NAMED = {
     "core.SBI.fit_state.network_digest": "it digests the shape of the network a kept training is checked by",
     # the rows
     "core.SBI.pipeline.gen_training_data": "it makes the rows or reads them back from the simulation set, which the "
-                                           "set's identity and the digest of the validation rows hold",
+                                           "set's identity holds; a resume compares the count of the rows read back "
+                                           "and the standardisers the network fits to them with the kept training's",
 }
 
 # A module of three functions and a class, which the walk is tried on first: a call by a plain name, through a module

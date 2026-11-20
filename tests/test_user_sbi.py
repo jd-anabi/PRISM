@@ -5340,19 +5340,24 @@ def test_nothing_prints_or_logs_inside_a_checkpoint_commit():
     moment, so the rule is pinned here, on the code: no print, no ``log.*``/``logging.*`` call and no
     ``sys.stdout``/``sys.stderr`` write in the commit's functions or the atomic helpers they call.
     Parsed (code_only), so a docstring that quotes the rule cannot trip it. Walked from the commit's two
-    entries, so a helper the commit gains is read too."""
+    entries through every function of the program's own they call by name, a name a function imports
+    inside itself among them, so that a helper the commit gains and calls so is read too; a call through a
+    module's name and a method are not followed."""
     from core.SBI import training_checkpoint as tc
     from tests._fixtures import calls_that_speak, run_by
 
     # Every function of the program's own the commit's two entries call by name, and the ones those call
     # in turn. The ones named below must be among them, so that a helper renamed away fails here instead
-    # of leaving its code unread; the atomic writer's rename and clean-up live in helpers of their own.
-    commit = run_by(tc.save) + [fn for fn in run_by(tc.mark_complete) if fn not in run_by(tc.save)]
+    # of leaving its code unread; the atomic writer's rename and clean-up live in helpers of their own, and
+    # the store's manifest writer is imported inside the manifest's refresh.
+    saved = run_by(tc.save)
+    commit = saved + [fn for fn in run_by(tc.mark_complete) if fn not in saved]
     reached = {f"{fn.__module__}.{fn.__name__}" for fn in commit}
     named = {f"core.SBI.training_checkpoint.{name}" for name in ("save", "mark_complete", "_refresh_manifest",
                                                                   "_shard", "peek", "read_header")}
     named |= {f"core.Helpers.file_manager.{name}" for name in ("atomic_torch_save", "_atomic_write",
                                                                 "_replace_retrying", "_discard")}
+    named |= {f"core.artifacts.store.{name}" for name in ("write_simulation_manifest", "_write_manifest")}
     assert named <= reached, f"the walk from the commit no longer reaches {sorted(named - reached)}"
     for fn in commit:
         said = calls_that_speak(code_only(fn))

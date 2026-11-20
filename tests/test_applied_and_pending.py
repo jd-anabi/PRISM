@@ -5807,12 +5807,15 @@ def test_no_widget_an_inferences_or_a_rounds_run_end_makes_is_shown_as_a_window_
     """STANDING, beside the builders' guard and the Checks page's. What Inference makes from its run's press to the
     run's end, its result read from an inference's records with its estimates and its figures, and what the narrowing
     round makes from its press to its run's end, its result read from the round's posterior, is made inside the page:
-    none is shown as a window of its own but the window itself and the questions the dialogs' guard records."""
+    none is shown as a window of its own but the window itself and the questions the dialogs' guard records, what the
+    run's end asks the event loop to do later included."""
+    from tests._look_helpers import _settle
     from tests._window_helpers import windows_of_their_own
     if step == "Inference":
         with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, _runs):
             with windows_of_their_own(monkeypatch) as shown:
                 _inferred(page, tmp_path)
+                _settle()                                    # what the run's end asked for later has had its turn
             made = (page.result.table_words() is not None, len(page.result.pictures) > 0)
     else:
         with _sixth_step(tmp_path, monkeypatch) as (_window, _screen, page, run, made):
@@ -5821,6 +5824,7 @@ def test_no_widget_an_inferences_or_a_rounds_run_end_makes_is_shown_as_a_window_
                 page._main_clicked()
                 assert run.started.wait(5), page.foot.reason.text()
                 _round_ends(run)
+                _settle()                                    # what the run's end asked for later has had its turn
             made = (len(page.result.sentences()) > 0, len(page.result.next_steps()) == 2)
     assert made == (True, True), f"the run's end made no result: nothing is tested ({made})"
     assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"

@@ -227,9 +227,9 @@ def _appearance_over():
     rest is the stand-in's own: the fonts it sets for widget classes are only kept, Windows' scheme is ``windows``
     on the hints it hands out (a change of it told by their ``colorSchemeChanged``), and the application's windows
     are the list handed out, never asked of Windows or of the real application. Yields ``(appearance, windows,
-    hints)``. Afterwards, however the block ended, every window in the list is closed and deleted, until one raises as
-    it is closed; the palette, the sheet, the look's theme flag and the module's active Appearance are put back, a
-    window that raised included; and the fonts the real
+    hints)``. Afterwards, however the block ended, every window in the list is closed and deleted, a window that raises
+    as it is closed deleted all the same and its error raised once the rest are let go, and the list is emptied; the
+    palette, the sheet, the look's theme flag and the module's active Appearance are put back; and the fonts the real
     application keeps for widget classes are PRISM's again if they were PRISM's before, as the first sheet an
     application is given and the last one taken from it each give those classes the toolkit's font."""
     import shiboken6
@@ -285,14 +285,22 @@ def _appearance_over():
     try:
         yield theming.Appearance(stand_in), stand_in.windows, stand_in.hints
     finally:
+        failed = []
         try:
             for window in stand_in.windows:
-                if shiboken6.isValid(window):
-                    window.close()
-                    window.deleteLater()
-                    QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
-            del stand_in.windows[:]
+                try:
+                    if shiboken6.isValid(window):
+                        try:
+                            window.close()
+                        finally:                            # one that would not close is deleted all the same
+                            window.deleteLater()
+                            QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
+                except Exception as error:                  # noqa: BLE001 -- the next windows are let go too
+                    failed.append(error)
+            if failed:
+                raise failed[0]
         finally:                                            # a window that raised as it closed: the look all the same
+            del stand_in.windows[:]
             real.setStyleSheet(found[0])
             if prisms:
                 fonts.apply_class_fonts(real)
@@ -503,9 +511,11 @@ def test_the_look_stand_in_puts_the_look_back_when_a_window_will_not_close():
     """The stand-in of the application that the figure windows' tests change the theme over puts back the look it
     found -- the sheet, the palette, the look's theme flag and the module's active Appearance -- however its block
     ends, a window that raises as it is closed included: the window's error goes on, and the next test does not start
-    from a look half changed. Read on the application as it stands after the block, then put back here too, should the
-    stand-in not have put it back."""
+    from a look half changed. The windows are let go all the same: the one that would not close and the one after it
+    are each deleted, and the stand-in holds neither. Read on the application as it stands after the block, then put
+    back here too, should the stand-in not have put it back."""
     import pytest
+    import shiboken6
     from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QWidget
     from core.gui import design, theming
@@ -519,15 +529,16 @@ def test_the_look_stand_in_puts_the_look_back_when_a_window_will_not_close():
         def close(self):
             raise RuntimeError("the window would not close")
 
-    stuck = WillNotClose()
+    stuck, after_it = WillNotClose(), QWidget()
     try:
         with pytest.raises(RuntimeError, match="would not close"):
             with _appearance_over() as (appearance, windows, _hints):
                 appearance.set_mode("dark")
                 assert design.is_dark() and app.styleSheet() != found[0], (
                     "nothing of the look changed: nothing is tested")
-                windows.append(stuck)
+                windows += [stuck, after_it]
         after = (app.styleSheet() == found[0], app.palette() == found[1], design.is_dark(), theming._ACTIVE)
+        let_go = (shiboken6.isValid(stuck), shiboken6.isValid(after_it), len(windows))
     finally:
         if app.styleSheet() != found[0]:
             app.setStyleSheet(found[0])
@@ -535,9 +546,13 @@ def test_the_look_stand_in_puts_the_look_back_when_a_window_will_not_close():
             app.setPalette(found[1])
         design.set_dark(found[2])
         theming._ACTIVE = found[3]
-        _gone(stuck)
+        for window in (stuck, after_it):
+            if shiboken6.isValid(window):
+                _gone(window)
     assert after == (True, True, found[2], found[3]), (
         "the look was not put back after a window raised as it was closed", after)
+    assert let_go == (False, False, 0), (
+        f"a window the stand-in was handed outlived its block, or the stand-in still holds one: {let_go}")
 
 def test_the_look_stand_in_lets_go_of_its_windows_however_its_block_ends():
     """A figure window handed to the stand-in of the application is closed and deleted as the block ends, a block that

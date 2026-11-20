@@ -5760,27 +5760,23 @@ def _names_kept(app):
         app.setApplicationName(names[1])
 
 
-@functools.cache
-def _windows_messages_in_the_code() -> dict:
-    """Every file of the program's code that shows a plain Windows message or names the call that shows one in its code
-    -- ``MessageBoxW`` or another of that call's spellings, as an attribute or as a string handed to a lookup by name
-    -- each with the function every such name stands in (None outside any function), read off its syntax tree: the
-    files under the code's roots and the top-level code files, each read once a process. A comment that names the
-    call is no call, and is passed over."""
+def _windows_message_names(text: str) -> list:
+    """The function each name of the call that shows a plain Windows message stands in, in the order ``text``, a
+    module's source, holds them (None outside any function): ``MessageBoxW`` or another of that call's spellings, as an
+    attribute, as a string handed to a lookup by name, as a name imported, under its own name or another, or as a name
+    called. A comment that names the call is no call, and is passed over."""
     import ast
     import re
-    from pathlib import Path
-    from tests._fixtures import CODE_FILES, CODE_ROOTS
-    repo = Path(__file__).resolve().parents[1]
     named = re.compile(r"MessageBox[A-Za-z]*")
-    files = [path for root in CODE_ROOTS for path in sorted((repo / root).rglob("*.py"))]
-    files += [repo / name for name in CODE_FILES]
 
     class Shown(ast.NodeVisitor):
-        """The function each name of the call stands in, in the order the file holds them."""
+        """The function each name of the call stands in, in the order the module holds them."""
 
         def __init__(self):
             self.within, self.found = [], []
+
+        def seen(self):
+            self.found.append(self.within[-1] if self.within else None)
 
         def visit_FunctionDef(self, node):
             self.within.append(node.name)
@@ -5791,23 +5787,80 @@ def _windows_messages_in_the_code() -> dict:
 
         def visit_Attribute(self, node):
             if named.fullmatch(node.attr):
-                self.found.append(self.within[-1] if self.within else None)
+                self.seen()
             self.generic_visit(node)
 
         def visit_Constant(self, node):
             if isinstance(node.value, str) and named.fullmatch(node.value):
-                self.found.append(self.within[-1] if self.within else None)
+                self.seen()
 
+        def visit_alias(self, node):
+            if any(named.fullmatch(name) for name in (node.name, node.asname) if name):
+                self.seen()
+
+        def visit_Name(self, node):
+            if named.fullmatch(node.id):
+                self.seen()
+
+    shown = Shown()
+    shown.visit(ast.parse(text))
+    return shown.found
+
+
+@functools.cache
+def _windows_messages_in_the_code() -> dict:
+    """Every file of the program's code that shows a plain Windows message or names the call that shows one in its
+    code, each with the function every such name stands in (``_windows_message_names``): the files under the code's
+    roots and the top-level code files, each read once a process."""
+    import re
+    from pathlib import Path
+    from tests._fixtures import CODE_FILES, CODE_ROOTS
+    repo = Path(__file__).resolve().parents[1]
+    files = [path for root in CODE_ROOTS for path in sorted((repo / root).rglob("*.py"))]
+    files += [repo / name for name in CODE_FILES]
     found = {}
     for path in files:
         text = path.read_text(encoding="utf-8")
         if not re.search(r"(?<![A-Za-z0-9_])MessageBox", text):
             continue
-        shown = Shown()
-        shown.visit(ast.parse(text))
-        if shown.found:
-            found[path.relative_to(repo).as_posix()] = shown.found
+        names = _windows_message_names(text)
+        if names:
+            found[path.relative_to(repo).as_posix()] = names
     return found
+
+
+# A module that names the call that shows a plain Windows message in each way the scan of the program's code looks for,
+# and in two ways that are no call; tried in the test beside it.
+_NAMES_THE_CALL = ("import ctypes\n"
+                   "from win32api import MessageBox\n"
+                   "from win32api import MessageBoxW as shown\n"
+                   "\n"
+                   "\n"
+                   "def by_attribute():\n"
+                   "    ctypes.windll.user32.MessageBoxW(None, 'a', 'b', 0)\n"
+                   "\n"
+                   "\n"
+                   "def by_lookup():\n"
+                   "    return getattr(ctypes.windll.user32, 'MessageBoxA')\n"
+                   "\n"
+                   "\n"
+                   "def by_name():\n"
+                   "    MessageBox(None, 'a', 'b', 0)\n"
+                   "    # a comment that names MessageBoxW is no call\n"
+                   "\n"
+                   "\n"
+                   "def by_the_toolkit():\n"
+                   "    QMessageBox.warning(None, 'a', 'b')\n")
+
+
+def test_the_windows_message_scan_sees_each_way_the_call_is_named():
+    """The scan that holds the plain Windows message to the entry point's one function sees the call however a module
+    names it: as an attribute, as a string handed to a lookup by name, as a name imported, under its own name or under
+    another, and as a name called; each by the function it stands in, None outside any function. A comment that names
+    the call, and the toolkit's own message box, are no call."""
+    found = _windows_message_names(_NAMES_THE_CALL)
+    assert found == [None, None, "by_attribute", "by_lookup", "by_name"], (
+        f"the scan of the Windows message missed a way the call is named, or saw one that is no call: {found}")
 
 
 def _main(entry):
@@ -6350,7 +6403,8 @@ def test_the_last_resort_error_says_where_the_full_error_is(tmp_path, monkeypatc
 # window's module is imported, the backend the library has been told and the lock the one PRISM was claimed with; it
 # ends there, before anything of the window is built. The settings file is in the test's own folder before the entry
 # runs, so that the claim's lock and its server's name are made from it, and the plain Windows message is recorded,
-# never shown.
+# never shown. A start that ends before the window's module is imported ends the entry as it would end PRISM; what was
+# recorded is printed all the same.
 _AGG_FIRST = r'''
 import importlib.abc
 import json
@@ -6400,7 +6454,7 @@ try:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)          # the entry's module was imported before it runs
         runpy.run_module("core.gui", run_name="__main__", alter_sys=True)
-except Reached:
+except (Reached, SystemExit):                                     # a start that ended before the window: its record
     pass
 print(json.dumps(seen))
 '''
@@ -6427,11 +6481,11 @@ def test_the_windows_entry_draws_with_agg_before_it_imports_the_window(tmp_path)
     assert done.returncode == 0, done.stderr[-2000:]
     seen = json.loads(done.stdout.strip().splitlines()[-1])
     lock = seen.pop("lock")
+    assert seen == {"use": [["Agg"]], "reached": True, "backend": "agg", "boxes": []}, (
+        "the window's entry imported its window before it told the figure library to draw with Agg, or did not "
+        f"start, or showed a plain Windows message: {seen}")
     assert lock is not None and Path(lock).resolve().is_relative_to(tmp_path.resolve()), (
         f"the entry's one-instance lock was not taken beside the settings file of this test's own: {lock}")
-    assert seen == {"use": [["Agg"]], "reached": True, "backend": "agg", "boxes": []}, (
-        "the window's entry imported its window before it told the figure library to draw with Agg, or it showed a "
-        f"plain Windows message: {seen}")
 
 
 # The folders the launcher reads and writes, each pointed into a test's own folder: the user's, the local and the

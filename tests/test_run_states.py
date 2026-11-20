@@ -3436,16 +3436,17 @@ def test_a_file_written_into_the_real_inputs_fails_the_run(request, tmp_path, mo
     over cannot be brought back. The session's guard keeps each folder's listing and its files' bytes as the run begins
     and checks them as it ends; its own function is driven here as the test runner drives it, with the program's inputs
     put in a folder of this test's own. A run that changes nothing passes, and so does one whose test model came and
-    went; a file added, a file rewritten under its own name, a file taken away and a folder made where there was none
-    each fail it. A failure names the folder and the path, a file rewritten marked so, and says that a file saved by
-    hand during the run fails the same way; it never says what a file holds. The guard stands for the whole session,
-    by itself."""
+    went; a file added in each of the four folders, a file rewritten under its own name, a file taken away and a folder
+    made where there was none each fail it, and so does a run that changes two folders, which names both. A failure
+    names the folder and the path, a file rewritten marked so, and says that a file saved by hand during the run fails
+    the same way; it never says what a file holds. The guard stands for the whole session, by itself."""
     import shutil
     from core import config
     words = "the suite changed what the real inputs folder"
     inputs = tmp_path / "inputs"
     monkeypatch.setattr(config, "RESOURCES_ROOT", inputs)
-    for name in ("Bounds", "Cells", "Units"):
+    folders = ("Bounds", "Cells", "Units", "Models")                     # written out here, not read off the guard
+    for name in folders:
         (inputs / name).mkdir(parents=True)
     cell = inputs / "Cells" / "own.txt"
     cell.write_text("the person's own words", encoding="utf-8")
@@ -3458,33 +3459,35 @@ def test_a_file_written_into_the_real_inputs_fails_the_run(request, tmp_path, mo
     with pytest.raises(StopIteration):
         next(run)                                                        # nothing left changed: the run passes
 
-    added, models = inputs / "Units" / "left.txt", inputs / "Models"
-    for change, folder, named in (("added", inputs / "Units", repr(str(added))),
-                                  ("rewritten", inputs / "Cells", repr(f"{cell} (rewritten)")),
-                                  ("taken away", inputs / "Cells", repr(str(cell))),
-                                  ("made", models, "['the folder itself (made)']")):
+    def failure(change) -> str:
+        """What the run says as it ends, ``change`` made while it went: it must fail."""
         run = around_the_run()
         next(run)
-        if change == "added":
-            added.write_text("a test's words", encoding="utf-8")
-        elif change == "rewritten":
-            cell.write_text("a test's words", encoding="utf-8")
-        elif change == "taken away":
-            cell.unlink()
-        else:
-            models.mkdir()
+        change()
         with pytest.raises(AssertionError, match=words) as failed:
             next(run)
         said = str(failed.value)
-        assert f"{words} {folder} holds" in said and named in said, (change, said)
         assert "saved by hand while the run was going" in said, f"the check did not say a person can cause this: {said}"
         assert "words" not in said.replace(words, ""), f"the check said what a file holds: {said}"
-        if change == "added":
-            added.unlink()
-        elif change == "taken away":
-            cell.write_text("the person's own words", encoding="utf-8")
-        elif change == "made":
-            models.rmdir()
+        return said
+
+    for name in folders:
+        added = inputs / name / "left.txt"
+        said = failure(lambda: added.write_text("a test's words", encoding="utf-8"))
+        assert f"{words} {inputs / name} holds" in said and repr(str(added)) in said, (name, said)
+        added.unlink()
+    said = failure(lambda: cell.write_text("a test's words", encoding="utf-8"))
+    assert f"{words} {inputs / 'Cells'} holds" in said and repr(f"{cell} (rewritten)") in said, said
+    said = failure(cell.unlink)
+    assert f"{words} {inputs / 'Cells'} holds" in said and repr(str(cell)) in said, said
+    cell.write_text("the person's own words", encoding="utf-8")
+    (inputs / "Models").rmdir()
+    said = failure(lambda: (inputs / "Models").mkdir())
+    assert f"{words} {inputs / 'Models'} holds" in said and "['the folder itself (made)']" in said, said
+    both = (inputs / "Bounds" / "one.txt", inputs / "Models" / "two.txt")
+    said = failure(lambda: [path.write_text("a test's words", encoding="utf-8") for path in both])
+    assert all(f"{words} {path.parent} holds" in said and repr(str(path)) in said for path in both), (
+        f"the failure did not name both folders: {said}")
 
     tree = ast.parse((REPO / "tests" / "conftest.py").read_text(encoding="utf-8"))
     guard, = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_no_inputs_written"]
@@ -3496,9 +3499,11 @@ def test_the_test_model_is_taken_out_however_its_test_ends(tmp_path, monkeypatch
     the command-line tool can be driven with real input files, is taken out again however the test that installed it
     ends: a block that installs it through ``sbitest_installed`` and raises leaves none of its files and no model
     registered, as one that ends well does; and an install that fails partway, its files written and the model not yet
-    loaded, takes out what it wrote before its failure goes on. Tried with the program's inputs in a folder of this
-    test's own and the record of models that would not load on a stand-in, so that nothing of the real inputs and
-    nothing of the process's own record is touched."""
+    loaded, takes out what it wrote before its failure goes on. An install that finds the test model's files there
+    already, as a run killed partway leaves them, refuses before it writes anything, naming them, and leaves them as it
+    found them, byte for byte. Tried with the program's inputs in a folder of this test's own and the record of models
+    that would not load on a stand-in, so that nothing of the real inputs and nothing of the process's own record is
+    touched."""
     from core import config, registry
     from tests._fixtures import install_sbitest, sbitest_installed
     inputs = tmp_path / "inputs"
@@ -3530,6 +3535,22 @@ def test_the_test_model_is_taken_out_however_its_test_ends(tmp_path, monkeypatch
     with pytest.raises(Raised):
         install_sbitest()
     assert (left(), registry.get("SBITEST")) == ([], None), "an install that failed partway left what it wrote"
+
+    for leftover in (inputs / "Models" / "SBITEST.json", inputs / "Cells" / "sbitest" / "default.txt"):
+        leftover.parent.mkdir(parents=True, exist_ok=True)
+        leftover.write_bytes(b"the bytes found there")
+        with pytest.raises(AssertionError, match="already among the program's inputs") as refused:
+            install_sbitest()
+        said = str(refused.value)
+        assert repr(str(leftover if leftover.suffix == ".json" else leftover.parent)) in said, said
+        assert "bytes found" not in said, f"the refusal said what a file holds: {said}"
+        found = (left(), leftover.read_bytes())
+        assert found == ([leftover.relative_to(inputs).as_posix()], b"the bytes found there"), (
+            f"the refused install wrote over what it found: {found[0]}")
+        assert registry.get("SBITEST") is None, "the refused install registered the test model"
+        leftover.unlink()
+        if leftover.suffix != ".json":
+            leftover.parent.rmdir()
 
 
 def test_the_computer_is_kept_awake_from_the_start_of_a_run_to_its_end(tmp_path, windows_asked):
