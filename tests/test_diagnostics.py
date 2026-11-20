@@ -508,6 +508,95 @@ def test_a_repeated_calibrations_last_seed_past_the_largest_is_refused_at_the_en
     assert calibrated == [1, 1, 1] and drawn == [] and len(r.store.list("diagnostic")) == before
 
 
+def test_a_repeated_calibration_says_each_repeat_and_takes_a_stop_between_its_calls(store, monkeypatch):
+    """Each repeat says which it is as it begins, again before its ranks and before its check, and a stop asked for in
+    the window is taken at a line said: so a stop asked for while a repeat's calibration set is drawn is taken before
+    its ranks, and one asked for while the ranks are made is taken before the check, never at the repeat's end, and
+    nothing is written. The ranks and the check stay one call each. The window's table of the engine's lines reads
+    none of the three, so none is a repeat's end there or moves what the repeated calibration's run says it is doing."""
+    import logging
+    from datetime import datetime
+    from matplotlib import pyplot as plt
+    from core import orchestrator as orch
+    from core.diagnostics import sbc_repeats
+    from core.gui.panels.inference import check_forms
+    from core.gui.run import readings
+    from core.gui.run.model import RunModel
+    from core.gui.streams import CancelToken, WorkerCancelled
+    from tests._fixtures import stub_calibration_battery
+    from tests._runs import CALIBRATION_LINES
+    seen = stub_calibration_battery(monkeypatch)
+    events, stop = [], {"during": None, "token": CancelToken()}
+
+    def recorded(name, real):
+        def call(*args, **kwargs):
+            events.append(name)
+            if stop["during"] == (name, events.count(name)):
+                stop["token"].requested.set()
+            return real(*args, **kwargs)
+        return call
+
+    for name in ("_draw_calibration_set", "run_sbc", "_sbc_reference_sample", "check_sbc"):
+        monkeypatch.setattr(orch, name, recorded(name, getattr(orch, name)))
+
+    class _Checkpoint(logging.Handler):
+        """The window's handler as far as a stop goes: the stop is checked at each record, before it is said."""
+
+        def emit(self, record):
+            stop["token"].check()
+            events.append(record.getMessage())
+
+    def run():
+        stop["token"] = CancelToken()
+        stop["token"].arm()
+        return sbc_repeats(_nad_cfg(), seen["posterior"], seen["prior"], repeats=2, n_cal=8, num_posterior_samples=10,
+                           fig_sink=lambda title, fig: plt.close(fig), store=store)
+
+    said = _Checkpoint()
+    logger = logging.getLogger("core.diagnostics.sbc")
+    logger.addHandler(said)
+    try:
+        run()
+        steps = events[events.index("[sbc] repeat 1/2: drawing 8 calibration datasets"):]
+        steps = steps[:next(i for i, step in enumerate(steps) if step.startswith("=== KS"))]
+        lines = []
+        for k in (1, 2):
+            assert steps[:7] == [f"[sbc] repeat {k}/2: drawing 8 calibration datasets", "_draw_calibration_set",
+                                 f"[sbc] repeat {k}/2: ranking 8 datasets against 10 posterior samples each",
+                                 "run_sbc", f"[sbc] repeat {k}/2: checking the ranks", "_sbc_reference_sample",
+                                 "check_sbc"], steps
+            assert steps[7].startswith(f"[sbc] repeat {k}/2: n_valid=8  worst KS p="), steps
+            lines.append(steps[0:5:2] + [steps[7]])
+            steps = steps[8:]
+        assert steps == [], steps
+
+        # What the window reads of them: the three new lines are text, and the repeat's end is still its end.
+        read = [[None if readings.read(line, "info") is None else readings.read(line, "info").name for line in four]
+                for four in lines]
+        assert read == [[None, None, None, "sbc_repeat"]] * 2, read
+        model = RunModel(check_forms.check_spec("fixed_number", sizes={"repeats": 2, "n_cal": 8}),
+                         clock=lambda: datetime(2026, 11, 19, 12).astimezone())
+        doing = []
+        for begun, ranking, checking, ended in lines:
+            for line in (begun, CALIBRATION_LINES[1], ranking, checking, ended):
+                model.feed([(line, "info")])
+                doing.append(model.doing())
+        ranked = [check_forms.RANKING_WORDS.format(done=k, of=2) for k in (1, 2)]
+        assert doing == ["Measuring", *[ranked[0]] * 3, "Measuring", "Measuring", *[ranked[1]] * 3, "Measuring"], doing
+
+        before = {s.id for s in store.list("diagnostic")}
+        for during, ran in ((("_draw_calibration_set", 2), {"run_sbc": 1, "check_sbc": 1}),
+                            (("run_sbc", 1), {"run_sbc": 1, "_sbc_reference_sample": 0, "check_sbc": 0})):
+            events.clear()
+            stop["during"] = during
+            with pytest.raises(WorkerCancelled):
+                run()
+            assert {name: events.count(name) for name in ran} == ran, (during, events)
+        assert {s.id for s in store.list("diagnostic")} == before, "a stopped calibration left a record"
+    finally:
+        logger.removeHandler(said)
+
+
 @pytest.mark.parametrize("n_pooled, nps, want", [
     (20000, 1000, 91),    # cap 100; 91 divides 1001, every bin holds 11 ranks
     (20000, 500, None),   # cap 50; 501 = 3 x 167 has no divisor in [25, 50]: the cap, never 3

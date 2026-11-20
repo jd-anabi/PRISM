@@ -105,6 +105,10 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                      the caller's RNG afterwards.
     :param fig_sink: (title, fig) -> None; the writer's sink saves the PNG and forwards to this one.
 
+    Each repeat says which it is as it begins, again before its ranks and before its check, and a stop asked for in
+    the window is taken at the next of these lines: the ranks (sbi's ``run_sbc``) and the check (the reference sample
+    and sbi's ``check_sbc``) are one call each, and run to their end once begun.
+
     ⚠ FOR A TSNPE POSTERIOR, reproducibility is WHOLE-RUN, not per-repeat. ``val_latent_prior`` (the
     region-restricted proposal built once below, before the loop) is ONE ``TruncatedLatentPrior``
     shared by every repeat, and its rejection sampler sizes each draw's over-draw from the acceptance
@@ -170,14 +174,22 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
 
     with store.create("diagnostic", cfg, name=name, note=note) as w:
         for r in range(repeats):
+            # A line before each of the repeat's calls, saying which repeat it is in. A stop asked for in the window
+            # is taken at a line said, and each call below runs to its end once begun -- the ranks are one call of
+            # sbi's, and splitting it would change the order of its draws -- so with no line between them a stop
+            # waited for the whole repeat.
+            log.info(f"[sbc] repeat {r + 1}/{repeats}: drawing {n_cal} calibration datasets")
             with seeded(int(seed) + r, cfg.hw.device):
                 x_cal, theta_star = orch._draw_calibration_set(
                     cfg, val_latent_prior, T, force_prior,
                     n_cal=n_cal, cal_n_scales=cal_n_scales, chi_k_fixed=chi_k_fixed)
+                log.info(f"[sbc] repeat {r + 1}/{repeats}: ranking {int(theta_star.shape[0])} datasets against "
+                         f"{nps} posterior samples each")
                 rk, dap = orch.run_sbc(
                     thetas=theta_star.to(cfg.hw.device), xs=x_cal.to(cfg.hw.device),
                     posterior=posterior.posterior, num_posterior_samples=nps,
                     reduce_fns="marginals", use_batched_sampling=True, show_progress_bar=False)
+                log.info(f"[sbc] repeat {r + 1}/{repeats}: checking the ranks")
                 reference = orch._sbc_reference_sample(cfg, val_latent_prior, T, truncation,
                                                        inferred_prior, theta_star)
                 stats = orch.check_sbc(ranks=rk.cpu(), prior_samples=reference,
