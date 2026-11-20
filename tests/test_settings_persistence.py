@@ -133,13 +133,15 @@ def test_the_memory_limit_is_remembered_per_computer_and_still_read_live(monkeyp
 
 @pytest.mark.parametrize("constant", (0.0, 4.0))
 @pytest.mark.parametrize("raw, a_number", ((None, False), ("", False), (" ", False), ("6", True), ("6.5", True),
-                                           ("6,5", False), ("abc", False), ("0", True), ("-2", True), ("nan", True),
-                                           ("inf", True), ("1e999", True)))
+                                           ("6,5", False), ("abc", False), ("0", True), ("-2", True), ("nan", False),
+                                           ("NaN", False), ("inf", False), ("-inf", False), ("Infinity", False),
+                                           ("1e999", False), ("1e300", False), ("1e299", True)))
 def test_the_limit_in_force_is_the_planners_own_answer_over_a_table_of_texts(constant, raw, a_number, monkeypatch):
     """What the window says is in force is what the planner will plan with, whatever the variable of the environment
     holds, and it says where that limit was set by the planner's own test of the variable: a number there counts, one
-    the planner reads as no limit among them, and anything else is passed over. Reading it logs nothing, though it is
-    read at every draw of a page and the planner logs a warning at each call for a variable that is no number."""
+    the planner reads as no limit among them, and anything else is passed over, an infinity, a NaN and a number of GiB
+    too large to count in bytes as a word is. Reading it logs nothing, though it is read at every draw of a page and
+    the planner logs a warning at each call for a variable that is no number."""
     from core import config
     from core.SBI import pipeline
     from core.gui import memory_limit
@@ -153,7 +155,8 @@ def test_the_limit_in_force_is_the_planners_own_answer_over_a_table_of_texts(con
     force = memory_limit.memory_limit_in_force()
     assert said == [], "reading the limit logged"
     planner = pipeline.vram_ceiling_gib()
-    assert len(said) == (raw in ("6,5", "abc")), "the planner's own warning is what the reading must not repeat"
+    assert len(said) == (bool(raw and raw.strip()) and not a_number), (
+        "the planner's own warning is what the reading must not repeat")
     assert force.gib == (planner if planner > 0 else None), (raw, constant)
     assert force.source == ("environment" if a_number else "setting" if constant > 0 else "none"), (raw, constant)
     assert force.raw == (raw or "")

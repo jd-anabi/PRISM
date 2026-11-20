@@ -2440,11 +2440,15 @@ def test_the_two_options_apply_a_limit_and_take_it_away(monkeypatch):
      True),
     ("abc", None, "PRISM_VRAM_CEILING_GIB is set to 'abc', which is not a number. PRISM ignores it. In force: no "
                   "limit.", True),
+    ("inf", 6.0, "PRISM_VRAM_CEILING_GIB is set to 'inf', which is not a number. PRISM ignores it. In force: 6 GiB.",
+     True),
+    ("nan", None, "PRISM_VRAM_CEILING_GIB is set to 'nan', which is not a number. PRISM ignores it. In force: no "
+                  "limit.", True),
     ("   ", 6.0, "In force: 6 GiB.", True)))
 def test_a_number_in_the_environment_takes_precedence_and_says_so(variable, chosen, line, free, monkeypatch):
     """A number in the variable decides: the options and the field are greyed and the line says what decides, and that
-    the limit remembered is not in use, with a word for a number that means no limit. A variable that holds no number
-    is ignored, and the line says that too and what is in force; the options stay free."""
+    the limit remembered is not in use, with a word for a number that means no limit. A variable that holds no number,
+    a word, an infinity or a NaN, is ignored, and the line says that too and what is in force; the options stay free."""
     from core.SBI import pipeline
     from core.gui import memory_limit
     monkeypatch.delenv(pipeline.VRAM_CEILING_ENV, raising=False)

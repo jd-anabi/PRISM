@@ -4545,6 +4545,26 @@ def test_the_release_path_survives_a_failing_empty_cache():
         pipeline_mod._MIN_SIM_CHUNK = saved_floor
 
 
+def test_the_release_empties_the_allocators_cache_after_the_plans_and_the_graphs_go(monkeypatch):
+    """A dropped graph hands its private pool back to the allocator as cached blocks, which only an empty_cache
+    after the drop can return to the driver: so the cuFFT plan cache is cleared and the graphs are dropped first, and
+    the allocator's cache is emptied last, by a caller that keeps the graphs, or the plans and the graphs, too. Each
+    release is a stand-in that records its call, so this runs with no card; on the processor nothing is released."""
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    monkeypatch.setattr(torch.backends.cuda, "cufft_plan_cache", SimpleNamespace(clear=lambda: calls.append("plans")))
+    monkeypatch.setattr(_sdeint_mod, "drop_graph_cache", lambda: calls.append("graphs") or 0)
+    for kept, want in (({}, ["plans", "graphs", "empty_cache"]), ({"graphs": False}, ["plans", "empty_cache"]),
+                       ({"plans": False, "graphs": False}, ["empty_cache"])):
+        calls.clear()
+        _cuda_release_probe(lambda device: pipeline_mod._release_device_memory(device, **kept))
+        assert calls == want, (kept, calls)
+    calls.clear()
+    pipeline_mod._release_device_memory(torch.device("cpu"))
+    assert calls == [], calls
+
+
 def test_the_oom_notice_is_printed_before_the_release(caplog):
     """The notice has to reach the log even when the release that follows it explodes.
 
@@ -4934,6 +4954,31 @@ def test_the_vram_ceiling_env_override_wins_and_tolerates_junk():
         config.SIM_VRAM_CEILING_GIB = saved_cfg
 
 
+@pytest.mark.parametrize("raw, read", (("inf", None), ("-inf", None), ("+Infinity", None), ("nan", None),
+                                       ("NaN", None), ("-nan", None), ("1e999", None), ("1e300", None),
+                                       ("1e299", 1e299), ("-1e300", 0.0), ("0", 0.0), ("6.5", 6.5)))
+def test_a_ceiling_that_is_no_finite_number_is_passed_over_as_a_word_is(raw, read, monkeypatch, caplog):
+    """The variable holds a number when the planner can plan with it: a finite number whose GiB, counted in bytes,
+    are finite too, the rule of the window's own field. An infinity, a NaN and a number too large to count in bytes
+    are passed over as a word is, with the same warning, and the constant is the ceiling: an infinity was taken as
+    the ceiling and the count of bytes raised at the first batch of a run, and a NaN or a negative infinity meant no
+    limit without a word, the constant set aside. A number, the largest that can be counted and one that means no
+    limit among them, is read as before, with nothing said; the budget never raises."""
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", 2.0)
+    monkeypatch.setattr(pipeline_mod, "_BUDGET_CAP_ELEMENTS", None)
+    monkeypatch.setenv(pipeline_mod.VRAM_CEILING_ENV, raw)
+    caplog.clear()
+    assert pipeline_mod.vram_ceiling_gib() == (2.0 if read is None else read), raw
+    said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == pipeline_mod.__name__]
+    assert said == ([] if read is not None else [("WARNING", f"PRISM_VRAM_CEILING_GIB={raw!r} is not a number; "
+                                                             f"ignoring it and using config.SIM_VRAM_CEILING_GIB "
+                                                             f"instead")]), said
+    budget = pipeline_mod.sim_memory_budget_elements(torch.device("cpu"), torch.float32)
+    if read is None:
+        assert budget == (2 * 2 ** 30) // 4, (raw, budget)
+    assert pipeline_mod.vram_ceiling_from_text(raw) == read
+
+
 def test_the_planner_budget_survives_an_unreadable_card():
     """Every OOM retry re-enters _max_sim_batch to re-plan, so config.memory_budget_elements' driver
     reads run on a card that is already refusing service. pipeline._free_gib_note guards the
@@ -5006,6 +5051,38 @@ def test_the_mem_line_is_printed_on_every_oom_and_its_cadence_is_overridable():
     assert isinstance(pipeline_mod._MEM_LOG_EVERY, int) and pipeline_mod._MEM_LOG_EVERY >= 1
     assert "PRISM_MEM_LOG_EVERY" in code_only(pipeline_mod), (
         "the cadence must be overridable for a diagnostic run without editing a tracked file")
+
+
+@pytest.mark.parametrize("raw, every, warned", (
+        (None, 250, False), ("", 250, False), ("  ", 250, False), ("1", 1, False), ("7", 7, False),
+        (" 40 ", 40, False), ("x", 250, True), ("0", 250, True), ("-3", 250, True), ("2.5", 250, True),
+        ("7.0", 250, True)))
+def test_the_memory_line_cadence_is_a_whole_number_of_at_least_one_or_else_the_default(raw, every, warned, caplog):
+    """The batches between memory lines, as the variable's text gives them: a whole number of at least 1 counts;
+    unset or blank is the default, 250; anything else, a word, 0, a negative or a fraction, is taken as unset and
+    said in one warning, never raised. It is read as the simulation pipeline is imported, where a word stopped the
+    program loading, and a 0 divided by zero at the second batch."""
+    caplog.clear()
+    assert pipeline_mod._mem_log_every(raw) == every, raw
+    said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == pipeline_mod.__name__]
+    assert said == ([("WARNING", f"PRISM_MEM_LOG_EVERY={raw!r} is not a whole number of at least 1; ignoring it and "
+                                 f"writing a memory line every 250 batches")] if warned else []), said
+
+
+def test_a_memory_line_cadence_that_is_no_whole_number_never_stops_the_import(tmp_path):
+    """The cadence is read once, as the simulation pipeline is imported, and a word there stopped the import with a
+    bare error. In a process of its own, so that the module this process holds is not imported again: the import goes
+    through with the default cadence, and the warning is said on the error stream."""
+    import subprocess
+    environment = {**os.environ, "PRISM_MEM_LOG_EVERY": "x", "CUDA_VISIBLE_DEVICES": "-1",
+                   "KMP_DUPLICATE_LIB_OK": "TRUE", "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")}
+    environment.pop("PRISM_VRAM_CEILING_GIB", None)
+    child = subprocess.run([sys.executable, "-c", "import core.SBI.pipeline as p; print(p._MEM_LOG_EVERY)"],
+                           cwd=Path(__file__).resolve().parents[1], env=environment, capture_output=True, text=True,
+                           encoding="utf-8", timeout=300)
+    assert child.returncode == 0, child.stderr[-2000:]
+    assert child.stdout.splitlines()[-1] == "250", child.stdout[-2000:]
+    assert "PRISM_MEM_LOG_EVERY='x' is not a whole number of at least 1" in child.stderr, child.stderr[-2000:]
 
 
 def test_retry_on_oom_notices_releases_and_honours_the_holder_gate():
@@ -5145,6 +5222,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
             (" -- {}s remaining", "INFO"),                        # _cancellable_wait
             ("could not snapshot the RNG", "WARNING"),
             ("could not restore the RNG before re-running", "WARNING"),
+            ("is not a whole number of at least 1", "WARNING"),       # the memory lines' cadence, at import
             ("is not a number; ignoring it", "WARNING"),
             ("config.SIM_VRAM_CEILING_GIB is not a number; treating the ceiling as off", "WARNING"),
             ("OOM at simulation batch", "WARNING"),
@@ -5188,7 +5266,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
         ),
         _sdeint_mod: (("[solver] CUDA graph capture unavailable", "WARNING"),),
     }
-    assert sum(len(rows) for rows in table.values()) == 40
+    assert sum(len(rows) for rows in table.values()) == 41
 
     def _template(node) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):

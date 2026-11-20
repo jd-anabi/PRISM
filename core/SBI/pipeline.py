@@ -255,8 +255,31 @@ def _shard_ranges_text(names) -> str:
 
 
 # 21 lines over a 5000-batch run. PRISM_MEM_LOG_EVERY overrides it for a diagnostic run: when a run
-# is dying at batch 93, a line every 250 batches has told you nothing at all.
-_MEM_LOG_EVERY = int(os.environ.get("PRISM_MEM_LOG_EVERY") or 250)
+# is dying at batch 93, a line every 250 batches has told you nothing at all. Read once, here, at import.
+_MEM_LOG_DEFAULT = 250
+
+
+def _mem_log_every(raw: str | None) -> int:
+    """The batches between memory lines that the variable's text ``raw`` sets: a whole number of at least 1.
+
+    Unset or blank is the default. Anything else -- a word, 0, a negative, a fraction -- is taken as unset and said
+    in one warning, never raised: this is read as the module is imported, where a word stopped the program loading,
+    and a 0 divided by zero at the second batch.
+    """
+    if raw is None or not raw.strip():
+        return _MEM_LOG_DEFAULT
+    try:
+        every = int(raw)
+    except ValueError:
+        every = 0
+    if every >= 1:
+        return every
+    log.warning(f"PRISM_MEM_LOG_EVERY={raw!r} is not a whole number of at least 1; ignoring it and writing a "
+                f"memory line every {_MEM_LOG_DEFAULT} batches")
+    return _MEM_LOG_DEFAULT
+
+
+_MEM_LOG_EVERY = _mem_log_every(os.environ.get("PRISM_MEM_LOG_EVERY"))
 
 
 def _log_memory(device: torch.device, tag: str) -> None:
@@ -381,6 +404,13 @@ def _release_device_memory(device: torch.device, *, plans: bool = True,
         about to capture ANOTHER at the reduced width, since the batch shape is part of the graph
         key. Dropping them is the one release that addresses the retry's own next allocation.
 
+    THE ALLOCATOR'S CACHE IS EMPTIED LAST. A dropped graph hands its private pool back to the caching
+    allocator as cached blocks, and only an ``empty_cache`` made after the drop returns them to the
+    driver; emptied first, the cache missed them, and they stayed reserved, out of reach of the retry's
+    own next capture, until some later release. The plan cache is held outside the allocator, so it is
+    cleared with the graphs, before the cache is emptied. Each release, the lookup of the plan cache
+    included, runs inside its guard: on a process whose card cannot be reached that lookup itself raises.
+
     CALL IT OUTSIDE THE ``except`` BLOCK, always. While the caught error is still bound its traceback
     owns the frames of the failed attempt, which own their tensors -- the solver's (n_vars, batch, T)
     buffer among them -- so releasing there frees nothing. Python drops the error when the clause
@@ -408,14 +438,14 @@ def _release_device_memory(device: torch.device, *, plans: bool = True,
             log.warning(f"{_batch_tag()}: {what} failed during recovery and was ignored "
                         f"({_short_err(e, 120)})")
 
-    _try(torch.cuda.empty_cache, "empty_cache()")
     if plans:
-        _try(torch.backends.cuda.cufft_plan_cache.clear, "cuFFT plan-cache clear")
+        _try(lambda: torch.backends.cuda.cufft_plan_cache.clear(), "cuFFT plan-cache clear")
     if graphs:
         def _drop():
             from core.Solvers import sdeint as _sdeint
             _sdeint.drop_graph_cache()
         _try(_drop, "CUDA-graph cache drop")
+    _try(torch.cuda.empty_cache, "empty_cache()")
 
 
 def _we_are_the_holder(device: torch.device) -> bool:
@@ -572,18 +602,37 @@ def peak_sim_elements(batch_size: int, n_fine: int, steady_idx: int, n_vars: int
 VRAM_CEILING_ENV = "PRISM_VRAM_CEILING_GIB"
 
 
+def vram_ceiling_from_text(raw: str) -> float | None:
+    """The ceiling in GiB that the variable's text ``raw`` sets, 0 for none (0 and a negative mean no limit); None
+    when the text holds no number the planner can plan with: a blank or a word, an infinity or a NaN, or so many GiB
+    that their count of bytes is not finite, which the plan's arithmetic cannot turn into a whole number of bytes.
+
+    The one reading of the variable: the planner's here, and the window's when it says what is in force. The rule is
+    the window's field's own for a limit typed there. A NaN is caught before the ``max``, since ``max(0.0, nan)`` is
+    0.0 and would read it as no limit.
+    """
+    try:
+        gib = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(gib) or not math.isfinite(max(0.0, gib) * 2 ** 30):
+        return None
+    return max(0.0, gib)
+
+
 def vram_ceiling_gib() -> float:
-    """The hard per-batch VRAM ceiling in GiB: the env override if set, else the config constant.
+    """The hard per-batch VRAM ceiling in GiB: the env override when it holds a number
+    (``vram_ceiling_from_text``), else the config constant.
 
     0 means off. See sim_memory_budget_elements for what it does and does not buy.
     """
     raw = os.environ.get(VRAM_CEILING_ENV)
     if raw is not None and raw.strip():
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            log.warning(f"{VRAM_CEILING_ENV}={raw!r} is not a number; ignoring it and using "
-                        f"config.SIM_VRAM_CEILING_GIB instead")
+        gib = vram_ceiling_from_text(raw)
+        if gib is not None:
+            return gib
+        log.warning(f"{VRAM_CEILING_ENV}={raw!r} is not a number; ignoring it and using "
+                    f"config.SIM_VRAM_CEILING_GIB instead")
     # Guarded for the same reason as the env branch: this runs inside the PLANNER, on every batch,
     # and a config.py edited to a non-numeric value would otherwise raise there rather than at the
     # point of the mistake.
@@ -621,7 +670,8 @@ def sim_memory_budget_elements(device: torch.device, dtype: torch.dtype) -> int:
     ``PRISM_VRAM_CEILING_GIB`` overrides the config constant, so a single run can be throttled
     without editing a tracked file -- read live from the environment on every batch plan (unlike
     ``PRISM_MEM_LOG_EVERY``, which is read once, when this module is imported).
-    An unparsable value is ignored with a note rather than crashing a multi-day run on a typo.
+    A value that holds no number it can plan with (a word, an infinity, a NaN, more GiB than can be
+    counted in bytes) is ignored with a note rather than crashing a multi-day run on a typo.
     """
     budget = min(config.memory_budget_elements(device, dtype, _SIM_MEM_FRACTION), _budget_cap())
     ceiling_gib = vram_ceiling_gib()

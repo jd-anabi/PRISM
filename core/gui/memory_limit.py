@@ -58,9 +58,10 @@ def computer() -> str:
 
 
 def memory_limit_in_force() -> InForce:
-    """The limit in force, by the planner's own answer. The variable counts when it holds something and ``float`` takes
-    it, the planner's test: 0 and a negative among them, which the planner reads as no limit. A variable that holds no
-    number is passed over, and the constant is read here as the planner reads it, because the planner would log its
+    """The limit in force, by the planner's own answer. The variable counts when the planner's own reading of its text
+    finds a number there (``pipeline.vram_ceiling_from_text``): 0 and a negative among them, which the planner reads as
+    no limit, and not a word, an infinity, a NaN or a number of GiB too large to count in bytes. A variable that holds
+    no number is passed over, and the constant is read here as the planner reads it, because the planner would log its
     warning again at every draw of a page."""
     raw = os.environ.get(pipeline.VRAM_CEILING_ENV, "")
     by_variable = _a_number(raw)
@@ -178,14 +179,8 @@ def _force_words(force: InForce) -> str:
 
 
 def _a_number(raw: str) -> bool:
-    """Whether the variable's text ``raw`` is a number as the planner reads one."""
-    if not raw.strip():
-        return False
-    try:
-        float(raw)
-    except ValueError:
-        return False
-    return True
+    """Whether the variable's text ``raw`` is a number as the planner reads one: by the planner's own reading."""
+    return pipeline.vram_ceiling_from_text(raw) is not None
 
 
 def _constant() -> float:
