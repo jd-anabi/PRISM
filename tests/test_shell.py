@@ -8526,11 +8526,12 @@ def test_continue_passes_the_must_continue_policy_and_asks_no_consent(store, tmp
     assert all_asked() == [], "the press asked a question"
 
 
-def _a_failed_round(store, tmp_path, held, observed, *, batches=236) -> dict:
+def _a_failed_round(store, tmp_path, held, observed, *, batches=236, directions=3) -> dict:
     """A narrowing round of the records folder in use that failed at 09:00 on 3 October, its history in the test's
     folder of runs, its simulation set in the test's store holding ``batches`` of its 10,000, its settings those the
     round's page hands: the model and its options, master.txt, the prior and the posterior of ``held`` and the
-    observation ``observed``, its level and directions, its name and note, and two of its fit's settings."""
+    observation ``observed``, its level and its ``directions`` (None, as a resumed round's history holds them), its
+    name and note, and two of its fit's settings."""
     from tests._fixtures import write_history, write_simulation_set
     folder = write_simulation_set(store.kind_dir("simulation"), {"reopened": "round"}, batches,
                                   complete=batches >= 10_000)
@@ -8539,7 +8540,7 @@ def _a_failed_round(store, tmp_path, held, observed, *, batches=236) -> dict:
     given = {"model": "NADROWSKI", "chi_mode": False,
              "options": {"chi_mode": False, "reparam_rotate": False, "units_override": None},
              "bounds": "master.txt", "prior": held.prior, "parent_posterior": held.posterior, "observation": observed,
-             "level": 0.99, "directions": 3, "name": "retrain_round1", "note": "a note", "rows": rows}
+             "level": 0.99, "directions": directions, "name": "retrain_round1", "note": "a note", "rows": rows}
     return write_history(tmp_path / "runs", id="20261003T030211-narrowing-round", word="Narrowing round",
                          name="retrain_round1", place=["inference", "narrowing"], records_root=str(store.root),
                          started=_at(3, 3, 2, 11), ended=_at(3, 9, 0), outcome="failed", acknowledged=True,
@@ -8601,6 +8602,46 @@ def test_continue_fills_the_rounds_form_and_passes_the_must_continue_policy(stor
     assert (kwargs["resume"], kwargs["new_run"], kwargs["level"], kwargs["n_directions"], kwargs["num_runs"]) == (
         "require", False, 0.99, 3, 400), kwargs
     assert all_asked() == [], "the press asked a question"
+
+
+def test_a_rounds_history_that_names_no_directions_leaves_the_form_as_it_stands(store, tmp_path, monkeypatch):
+    """A narrowing round's history that holds no number of directions, as the history of every resumed round holds
+    none (a kept round's record keeps its region, never the number of directions it was asked for): Home's "Continue
+    from batch 236" fills the round's form from it as from any other, its level and its fit's settings, and leaves
+    "Directions narrowed" as the form stands, at its usual number, which the round is then handed."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.SBI import truncate
+    from tests._fixtures import _nad_cfg, write_observation
+    held = _a_launch_before(store, tmp_path, monkeypatch)
+    _the_loads(monkeypatch, store, held)
+    observed = write_observation(store, _nad_cfg(), name="cell_b")
+    monkeypatch.setattr(ArtifactStore, "load_observation", lambda _store, cfg, ref: SimpleNamespace(
+        kind="observation", id=ref, name="cell_b", manifest=None))
+    monkeypatch.setattr(orchestrator, "training_preview", lambda *args, **kwargs: SimpleNamespace(width=8))
+    _a_failed_round(store, tmp_path, held, observed, directions=None)
+    rounds = StandIn(word="Narrowing round")
+    monkeypatch.setattr(orchestrator, "tsnpe_round", rounds)
+    window, home = _home_of_last_time(tmp_path)
+    app = qt_app()
+    home.next_button.click()
+    inference = window.part("inference")
+    _settle(app, inference)
+    assert inference.loads.why == "", inference.loads.why
+    page = inference.tsnpe_panel
+    rows = page.form.rows
+    assert [rows[key].value() for key in ("num_runs", "hidden_features", "hpd_level", "n_directions")] == [
+        400, 64, 0.99, truncate.DEFAULT_N_DIRECTIONS]
+    page.names.name.setText("retrain_round2")
+    page.names.check_now()
+    page.read_facts()
+    page.foot.main_button.click()
+    assert rounds.started.wait(5), page.foot.reason.text()
+    rounds.release(SimpleNamespace(kind="posterior", id="20261008T150000", name="retrain_round2", manifest=None))
+    turn_until(app, lambda: not controller().is_live(), 10.0)
+    _args, kwargs = rounds.calls[-1]
+    assert (kwargs["resume"], kwargs["level"], kwargs["n_directions"]) == (
+        "require", 0.99, truncate.DEFAULT_N_DIRECTIONS), kwargs
 
 
 def _a_round_continued(store, tmp_path, monkeypatch):

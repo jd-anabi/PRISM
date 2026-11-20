@@ -656,7 +656,8 @@ class RunController(QObject):
         """The training the run ``run`` kept is gone: its page offers to resume it no more, and the run's call goes
         with the offer when its page offered nothing else; its history says it was discarded, nothing else changed
         (the history its end wrote, ``_write_ended``, for the run the controller holds; else its file, ``_rewrite``),
-        and its end's words, read from that history, say so too: in the status while its end waits to be seen; in the
+        and its end's words, read from that history as the discard leaves it, whether or not its file could be written
+        again, say so too: in the status while its end waits to be seen; in the
         end a live run noted as it started, which that run gives back as the status should it end into idle; and on
         its page, which is drawn here for the run the controller holds, and draws the words handed back for any
         other. They are dated against the moment the run ended for the run the controller holds, as its end dated
@@ -683,6 +684,7 @@ class RunController(QObject):
         record = self._rewrite(self.folder(), run, _discarded)
         if record is None:
             return ""
+        record = _discarded(record)              # as the discard leaves it, though its file could not be written again
         if self._status.run == run and self._status.unacknowledged_end:
             self._status = _said_again(self._status, record, now)
             self.status_changed.emit(self._status)

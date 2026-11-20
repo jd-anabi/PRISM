@@ -119,10 +119,10 @@ def _same_folder(one, other) -> bool:
     return os.path.normcase(os.path.abspath(one)) == os.path.normcase(os.path.abspath(other))
 
 
-def _repeat(ident) -> int:
+def repeat_count(ident) -> int:
     """Which of the runs started in one second a run is: its id's own count, 1 for the first, whose id has none
     (``history.run_id`` gives the second ``-2``), so that of two runs started in one second the later counts as the
-    newer."""
+    newer. The history's own order of runs reads it too."""
     stem, _dash, count = str(ident or "").rpartition("-")
     return int(count) if stem and count.isdigit() else 1
 
@@ -325,7 +325,7 @@ def offers(histories: Iterable[dict], kept_rows: Iterable, *, records_root: str,
         ran = sorted(((moment, record) for record in records
                       if record.get("word") == word and _same_folder(record.get("records_root"), records_root)
                       and (moment := _moment(record.get("started"))) is not None),
-                     key=lambda pair: (pair[0], _repeat(pair[1].get("id"))))
+                     key=lambda pair: (pair[0], repeat_count(pair[1].get("id"))))
         for _moment_at, record in ran:
             fit = record.get("fit") if isinstance(record.get("fit"), dict) else {}
             if isinstance(fit.get("kept_id"), str) and isinstance(record.get("id"), str):

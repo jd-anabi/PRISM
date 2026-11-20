@@ -544,6 +544,46 @@ def test_once_a_stop_in_the_fit_lands_the_page_asks_to_keep_the_training(tmp_pat
         "a training the records would not delete was said to be discarded, or its question went")
 
 
+def test_a_discard_whose_history_cannot_be_written_again_still_says_the_training_is_gone(tmp_path, monkeypatch,
+                                                                                        store):
+    """The Discard of a training an earlier run kept deletes it, and that run's end is said again with the training
+    gone, on its page and in the status, also when the run's history file cannot be written again: the words are those
+    of the history as the Discard leaves it, and the file says what it said before."""
+    from core.gui.run import history
+    app = qt_app()
+    clock = Clock(_at(8, 19, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    choose(monkeypatch, words="Stop training")
+    kept = build_fit_record(store, passes=62)
+    stand_in = StandIn()
+    stand_in.kept_fit = _note(kept)
+    start_run(host, stand_in, spec=_training())
+    _to_the_fit(app, stand_in, text, clock, _THREE_EPOCHS)
+    turn_until(app, lambda: len(held.model.epochs()) == 3)
+    view.stop_button.click()
+    _ended(app, held)
+    run = held.status.run
+    later = StandIn()                                    # a run of another page: the controller holds this one no more
+    start_run(build_run_host(), later, spec=RunSpec("Check", ("inference", "checks"), keeps_files=False))
+    later.release()
+    _ended(app, held)
+    path = tmp_path / "runs" / f"{run}.json"
+    before = path.read_bytes()
+
+    def refused(folder, record):
+        raise PermissionError(13, "Access is denied", str(path))
+
+    monkeypatch.setattr(history, "write", refused)
+    view.discard_button.click()
+    gone = ("Training was stopped on Thu 8 Oct, 20:05, during the fit. The 20,480,000 simulations are kept; the "
+            "training was discarded, as you asked.")
+    assert ([summary.id for summary in store.list("fit")], view.notice.text()) == ([], "The training was discarded.")
+    assert (view.sentence.text(), held.status.sentence, path.read_bytes() == before) == (gone, gone, True), (
+        "the page or the status still says the training the Discard deleted can be resumed", view.sentence.text(),
+        held.status.sentence)
+
+
 def test_discard_of_a_resumed_training_says_it_deletes_every_epoch_kept_since_it_began(tmp_path, monkeypatch, store):
     """A training that was resumed and kept nothing new in this process before it was stopped is the earlier
     training as it was: the question says that Discard deletes the whole of it, its epochs and the sessions that

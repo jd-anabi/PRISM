@@ -67,6 +67,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import settings
+from ..continuing import repeat_count
 from ..texts import date_text, is_size
 
 log = logging.getLogger(__name__)
@@ -471,15 +472,16 @@ def _replace(source: Path, target: Path) -> None:
 
 
 def _records(folder: Path) -> list[dict]:
-    """Every run's record in ``folder``, oldest start first. A file that is not a whole record with a start is
-    passed over, and a temporary one is never looked at."""
+    """Every run's record in ``folder``, oldest start first; of runs whose starts are one moment, the first started
+    first, by the count its id ends in (``run_id``; ``continuing.repeat_count``), whatever the order of their files'
+    names. A file that is not a whole record with a start is passed over, and a temporary one is never looked at."""
     found = []
     for path in sorted(Path(folder).glob("*.json")):
         record = read(path)
         started = _time(record.get("started")) if record is not None else None
         if started is not None:
-            found.append((started, record))
-    return [record for _started, record in sorted(found, key=lambda pair: pair[0])]
+            found.append((started, repeat_count(record.get("id")), record))
+    return [record for _started, _count, record in sorted(found, key=lambda one: one[:2])]
 
 
 def _check(record: dict) -> None:

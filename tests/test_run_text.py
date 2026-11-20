@@ -813,6 +813,23 @@ def test_a_run_id_is_its_local_start_and_its_word(tmp_path):
     assert history.run_id("Training", _at(8, 19, 2, 12), tmp_path) == "20261008T190212-training"
 
 
+def test_two_runs_started_in_one_moment_are_read_in_the_order_they_started(tmp_path):
+    """Runs started in the same second are told apart by the count their ids end in (``run_id`` gives the second
+    ``-2``, then ``-3`` and on), and the history reads runs whose starts it holds as one moment, as a clock that does
+    not move writes them, in that order, whatever the order of their files' names, where ``...-training-10.json`` and
+    ``...-training-2.json`` come before ``...-training.json``: the newest is the last started, for Home's last runs and
+    for the end nobody has seen."""
+    from core.gui.run import history
+
+    folder, root, stem = tmp_path / "runs", str(tmp_path / "records"), "20261008T190211-training"
+    started = [stem, f"{stem}-2", f"{stem}-10"]
+    for run in started:
+        history.write(folder, {"id": run, "word": "Training", "started": _at(8, 19, 2, 11), "outcome": "failed",
+                               "records_root": root})
+    assert (_ids(history.runs_of(folder, records_root=root)), _ids(history.latest(folder, records_root=root, n=3)),
+            history.newest_unseen(folder, records_root=root)["id"]) == (started, started[::-1], started[-1])
+
+
 def test_the_latest_runs_are_those_of_the_records_folder_in_use(tmp_path):
     """Home's last runs are read for the records folder in use: a run of another records folder is not among them,
     however new. Newest first, as many as asked for; the same folder spelled another way is the same folder."""
