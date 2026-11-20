@@ -44,6 +44,7 @@ PROSE_PATTERNS: dict[str, re.Pattern] = {name: re.compile(source) for name, sour
                r"|\bper the " r"review\b|\b[Cc]hecklist(?: item)? \d|\bBack" r"log\b"
                r"|\b(?:CRITICAL|IMPORTANT|Critical|Important) \d\b|\bdefect [A-Z]-?\d+\b"),
     "task": r"\bTasks? \d+\b|\btasks? T\d+",
+    "stage": r"(?i)\bstage" r"s?[ -]\d+\b",
     "trap": r"\b(?:trap|TRAP)s? [A-Z]+\d+[a-z]?\b|\bCHI\d+\b",
     "guardrail": r"(?i)\bguardrails?[ -]\d+\b",
     "series": r"(?<![\w-])[CS]-\d+\b",
@@ -248,6 +249,7 @@ def test_the_matchers_catch_each_family_and_spare_the_allowed_tokens(tmp_path):
         _RULING: ["the controller rul·ing", "the owner rul·ed so"],
         "review": ["the whole-code review·'s finding", "found in a fix ·round", "defect D·3 again"],
         "task": ["done in Ta·sk 7", "tasks T·13 to T·18"],
+        "stage": ["built in sta·ge 4", "the Sta·ge 5 exit", "read in the sta·ge-3 reviews", "STA·GES 6 to 9"],
         "trap": ["see trap X·5", "see CHI·10"],
         "guardrail": ["guard·rail 2 holds", "GUARD·RAIL 5 again"],
         "series": ["the C·-11 cache", "an S·-1 note"],
@@ -268,6 +270,7 @@ def test_the_matchers_catch_each_family_and_spare_the_allowed_tokens(tmp_path):
         _RULING: ["an owner guard", "the ruler's edge"],
         "review": ["a reviewer reads it", "round 2 of a narrowing"],
         "task": ["the batch task", "tasks run in turn"],
+        "stage": ["the training stage writes it", "a two-stage fit", "each stage's record", "the stages run in turn"],
         "trap": ["a trap for the unwary", "trapped in a well"],
         "guardrail": ["a guardrail against drift", "the guardrails hold"],
         "series": ["a C-contiguous array", "an S-shaped curve"],

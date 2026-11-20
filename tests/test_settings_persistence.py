@@ -626,7 +626,8 @@ def test_the_check_of_the_real_settings_folder_sees_a_path_come_or_go_at_any_dep
     beside the real file would be read by the next launch. Tried on a folder of this test's own: unchanged, it
     passes; a file left beside the settings file, one left in a folder beside it, the file itself taken away,
     and a folder made where there was none each fail it. And the fixture lists the real file's own folder at
-    both ends with those two functions, which only the reading of its source can show."""
+    both ends with those two functions, the listing before the run and the check after it, which only the reading of
+    its source can show."""
     import ast
     from tests import _settings_folder
 
@@ -657,6 +658,12 @@ def test_the_check_of_the_real_settings_folder_sees_a_path_come_or_go_at_any_dep
     assert {"folder = real.parent", "held = _settings_folder.listing(folder)",
             "_settings_folder.check_kept(folder, held)"} <= said, (
         "the session no longer lists the real settings file's folder as it begins and checks it as it ends")
+    at = {ast.unparse(node): number for number, node in enumerate(home.body)}
+    yielded, = [number for number, node in enumerate(home.body)
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Yield)]
+    assert (at.get("held = _settings_folder.listing(folder)", len(home.body)) < yielded
+            < at.get("_settings_folder.check_kept(folder, held)", -1)), (
+        "the session no longer lists the real settings file's folder before the run and checks it after")
 
 
 def test_each_builder_returns_a_new_widget_at_every_call_and_keeps_none(monkeypatch):

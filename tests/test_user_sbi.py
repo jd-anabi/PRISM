@@ -158,7 +158,9 @@ def test_train_and_validate_without_a_loaded_cell():
     """Training + calibration are GROUND-TRUTH-FREE, so they must work on a config built from BOUNDS
     ALONE (no cell file). Pins the _observation_inits fallback: cfg.inits_tensor RAISES on an empty
     inits_dict, and the inference Simulate tab used to be the only pre-Posterior path that populated it,
-    so this scenario was silently unreachable rather than supported."""
+    so this scenario was silently unreachable rather than supported. Seeded once for the whole chain, as the
+    tool's smoke command seeds it, so that every run does the same work."""
+    from core.rng import seeded
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_runs, saved_ncal = orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL
@@ -182,11 +184,12 @@ def test_train_and_validate_without_a_loaded_cell():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 40
 
-        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
-        inferred_prior, force_prior = lp.prior, lp.force_prior
-        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
-        posterior = lp_post.posterior
-        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
+        with seeded(0, cfg.hw.device):
+            lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+            inferred_prior, force_prior = lp.prior, lp.force_prior
+            lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
+            posterior = lp_post.posterior
+            orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal
@@ -5336,15 +5339,21 @@ def test_nothing_prints_or_logs_inside_a_checkpoint_commit():
     WorkerCancelled between the shard fsync and the state replace. No suite runs a GUI cancel at that
     moment, so the rule is pinned here, on the code: no print, no ``log.*``/``logging.*`` call and no
     ``sys.stdout``/``sys.stderr`` write in the commit's functions or the atomic helpers they call.
-    Parsed (code_only), so a docstring that quotes the rule cannot trip it."""
-    from core.Helpers import file_manager
+    Parsed (code_only), so a docstring that quotes the rule cannot trip it. Walked from the commit's two
+    entries, so a helper the commit gains is read too."""
     from core.SBI import training_checkpoint as tc
-    from tests._fixtures import calls_that_speak
+    from tests._fixtures import calls_that_speak, run_by
 
-    # Each named outright, none only when present: a helper renamed away fails here instead of leaving
-    # its code unread. The atomic writer's rename and clean-up live in helpers of their own.
-    commit = [tc.save, tc.mark_complete, tc._refresh_manifest, file_manager._atomic_write,
-              file_manager._replace_retrying, file_manager._discard, file_manager.atomic_torch_save]
+    # Every function of the program's own the commit's two entries call by name, and the ones those call
+    # in turn. The ones named below must be among them, so that a helper renamed away fails here instead
+    # of leaving its code unread; the atomic writer's rename and clean-up live in helpers of their own.
+    commit = run_by(tc.save) + [fn for fn in run_by(tc.mark_complete) if fn not in run_by(tc.save)]
+    reached = {f"{fn.__module__}.{fn.__name__}" for fn in commit}
+    named = {f"core.SBI.training_checkpoint.{name}" for name in ("save", "mark_complete", "_refresh_manifest",
+                                                                  "_shard", "peek", "read_header")}
+    named |= {f"core.Helpers.file_manager.{name}" for name in ("atomic_torch_save", "_atomic_write",
+                                                                "_replace_retrying", "_discard")}
+    assert named <= reached, f"the walk from the commit no longer reaches {sorted(named - reached)}"
     for fn in commit:
         said = calls_that_speak(code_only(fn))
         assert said == [], f"{fn.__module__}.{fn.__name__} speaks inside a checkpoint commit: {said}"

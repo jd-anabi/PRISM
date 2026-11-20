@@ -355,6 +355,136 @@ def test_the_named_training_code_is_as_recorded():
     }
 
 
+def _calls_of(obj, prefix: str = "core.") -> set:
+    """Every function or class of the program's own (its module's name starting with ``prefix``) that ``obj``'s parsed
+    code calls, as ``module.qualified name``: by a plain name of its module, by a name it imports inside itself, or as
+    ``module.name`` through either. A method called on an object, ``self`` among them, is not followed: a class's own
+    methods are read with the class. A call through a module of the program's own whose name stands now for something
+    else than the program's own -- a stand-in a test put there, as this module's guard on the batches does -- is taken
+    by the module's name and that name."""
+    module = sys.modules[obj.__module__]
+    names = dict(vars(module))
+    tree = ast.parse(code_only(obj))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            source = importlib.import_module("." * node.level + (node.module or ""), package=module.__package__)
+            for alias in node.names:
+                found = getattr(source, alias.name, None)
+                names[alias.asname or alias.name] = (found if found is not None else
+                                                     importlib.import_module(f"{source.__name__}.{alias.name}"))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names[alias.asname or alias.name.partition(".")[0]] = importlib.import_module(
+                    alias.name if alias.asname else alias.name.partition(".")[0])
+    called = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        through = None
+        if isinstance(node.func, ast.Name):
+            callee = names.get(node.func.id)
+        elif (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+              and inspect.ismodule(names.get(node.func.value.id))):
+            through = names[node.func.value.id]
+            callee = getattr(through, node.func.attr, None)
+        else:
+            continue
+        if not (inspect.isfunction(callee) or inspect.isclass(callee)):
+            continue
+        if callee.__module__.startswith(prefix):
+            called.add(f"{callee.__module__}.{callee.__qualname__}")
+        elif through is not None and through.__name__.startswith(prefix):
+            called.add(f"{through.__name__}.{node.func.attr}")
+    return called
+
+
+#: What the code that builds or trains the network calls of the program's own and does not name, by why an edit of it
+#: cannot make a kept training resume into another fit than the one it stopped. Read here and never added to the named
+#: code: naming one is a decision of its own, since it makes every training kept before it unresumable.
+_CALLED_BUT_NOT_NAMED = {
+    # what a resume compares by value, and a refusal that computes nothing
+    "core.SBI.train._sbi_defaults": "it reads the defaults of sbi's own, which the settings keep by value, so that a "
+                                    "change of one is a change of the settings, compared when a training is resumed",
+    "core.SBI.train._require_hook_points": "it refuses a trainer without what saving a training relies on, and "
+                                           "computes nothing",
+    # the record of each pass, kept out on purpose: a rewording of a record must not make a kept training unresumable
+    "core.SBI.train._wrap_summary": "it tells whether the trainer's summary of each pass can be wrapped, refusing or "
+                                    "warning when it cannot, and computes nothing the fit trains on",
+    "core.SBI.train._announce": "it says each pass in one record: it only reads, draws no number and touches no tensor",
+    # containers, of which the named code uses the construction and the plain fields alone
+    "core.SBI.train._NoTracker": "the tracker sbi is handed, whose calls discard the training's curves and do nothing "
+                                 "else",
+    "core.SBI.train.PreparedFit": "a container of the trainer, its network, its count of rows and its settings",
+    # the kept training's own checks, which compare what it was kept with and compute nothing it trains on
+    "core.SBI.fit_state.first_difference": "it finds the first setting that differs from the kept training's",
+    "core.SBI.fit_state.FitMismatch": "the error a check raises when the kept training cannot go on",
+    "core.SBI.fit_state.indices_digest": "it digests the indices of the validation rows a kept training is checked by",
+    "core.SBI.fit_state.network_digest": "it digests the shape of the network a kept training is checked by",
+    # the rows
+    "core.SBI.pipeline.gen_training_data": "it makes the rows or reads them back from the simulation set, which the "
+                                           "set's identity and the digest of the validation rows hold",
+}
+
+# A module of three functions and a class, which the walk is tried on first: a call by a plain name, through a module
+# imported inside the function, and of a class imported inside it, each seen; a method called on an object and a
+# function of Python's own not followed.
+_WALKED = ("def helper(x):\n"
+           "    return x\n"
+           "\n"
+           "\n"
+           "def other(x):\n"
+           "    return x\n"
+           "\n"
+           "\n"
+           "class Box:\n"
+           "    pass\n"
+           "\n"
+           "\n"
+           "def named(x):\n"
+           "    import fit_walk_probe as me\n"
+           "    from fit_walk_probe import Box as Made\n"
+           "    return helper(me.other(Made()), x.method(), len(x))\n")
+
+
+def test_every_function_the_named_code_calls_is_named_or_set_aside_with_its_reason(tmp_path, monkeypatch):
+    """A kept training is resumed only by the code it was trained with, read off the functions and classes the named
+    code lists, so a helper drawn out of one of them later would be left out of what a kept training is held to: an
+    edit of it between a stop and a resume would not refuse the resume. Read on the parsed code of every function and
+    class named, each function or class of the program's own it calls -- by a plain name, by a name it imports inside
+    itself, or through a module's name -- is itself named, or set aside with its reason in words; and every one set
+    aside is still called. A class set aside for a container holds no code of its own that does anything. The named
+    code is read, never changed. The walk is tried first on a module of this test's own."""
+    probe = tmp_path / "fit_walk_probe.py"
+    probe.write_text(_WALKED, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        walked = importlib.import_module("fit_walk_probe")
+        seen = _calls_of(walked.named, prefix="fit_walk_probe")
+        assert seen == {"fit_walk_probe.helper", "fit_walk_probe.other", "fit_walk_probe.Box"}, seen
+    finally:
+        sys.modules.pop("fit_walk_probe", None)          # for the reason the code digests' test gives
+
+    importlib.import_module("core.orchestrator")         # it loads the pipeline before the trainer
+    called = {}
+    for dotted in FIT_CODE:
+        module, _, attr = dotted.rpartition(".")
+        for callee in _calls_of(getattr(importlib.import_module(module), attr)):
+            called.setdefault(callee, dotted)
+    unnamed = {callee: by for callee, by in sorted(called.items())
+               if callee not in FIT_CODE and callee not in _CALLED_BUT_NOT_NAMED}
+    assert unnamed == {}, ("a function or class the named training code calls is neither named nor set aside with its "
+                           f"reason (each by the named code that calls it): {unnamed}")
+    stale = sorted(set(_CALLED_BUT_NOT_NAMED) - set(called))
+    assert stale == [], f"an entry set aside is no longer called by the named code: delete it: {stale}"
+    assert all(reason.strip() for reason in _CALLED_BUT_NOT_NAMED.values())
+    for dotted in ("core.SBI.train._NoTracker", "core.SBI.train.PreparedFit"):
+        module, _, attr = dotted.rpartition(".")
+        held, = ast.parse(code_only(getattr(importlib.import_module(module), attr))).body
+        doing = [node.name for node in held.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and not all(isinstance(line, ast.Pass) for line in node.body)]
+        assert doing == [], f"{dotted}, set aside for a container, holds code of its own that does something: {doing}"
+
+
 def _copy_trainer_files(root: Path, *, crlf: bool = False, change_base: bool = False) -> Path:
     installed = Path(sbi.__file__).parent
     for rel in SBI_TRAINER_FILES:

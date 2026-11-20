@@ -3558,6 +3558,31 @@ def test_a_size_remembered_on_the_primary_screen_opens_as_it_ever_did(monkeypatc
     assert opened_from(least[0] - 20, least[1] - 30) == (least, least)
 
 
+def test_every_panel_a_part_holds_is_found_through_its_class():
+    """The window finds a panel by its class (``panel``), building first the part that holds that kind of panel when
+    no part built holds one, through its table of each panel's class and the part that holds it: a class missing from
+    the table would be found in no window whose part is not built yet, and silently. With every part built, every
+    panel the window holds has its class in the table, with the part that holds it, and the table names no other; and
+    on a window just built, each class in the table is found, its part built for it."""
+    from PySide6.QtWidgets import QWidget
+    from core.gui import main_window
+    from core.gui.panels.run_host import RunHost
+    qt_app()
+    window = build_window()
+    for place in keys.PARTS:
+        window.part(place.key)
+    held = {}
+    for panel in (widget for widget in window.findChildren(QWidget) if isinstance(widget, RunHost)):
+        parts = {place.key for place in keys.PARTS if window.part(place.key).isAncestorOf(panel)}
+        held.setdefault(type(panel).__name__, set()).update(parts)
+    table = {cls.__name__: {part} for cls, part in main_window._PANEL_PARTS.items()}
+    assert held == table, ("a panel the window holds is missing from the table its parts are found by, or held by "
+                           f"another part, or the table names a class no part holds: {held} against {table}")
+    fresh = build_window()
+    missed = [cls.__name__ for cls in main_window._PANEL_PARTS if not isinstance(fresh.panel(cls), cls)]
+    assert missed == [], f"no panel of these classes was found before their part was built: {missed}"
+
+
 def _inside(widget, part):
     """What ``widget``'s own layout holds, its items' rectangles taken together, in the part's coordinates."""
     from PySide6.QtCore import QRect
@@ -3584,16 +3609,21 @@ def _margins(window, part):
             page.height() - max(rect.bottom() + 1 for rect in found))
 
 
-def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windows_edges():
+def test_every_place_but_home_stands_the_same_margin_from_the_rail_and_the_windows_edges(monkeypatch):
     """Every place but Home and Settings stands its first frame or its first line twelve pixels in from the rail, from
     the window's right edge, from its top and from its bottom, at the ordinary text size, and as much more as a larger
     text size scales it, opened first in the usual layout and in the small one: a step and a panel by the frame
     their own layout holds, and every other place by what its own layout holds, the list of Your own models by its group
     too. Home, Settings and every step of Parameter inference are pages of the look, which keep its page margin and
-    stand alike, and the window gives them none: the first step and the last are measured."""
+    stand alike, and the window gives them none: the first step and the last are measured. Your own models lists the
+    two shipped with PRISM, whatever models this computer holds: a list long enough to scroll moves the group's right
+    margin."""
     from PySide6.QtCore import QMargins
     from PySide6.QtWidgets import QGroupBox
+    from core import registry
     from tests._look_helpers import text_size
+    monkeypatch.setattr(registry, "user_model_names", lambda: ["SHM", "SHM2"])          # the two shipped with PRISM
+    monkeypatch.setattr(registry, "load_errors", [])
     qt_app()
     for factor in (1.0, 1.5):
         for low in (False, True):
@@ -6313,6 +6343,95 @@ def test_the_last_resort_error_says_where_the_full_error_is(tmp_path, monkeypatc
         True, True), text
     assert (shown.endswith("\u2026"), height <= room) == (True, True), (
         f"the question with its line beneath is {height} px in a room of {room} px")
+
+
+# The window's entry run as ``python -m core.gui`` runs it, in a process of its own handed the repository's root and a
+# folder of the test's own: it records each call that tells the figure library its backend, and, at the moment the
+# window's module is imported, the backend the library has been told and the lock the one PRISM was claimed with; it
+# ends there, before anything of the window is built. The settings file is in the test's own folder before the entry
+# runs, so that the claim's lock and its server's name are made from it, and the plain Windows message is recorded,
+# never shown.
+_AGG_FIRST = r'''
+import importlib.abc
+import json
+import os
+import runpy
+import sys
+import warnings
+
+repo, own = sys.argv[1], sys.argv[2]
+sys.path.insert(0, repo)
+import matplotlib
+
+seen = {"use": [], "reached": False, "backend": None, "lock": None, "boxes": []}
+told = matplotlib.use
+
+
+def use(*args, **kwargs):
+    seen["use"].append([str(arg) for arg in args])
+    return told(*args, **kwargs)
+
+
+matplotlib.use = use
+
+
+class Reached(BaseException):
+    """The window's module is being imported: what this process came to see is seen, and nothing more runs."""
+
+
+class Watch(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name == "core.gui.app":
+            backend = matplotlib.rcParams._get("backend")
+            claim = sys.modules["core.gui.one_instance"].current()
+            lock = getattr(claim, "_lock", None)
+            seen.update(reached=True, backend=backend.lower() if isinstance(backend, str) else None,
+                        lock=None if lock is None else lock.fileName())
+            raise Reached
+        return None
+
+
+sys.meta_path.insert(0, Watch())
+from core.gui import __main__ as entry, settings
+
+entry._native_box = seen["boxes"].append
+settings.use_ini_file(os.path.join(own, "prism.ini"))
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)          # the entry's module was imported before it runs
+        runpy.run_module("core.gui", run_name="__main__", alter_sys=True)
+except Reached:
+    pass
+print(json.dumps(seen))
+'''
+
+
+def test_the_windows_entry_draws_with_agg_before_it_imports_the_window(tmp_path):
+    """The window's entry, ``python -m core.gui``, tells the figure library to draw with Agg before the window's module
+    is imported, so that no module that draws is loaded under another backend and a stray ``plt.show()`` on a run's
+    thread does nothing. Seen as the entry runs, in a process of its own that ends at the moment the window's module is
+    imported: by then the library has been told Agg, once, and nothing else. That process shows no window and no plain
+    Windows message, takes its one-instance lock beside a settings file in this test's own folder, and has its records
+    and its inputs pointed at folders of this test's own."""
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE", "QT_QPA_PLATFORM": "offscreen",
+           "PRISM_ARTIFACTS": str(tmp_path / "records"), "PRISM_RESOURCES": str(tmp_path / "inputs")}
+    for name in ("PRISM_DETACHED", "MPLBACKEND"):
+        env.pop(name, None)
+    done = subprocess.run([sys.executable, "-c", _AGG_FIRST, str(repo), str(tmp_path)], cwd=str(repo), env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]
+    seen = json.loads(done.stdout.strip().splitlines()[-1])
+    lock = seen.pop("lock")
+    assert lock is not None and Path(lock).resolve().is_relative_to(tmp_path.resolve()), (
+        f"the entry's one-instance lock was not taken beside the settings file of this test's own: {lock}")
+    assert seen == {"use": [["Agg"]], "reached": True, "backend": "agg", "boxes": []}, (
+        "the window's entry imported its window before it told the figure library to draw with Agg, or it showed a "
+        f"plain Windows message: {seen}")
 
 
 # The folders the launcher reads and writes, each pointed into a test's own folder: the user's, the local and the

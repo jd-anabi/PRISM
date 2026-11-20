@@ -349,10 +349,14 @@ def test_a_figure_windows_toolbar_draws_its_icons_for_each_theme_it_is_switched_
     seen, drawn, held = {}, [], set()
 
     def watched(window, name):
-        """Record each drawing of ``window``'s figure, and each laying out of it that makes no picture, both of which
-        go through the figure's own call to draw, and whether the test held the window then."""
-        real = window._fig.draw
+        """Record each drawing of ``window``'s figure and each laying out of it, and whether the test held the window
+        then: a drawing, and a laying out that makes no picture, go through the figure's own call to draw, and a
+        drawing and every laying out of the figure's text -- a tight layout, a text's extent -- ask the window's canvas
+        for its renderer."""
+        real, renderer = window._fig.draw, window.canvas.get_renderer
         window._fig.draw = lambda *args, **kwargs: drawn.append((name, name in held)) or real(*args, **kwargs)
+        window.canvas.get_renderer = (lambda *args, **kwargs: drawn.append((name, name in held))
+                                      or renderer(*args, **kwargs))
 
     def still_held(window):
         """Whether ``window`` is held as a run holds it: so by its own account, its toolbar and its canvas hidden, and
@@ -534,6 +538,25 @@ def test_the_look_stand_in_puts_the_look_back_when_a_window_will_not_close():
         _gone(stuck)
     assert after == (True, True, found[2], found[3]), (
         "the look was not put back after a window raised as it was closed", after)
+
+def test_the_look_stand_in_lets_go_of_its_windows_however_its_block_ends():
+    """A figure window handed to the stand-in of the application is closed and deleted as the block ends, a block that
+    raises included, so that no window of a test that failed outlives it."""
+    import pickle
+    import matplotlib.pyplot as plt
+    import pytest
+    import shiboken6
+    from core.gui.widgets.figure_window import build_interactive_window
+    qt_app()
+    figure = pickle.dumps(_tiny_fig())
+    plt.close("all")
+    with pytest.raises(RuntimeError, match="the block failed"):
+        with _appearance_over() as (_appearance, windows, _hints):
+            window = build_interactive_window(figure, "left behind")
+            windows.append(window)
+            window.show()
+            raise RuntimeError("the block failed")
+    assert not shiboken6.isValid(window), "a figure window outlived the block that raised"
 
 def _grounds(holder, buttons):
     """The colour ``holder`` is painted with most over each of ``buttons``, as it is painted now: a button's ground,

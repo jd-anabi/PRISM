@@ -8723,7 +8723,9 @@ def test_the_loss_curve_has_two_axes_with_round_ticks_outward_and_its_words_from
         met = [(a, b) for at, (a, one) in enumerate(boxes) for b, other in boxes[at + 1:] if _meet(one, other)]
         assert not met and min(box[0] for _words, box in boxes) >= 0, (why, met, boxes)
         gap, ticks = design.scaled(design.FIGURE["line_label_gap"]), {words for _y, words in lay["y_ticks"]}
-        (x, y, w, h), = [box for words, box in boxes if words == loss.LOSS_NAME]
+        names = [box for words, box in boxes if words == loss.LOSS_NAME]
+        assert len(names) == 1, (why, names)
+        (x, y, w, h), = names
         crowding = [(words, box) for words, box in boxes
                     if words in ticks and _meet(box, (x - gap, y - gap, w + 2 * gap, h + 2 * gap))]
         assert not crowding, (why, crowding)
