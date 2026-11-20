@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit d1d8bbfb.
+Checked against commit 9e7d8c49.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, which bounds file a cell is checked against, the three observation modes and
@@ -58,9 +58,12 @@ offset in (-50, 50)
   one decides the observation mode ([Observation modes](#observation-modes)).
 - A line of any other shape in one of the three sections, or one whose brackets hold other than two
   numbers, is refused, naming its line by its number and its words
-  (`core.Helpers.file_manager.parse_bounds_file`): the command line ends the refusal `(--bounds)`, and
-  the Prior step says it under its list of bounds files. A `#` line is always read as a header, by
-  the words it contains: one that names no section ends the current one, so the lines under it are
+  (`core.Helpers.file_manager.parse_bounds_file`), and the command line ends the refusal `(--bounds)`.
+  The Prior step reads the file as it stands first and holds its limits to the rule the limits typed
+  by hand are held to: a line whose brackets hold other than two numbers is said under its list of
+  bounds files in its own words ("The bounds file cannot be used. The limits of k must both be
+  numbers."), and only a line of another shape gets the reader's refusal there. A `#` line is always
+  read as a header, by the words it contains: one that names no section ends the current one, so the lines under it are
   skipped without a word, and a misspelt header can file the lines under it in the wrong section. A
   comment line or a misspelt header can therefore drop parameters or misfile them silently: write no
   comments, and
