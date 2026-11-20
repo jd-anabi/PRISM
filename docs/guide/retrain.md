@@ -117,7 +117,8 @@ kept in this one place. At this commit:
   earlier fixed step. A narrowing round of 10,000 batches simulates at about the same pace.
 - **A full-size calibration**, 2,000 test datasets at 200 operating points: under an hour (43
   minutes, measured at the earlier fixed step). Each repeat of a calibration at a fixed number of
-  driven recordings costs about as much, so the four of ten repeats take about 30 hours.
+  driven recordings costs about as much, so the four calibrations at fixed numbers (2, 6 and 12
+  driven recordings, and mixed), each of ten repeats, take about 30 hours.
 - **The audit of unusable driven recordings**, 100 batches of 32: about six minutes.
 - **The set on disk**: about 10.3 GiB. The run's full text states the size and the free space when
   the set starts.
@@ -140,8 +141,8 @@ In this order. Nothing here trains, and any item can stop the run.
 
 2. **This computer, in Settings.** Under "This computer", **Memory limit**: choose "Limit each batch
    to" and type 6 (GiB). With no limit the 1 October run died at batch 237, out of the card's
-   memory; at 6 GiB 9,500 batches went through. The limit is remembered for this computer, and the Training
-   step's "Before you start" names it: "Memory limit: 6 GiB for each batch of simulations (set in
+   memory; at 6 GiB 9,500 batches went through. The limit is remembered for this computer, and the
+   Training step's "Before you start" names it: "Memory limit: 6 GiB for each batch of simulations (set in
    Settings, This computer)." `PRISM_VRAM_CEILING_GIB`, when it holds a number in the environment the
    window starts in, takes precedence, and Settings then says "Set outside PRISM by
    PRISM_VRAM_CEILING_GIB = …"; the desktop shortcut starts PRISM with Explorer's environment, so the
@@ -164,18 +165,25 @@ In this order. Nothing here trains, and any item can stop the run.
      0.999 and "Directions narrowed" 5, their usual values. The round takes nothing from step 3's
      form.
    - Back on step 1, under Model, **Save as a plan…**, a "Plan name" such as `retrain`, **Save**. The
-     file is `Resources/Plans/nadrowski/retrain.txt`; open it with **Show what it holds** to check
-     it holds each setting above.
+     file is `Resources/Plans/nadrowski/retrain.txt`. A plan writes only the settings that differ from
+     their usual values, so **Show what it holds** lists these and no others: Kind of observation; the
+     bounds file; under Training, Batches, Network width, Network depth and "Expected epochs"; under
+     Narrowing round, Batches, Network width and Network depth. Every setting left at its usual value
+     above is not written, and filling from the plan sets it to that usual value.
 
    A later launch opens the plan list on "No plan" and the network at 128 by 8: choose the plan and
    press **Fill the forms from this plan** before any start that is not a Resume.
 
 4. **The inputs committed, the revision noted.** Commit the plan, with the bounds file and the cell
    files the run reads (`master_tier1.txt`, `master_spont_tier1.txt`) if either has changed, and see
-   that `git status --short` prints nothing: an untracked file counts as a change too. Every record
-   stamps the checkout's revision and whether the tree has changes: a simulation set when it starts,
-   a prior, a check or a posterior when it is written, the posterior at the very end of the run. Then
-   note `git rev-parse HEAD` with the time. Both are command lines.
+   that `git status --short` prints nothing: an untracked file counts as a change too. A folder git
+   does not track still counts, an editor's settings folder say. Two ways clear it without touching a
+   tracked file: list it in `.git/info/exclude`, the repository's own list of files to pass over, or
+   move it out of the repository. A line in `.gitignore` would do it too, but that is a tracked file,
+   so it is the owner's choice, and it is committed before the run. Every record stamps the
+   checkout's revision and whether the tree has changes: a simulation set when it starts, a prior, a
+   check or a posterior when it is written, the posterior at the very end of the run. Then note
+   `git rev-parse HEAD` with the time. Both are command lines.
 
 5. **The prior.** Step 2, Prior: **Build a new prior instead…**, the bounds file as above, a Name not
    taken (an earlier attempt's prior may hold `retrain_prior`; "Before you start" says "Fine. This
@@ -215,16 +223,17 @@ In this order. Nothing here trains, and any item can stop the run.
      reading shows whether the card is as fast as it was in August 2026, about 5.1 s an epoch; the
      larger network read about 6.2 s in October 2026.
      - Above the timing's limit for 256 by 10, in
-       [the step's figures](#the-figures-that-depend-on-the-simulators-step), **stop for the owner's
-       decision**. Nothing is simulated yet, so a stop costs only the timing. The owner's
-       options: look for a cause (another program on the card, host memory short) and time again; a
-       width of 1,024, which about halves the fit but halves the replication at each operating point,
-       a science choice; or fit 128 by 8 first from the complete set and fit again at 256 by 10 later
-       without simulating again.
+       [the figures that move with the simulator](#the-figures-that-depend-on-the-simulators-step),
+       **stop for the owner's decision**. Nothing is simulated yet, so a stop costs only the timing.
+       The owner's options: look for a cause (another program on the card, host memory short) and
+       time again; a width of 1,024, which about halves the fit but halves the replication at each
+       operating point, a science choice; or fit 128 by 8 first from the complete set and fit again
+       at 256 by 10 later without simulating again.
      - Above about 7 s an epoch for 128 by 8, the card is slower than it was: tell the owner before
        the run, whatever the larger network read.
      - Whatever the reading, tell the owner the programme's projected total, twice the projected fit
-       plus the rest of the programme in the step's figures, before the run starts.
+       plus the rest of the programme in the figures that move with the simulator, before the run
+       starts.
 
 7. **The card and the computer to the run**, just before the start, and kept so while it runs.
    - Close every program that uses the card, browsers first: the longest batches use most of the
@@ -237,13 +246,15 @@ In this order. Nothing here trains, and any item can stop the run.
      open one to the front.
    - Host memory: close other programs. The last full-size fit's process held about 25 GB of the
      machine's 63 GiB through its fit.
-   - Disk: the set's size in the step's figures, with room to spare.
-   - **No edit under `core/` and no commit while the run is live.** The posterior stamps the
-     checkout's revision and whether the tree has changes when it is written at the end, so a commit
-     of any file during the run, documents included, moves that stamp. Whether an import late in a
-     run reads an edited file is not established. And an edit inside the code that builds or trains
-     the network, a comment included, makes every training kept before it unresumable
-     ([Resuming](#resuming)).
+   - Disk: the set's size in the figures that move with the simulator, with room to spare.
+   - **No edit under `core/`, of the bounds file or of the units file, and no commit while the run
+     is live.** The posterior stamps the checkout's revision and whether the tree has changes when it
+     is written at the end, so a commit of any file during the run, documents included, moves that
+     stamp. Whether an import late in a run reads an edited file is not established. The same holds
+     for as long as a training is kept, live or stopped: an edit inside the code that builds or trains
+     the network, a comment included, makes every training kept before it unresumable, and so does a
+     change to the bounds file or the units file it began with; and do not delete the run's prior from
+     Records, since a kept training whose prior is gone cannot be resumed ([Resuming](#resuming)).
 
 ## The run
 
@@ -287,17 +298,18 @@ records' lines are also in the record's `log.txt`.
 - **Rotation.** "The rotation is being computed before any simulation." The full text says over how
   many operating points the rotation was averaged (8 of 8 expected) and its eigenvalue spread; a
   warning that an operating point was skipped means one fewer.
-- **Simulation.** "Simulating: batch … of 10,000, … s per batch", at about the pace
-  [the step's figures](#the-figures-that-depend-on-the-simulators-step) give. The full text's first
-  line of the set states its size and the free disk space; a
-  warning after it means the disk is short. The set is saved every 50 batches.
-- **Training health**, its four rows:
-  - "Failed simulations": "Fine" up to 1 %; the step's figures give the last full-size set's share.
+- **Simulation.** "Simulating: batch … of 10,000, … s per batch", at about the pace that
+  [the figures that move with the simulator](#the-figures-that-depend-on-the-simulators-step) give.
+  The full text's first line of the set states its size and the free disk space; a warning after it
+  means the disk is short. The set is saved every 50 batches.
+- **Training health**, its rows in the window's order:
+  - "Failed simulations": "Fine" up to 1 %; the figures that move with the simulator give the last
+    full-size set's share.
+  - "Unusable driven recordings", shown for a frequency response, as this run is: "Counted when
+    simulation ends", then the comparison with the audit ([Gates](#gates)).
   - "Graphics-card memory": the largest batch's peak so far. "Batch … did not fit in the graphics
     card's memory and was run in smaller pieces." now and then is survivable; a steady stream means
     the card is fuller than the splitting absorbs: look for another program on it.
-  - "Unusable driven recordings": "Counted when simulation ends", then the comparison with the
-    audit ([Gates](#gates)).
   - "Training saved": "after epoch …", once the fit has begun.
 - **Two lines a continued simulation can bring.** When an earlier session's save was cut off before
   it committed, the full text says it "moved … uncommitted shard files past batch … aside to …,
@@ -311,8 +323,8 @@ records' lines are also in the record's `log.txt`.
 - **Fitting.** The stage says "Now, about … per epoch"; the loss by epoch grows on the page; "Training
   saved" follows each epoch. A silence during an epoch is said as normal; one twice as long as the
   last epoch took is a warning. A full-size epoch takes about 500 times the timing's seconds per
-  epoch. Slower than the limit per epoch in the step's figures, stop the run for the owner; so does
-  a fit still running past its limit in hours after simulation ended. Either
+  epoch. Slower than the limit per epoch in the figures that move with the simulator, stop the run
+  for the owner; so does a fit still running past its limit in hours after simulation ended. Either
   way the set is complete and the fit is kept after every epoch, so a stop loses at most the epoch
   in progress, never a simulated batch ([Resuming](#resuming)).
 - **Saving.** "Saving the posterior" cannot be stopped. The page then says the posterior is saved,
@@ -334,9 +346,10 @@ A run that stops keeps what it saved:
 batches simulated so far are kept and the batch in progress is not: **Stop and keep the
 simulations**. During the fit, that the fit stops when the epoch in progress ends and every finished
 epoch is kept: **Stop training**. "Keep training" is preselected each time, and until the stop is
-taken **Don't stop after all** withdraws it. Once the stop has landed, the page asks "Keep this
-training so you can resume it later?": **Keep**. **Discard** deletes the kept training, not the
-simulations.
+taken **Don't stop after all** withdraws it. Once a stop in the fit has landed, the page asks "Keep
+this training so you can resume it later?": **Keep**. **Discard** deletes the kept training, not the
+simulations. After a stop during the simulation the page says "No training was kept: the fit had not
+begun.", and the simulations are kept all the same.
 
 **Resuming.** A kept training is resumed by **Resume** in three places: on the run's page ("Resume
 the training") until PRISM is closed; after a reopening, on step 3, Training, under "Kept trainings",
@@ -356,15 +369,30 @@ instead…**, **Load this prior**): "Before you start" then says "Continues the 
 rotation stored with it, and step 3 says of the rotation's three settings "Not used: this training
 reuses the saved simulation set's rotation."
 
+A training that failed or was not seen to end with its set whole and no kept training on that set
+(its fit had not saved an epoch) is offered **Fit again on the saved simulations**, on Home and, after
+a reopening, on its run's page; it fills the forms in the same way, and fits again on the saved set
+without simulating. On step 3 the main button reads so whenever the set of these settings is whole and
+"Continue or start new" is "Only continue: do not start if there is nothing to continue".
+
 **What makes a kept training unresumable.** A kept training resumes only while what it was trained
 with is unchanged. Its row on step 3 says why it cannot, in place of **Resume**:
 
+- a process is training it now;
 - the code that builds or trains the network has changed since it was kept, an edit of a comment
   included (the functions named in `core.SBI.fit_state.FIT_CODE`): finish a kept training you want
   before such an edit;
 - a configuration constant that code reads has changed;
 - the libraries have changed, sbi's own trainer files among them;
-- its simulation set is gone from the store, or no longer holds the batches it was trained on.
+- its simulation set is gone from the store, or no longer holds the batches it was trained on;
+- its prior is no longer in Records.
+
+A press of **Resume** checks more before it loads anything, and says on the row what stops it:
+
+- the bounds file it began with is gone, or has changed since the training began;
+- the units file it began with is gone, or has changed;
+- its model is no longer one PRISM can train;
+- it was trained on the graphics card, and this computer has none now.
 
 Its settings and its network's shape are checked as well: the window resumes it on its own settings,
 so these cannot differ there, and a resume whose rows, read back, do not give the kept fit is refused
@@ -536,8 +564,9 @@ Only what the window cannot do, one line each, from the repository root in Power
   stores, which no check of the window does.
 - **The diagnostic card**, when code under `core/diagnostics` has changed
   ([The diagnostic card](testing.md#the-diagnostic-card)), for the same reason.
-- **The revision**: `git rev-parse HEAD`, and `git status --short`, which must print nothing. The
-  window reads no git; it only stamps the revision into each record.
+- **The revision**: `git rev-parse HEAD`, and `git status --short`, which must print nothing (item 4
+  of the [Pre-flight](#pre-flight) says how to clear an untracked folder). The window reads no git; it
+  only stamps the revision into each record.
 - **The commit of the inputs**: `git add Resources/Plans/nadrowski/retrain.txt`, then `git commit`.
   The window saves a plan but commits nothing.
 - **The card's memory while a run is live**: `nvidia-smi --query-gpu=memory.used --format=csv`.
