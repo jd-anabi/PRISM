@@ -864,10 +864,12 @@ class PriorPanel(StepPage):
 
     # ── a plan's bounds file ──
     def entry_named(self, name: str) -> str:
-        """The list's entry whose name, with forward slashes, is ``name``; "" when it lists none."""
-        combo = self.bounds_picker.combo
+        """The list's entry whose name is ``name``, both read with forward slashes, whichever way ``name`` is spelled
+        (a kept training's record gives a Resume forward slashes; a run's history and the key remembered from last time
+        give the computer's own separator); "" when it lists none."""
+        combo, wanted = self.bounds_picker.combo, _named(str(name))
         return next((combo.itemData(at) for at in range(combo.count())
-                     if isinstance(combo.itemData(at), str) and _named(combo.itemData(at)) == name), "")
+                     if isinstance(combo.itemData(at), str) and _named(combo.itemData(at)) == wanted), "")
 
     def take_plans_bounds(self, name: str) -> None:
         """A plan's bounds file, filled: the limits typed by hand no longer read, and the file selected now when the

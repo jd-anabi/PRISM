@@ -527,6 +527,47 @@ def test_a_run_that_asks_to_end_the_process_fails_and_ends_only_itself(tmp_path)
                                      f"{STAMP} error The run failed: RuntimeError: {words}"], _lines(text.path)
 
 
+@pytest.mark.parametrize("exit_, named", [(SystemExit(), "SystemExit"), (SystemExit(None), "SystemExit"),
+                                          (SystemExit(2), "SystemExit: 2"),
+                                          (SystemExit("bad\nmore"), "SystemExit: bad")],
+                         ids=["no code", "None", "2", "two lines"])
+def test_the_exits_sentence_names_its_code_by_its_first_line_alone(exit_, named):
+    """The sentence of a run that asked to end the process names the exit by its kind, then by its code or its message
+    when it gives one: an exit with no code, or the code None (``sys.exit(None)``), names its kind alone, and a message
+    of several lines is named by its first, so that the clause the foot and Home quote closes its bracket."""
+    from core.gui.worker import EXITED_TEXT
+    qt_app()
+    said = []
+
+    def exits():
+        raise exit_
+
+    _run(exits, None, error=lambda *args: said.append(args))
+    assert [str(args[0]) for args in said] == [EXITED_TEXT.format(named)], said
+
+
+def test_a_stop_asked_before_a_run_fails_or_exits_is_noted_alike(tmp_path):
+    """A stop asked for before a run fails is noted with the failure, never taken for the stop, and so it is when the
+    run fails by asking to end the process: ``error`` says the stop had been asked for, and the run's text file says the
+    run failed, not that it stopped."""
+    from core.gui.worker import STOPPED_TEXT
+    qt_app()
+    for failure in (RuntimeError("the batch failed"), SystemExit(2)):
+        text = RunTextFile(tmp_path / f"{type(failure).__name__}.txt", clock=_Clock())
+        token, said = streams.CancelToken(), []
+        token.requested.set()
+
+        def fails():
+            raise failure
+
+        _run(fails, text, cancel=token, error=lambda *args: said.append(args),
+             cancelled=lambda *args: said.append(args))
+        text.close()
+        written = _lines(text.path)
+        assert ([len(args) for args in said], said[0][2], written[0].startswith(f"{STAMP} error The run failed: "),
+                any(STOPPED_TEXT in line for line in written)) == ([4], True, True, False), (failure, said, written)
+
+
 def test_a_line_written_to_the_runs_streams_after_the_run_is_not_in_its_file(tmp_path):
     """Once the run has ended its streams are no longer the run's, though something the run made may still write to
     them: a handler a library made during the run, a progress bar the collector closes later. Such a line is not
@@ -550,7 +591,7 @@ def test_a_line_written_to_the_runs_streams_after_the_run_is_not_in_its_file(tmp
 def test_the_worker_hands_on_the_kept_training_named_by_a_stop_or_a_failure():
     """The training stage names the training a stop or a failure in its fit kept: ``kept_fit`` on the exception it
     raises. The worker hands that note on, as ``cancelled``'s object and ``error``'s fourth, read off the exception
-    it caught; a stop or a failure that names none hands on None."""
+    it caught, a run's exit among the failures; a stop or a failure that names none hands on None."""
     qt_app()
     note = SimpleNamespace(id="20261008T190211-1", passes=62, resumed=False, saved_here=True, processes=1)
 
@@ -567,8 +608,10 @@ def test_the_worker_hands_on_the_kept_training_named_by_a_stop_or_a_failure():
              cancelled=lambda *args: got.append(("cancelled", args)), error=lambda *args: got.append(("error", args)))
         _run(raising(RuntimeError("the graphics card ran out of memory"), kept), None,
              cancelled=lambda *args: got.append(("cancelled", args)), error=lambda *args: got.append(("error", args)))
-    assert [(signal, len(args)) for signal, args in got] == [("cancelled", 1), ("error", 4)] * 2, got
-    assert [args[-1] for _signal, args in got] == [note, note, None, None], got
+        _run(raising(SystemExit(2), kept), None,
+             cancelled=lambda *args: got.append(("cancelled", args)), error=lambda *args: got.append(("error", args)))
+    assert [(signal, len(args)) for signal, args in got] == [("cancelled", 1), ("error", 4), ("error", 4)] * 2, got
+    assert [args[-1] for _signal, args in got] == [note, note, note, None, None, None], got
     assert got[0][1][0] is note and got[1][1][3] is note
 
 

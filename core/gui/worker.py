@@ -28,7 +28,7 @@ FAILED_TEXT = "The run failed: {}"
 # The failure of a run whose output could not be captured; filled with the reason the capture gave.
 NO_CAPTURE_TEXT = "The run could not start: PRISM could not capture its output ({})."
 # The failure of a run that asked to end the process (a library's own exit, an argument parser's error among them),
-# which ends the run alone; filled with the exit's kind and its code or message.
+# which ends the run alone; filled with the exit's kind and the first line of its code or message (``_exited``).
 EXITED_TEXT = "The run asked to close PRISM ({}); only the run ended."
 # A run that ended with none of the three outcomes (an exception of a kind no clause of the run takes, an interrupt
 # among them, passed every handler, or the capture's own exit failed): written before ``finished`` is said, so the
@@ -94,6 +94,18 @@ def _said(exc: BaseException) -> str:
     except Exception:                         # noqa: BLE001 -- the exception is named by its kind alone
         message = ""
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
+def _exited(exit_: SystemExit) -> str:
+    """An exit as the window's sentence names it: its kind, then the first line of its code or its message when it
+    gives one. An exit with no code, ``sys.exit()`` or ``sys.exit(None)``, is named by its kind alone, and so is one
+    whose code cannot be said."""
+    try:
+        said = "" if exit_.code is None else str(exit_.code).strip()
+    except Exception:                         # noqa: BLE001 -- the exit is named by its kind alone
+        said = ""
+    first = said.splitlines()[0].strip() if said else ""
+    return f"{type(exit_).__name__}: {first}" if first else type(exit_).__name__
 
 
 def _failed_text(exc: BaseException) -> str:
@@ -221,7 +233,7 @@ class Worker(QRunnable):
                         # leave the callable, it would reach the toolkit from the pool's thread, which ends the process
                         # with it. A failure said in the window's words, the exit's own traceback under them; the
                         # cancel noted and the kept training are read as the failure above reads them.
-                        failure = (RuntimeError(EXITED_TEXT.format(_said(e))), traceback.format_exc())
+                        failure = (RuntimeError(EXITED_TEXT.format(_exited(e))), traceback.format_exc())
                         cancel_noted = self.cancel is not None and self.cancel.requested.is_set()
                         kept_fit = getattr(e, "kept_fit", None)
                         _drop_tracebacks(e)

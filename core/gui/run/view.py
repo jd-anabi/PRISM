@@ -30,6 +30,7 @@ lives inside the page that started the run, never in the window's own stack of p
 figure library: the figures it holds are pictures already, and the loss by epoch is painted by the window itself.
 """
 import math
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -52,6 +53,7 @@ from ..widgets.time_axis import AxisCaption, TimeAxis
 from . import ends, questions, retry
 from .loss import LossCurve
 from .model import LEADS, OUTCOMES, RunModel, RunSpec, Stage
+from .textfile import SEPARATOR_TEXT
 
 SHOW_TEXT = "Show the full text"
 HIDE_TEXT = "Hide the full text"
@@ -85,6 +87,8 @@ NAME_LEAST_W = 160
 #: The marker beside each state word of the health table.
 STATE_MARKERS = {"Fine": "fine", "Look closer": "warn", "Not compared": "warn"}
 _STAMP = "%Y-%m-%d %H:%M:%S"
+#: The line of a run's text file that opens each try after the first, its number any.
+_TRY_BEGINS = re.compile(re.escape(SEPARATOR_TEXT).replace(re.escape("{}"), r"\d+"))
 
 
 def _local_now() -> datetime:
@@ -1019,9 +1023,11 @@ class RunView(QWidget):
     def show_past(self, record: dict, text: Path | None, *, clock=None) -> None:
         """Draw a run that is over from its two files alone: ``record``, its history, and ``text``, its text
         file (None when there is none). Its model, of the stages its history names, reads the file's lines again,
-        each at the moment written, so that its stage line and its health are drawn as they stood at its end; its
-        sentence says how and when it ended and what it kept, as its history says it, dated against the moment
-        ``clock`` gives (the computer's own clock when none is handed)."""
+        each at the moment written, and hears each try after the first begin where the file's line says so, as the live
+        run's model heard it from the run's controller, so that its stage line and its health, the failed simulations
+        counted over every try, are drawn as they stood at its end; its sentence says how and when it ended and what it
+        kept, as its history says it, dated against the moment ``clock`` gives (the computer's own clock when none is
+        handed)."""
         place = record.get("place")
         stages = []
         for stage in record.get("stages") or ():
@@ -1051,6 +1057,9 @@ class RunView(QWidget):
                 model.answer(answer, moment)
         for moment, level, said in entries:
             written[0] = moment
+            if level == "window" and _TRY_BEGINS.fullmatch(said):
+                model.trying(True)                       # the try before it ended, and this one begins
+                model.trying(False)
             model.feed([(said, level)])
         outcome = record.get("outcome")
         model.ended(outcome if outcome in OUTCOMES else "not seen to end")

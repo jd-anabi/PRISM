@@ -504,6 +504,43 @@ def test_a_try_that_ends_with_no_outcome_is_not_the_lack_of_memory_before_it(tmp
         "a try with no outcome was taken for the lack of memory before it", record["health"])
 
 
+def test_a_run_tried_again_reads_its_failed_simulations_alike_live_in_its_history_and_in_its_past_view(tmp_path):
+    """A training tried again after the graphics card ran out of memory counts its failed simulations over every try,
+    each try counting from nought as the engine does in each call, since the batch its first try resumed its set at:
+    its page says so as it ends, its history keeps the sum, and its page drawn again from its two files, as Home and a
+    reopened window draw it, reads its text file's tries and says the same."""
+    from core.gui.run import history
+    app = qt_app()
+    clock = Clock(_at(3, 3, 2, 11))
+    held, host = _controller_on(tmp_path, clock), build_run_host()
+    text, view = RunText(held), host.run_view
+    folder = _set(tmp_path, 236)
+
+    def resuming(batch):
+        return f"[checkpoint] resuming at batch {batch}/10000 from {folder} (reusing the stored rotation V)"
+
+    stand_in = StandIn()
+    start_run(host, stand_in, spec=_training())
+    _say(app, stand_in, text, _BUDGET, resuming(236), "[patho] batch 6149: 3 new pathological trajectorie(s) -- "
+         "12,000 non-finite, 6,450 exactly constant, 0 over 1e+06 in magnitude, of 12,595,200 simulated")
+    stand_in.fail(_out_of_memory())
+    _waiting(app, held)
+    clock.advance(60)
+    held.tick()
+    _tried(app, held, stand_in, 2)
+    _say(app, stand_in, text, resuming(300), "[patho] batch 320: 2 new pathological trajectorie(s) -- 1,000 "
+         "non-finite, 50 exactly constant, 0 over 1e+06 in magnitude, of 409,600 simulated")
+    stand_in.release()
+    _ended(app, held)
+    run = held.status.run
+    record = history.read(tmp_path / "runs" / f"{run}.json")
+    past = build_run_host().past_view
+    past.show_past(record, tmp_path / "runs" / f"{run}.txt", clock=clock)
+    counted = ("Failed simulations", "0.15 % since batch 236", "Fine")
+    assert (_health(view)[0], _health(past)[0], record["health"]["failed"], record["health"]["simulated"]) == (
+        counted, counted, 19_500, 13_004_800), "the live page, the past view and the history read the tries apart"
+
+
 _REPORTED_AT_ONCE = {
     "a full disk": (lambda: OSError(28, "No space left on device"), "[Errno 28] No space left on device", False),
     "a programming error": (lambda: TypeError("unsupported operand type(s) for +: 'int' and 'NoneType'"),

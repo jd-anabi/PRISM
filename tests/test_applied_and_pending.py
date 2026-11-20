@@ -4639,12 +4639,15 @@ def _third_step_of_the_frequency_response(tmp_path, monkeypatch):
 
 
 def test_a_bounds_file_in_a_subfolder_of_its_models_folder_is_selected_by_a_chain_of_loads(tmp_path, monkeypatch):
-    """A chain of loads names its bounds file by its path in its model's folder with forward slashes, as a kept
-    training's record gives it to a Resume: a file in a subfolder of that folder is selected in step 2's list, whose
-    entries are spelled with the computer's own separator, as a file at the top of the folder is."""
+    """A chain of loads names its bounds file by its path in its model's folder: with forward slashes, as a kept
+    training's record gives it to a Resume, or with the computer's own separator, as a run's history gives it to
+    "Continue from batch N" and "Fit again" and the key remembered from last time gives it to Home's "Continue with
+    these". Either way a file in a subfolder of that folder is selected in step 2's list, whose entries are spelled
+    with the computer's own separator, as a file at the top of the folder is; Home's own press selects it too."""
     import os
     import shutil
     from core.config import BOUNDS_PATH
+    from core.gui import remembered
     from core.gui.panels.inference import prior_tab
     folder = tmp_path / "Bounds" / "nadrowski"
     (folder / "sub").mkdir(parents=True)
@@ -4652,11 +4655,15 @@ def test_a_bounds_file_in_a_subfolder_of_its_models_folder_is_selected_by_a_chai
         shutil.copyfile(BOUNDS_PATH / "nadrowski" / "master.txt", path)
     monkeypatch.setattr(prior_tab, "BOUNDS_PATH", tmp_path / "Bounds")
     screen = build_inference()
-    selected = []
-    for named in ("master.txt", "sub/x.txt"):
+    beneath, selected = os.path.join("sub", "x.txt"), []
+    for named in ("master.txt", "sub/x.txt", "master.txt", beneath, "master.txt"):
         screen.load_chain("NADROWSKI", {"chi_mode": False}, named, None)
         selected.append(screen.prior_panel.bounds_picker.key())
-    assert selected == ["master.txt", os.path.join("sub", "x.txt")], selected
+    forget_asked()
+    screen.continue_with(remembered.Picks(model="NADROWSKI", chi_mode=False, bounds=beneath))
+    selected.append(screen.prior_panel.bounds_picker.key())
+    assert (selected, all_asked()) == (["master.txt", beneath, "master.txt", beneath, "master.txt", beneath], []), (
+        selected)
 
 
 def _an_audit(screen, *, prior=None, created=None, **given) -> str:
