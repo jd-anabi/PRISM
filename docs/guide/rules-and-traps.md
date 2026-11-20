@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 9e7d8c49.
+Checked against commit c2422d9e.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -294,7 +294,8 @@ How `core/gui/` runs a stage off the GUI thread is in [The window](architecture.
   `matplotlib.use("Agg")` before any module that draws is imported, `core.__main__` before its first
   `core` import and `core.gui.__main__.main` before it imports the window (`core.gui.app`); do not
   move either line. The first place is pinned by
-  `tests/test_tool.py::test_the_tool_reads_no_environment_and_writes_no_knob`, the second by no test,
+  `tests/test_tool.py::test_the_tool_reads_no_environment_and_writes_no_knob`, the second by
+  `tests/test_shell.py::test_the_windows_entry_draws_with_agg_before_it_imports_the_window`,
   and `tests/test_figures.py::test_nothing_changes_the_figure_settings_but_the_windows_theme_as_it_starts`
   holds these two calls as the only ones.
 - **One run in the whole window.** A run redirects `sys.stdout` and `sys.stderr` for the whole

@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 76af6d46.
+Checked against commit c2422d9e.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -165,6 +165,11 @@ and the session guards).
     while a suite runs fails it, and the window's own folder of plans is a folder of the session's,
     empty, so that no test lists or writes the real one (a test that writes a plan binds a folder of
     its own with `monkeypatch`);
+  - `_no_inputs_written`: the folders of the program's inputs a person edits by hand, `Resources/Bounds`,
+    `Cells`, `Units` and `Models`, hold at the end of the session exactly what each held at its start, the
+    same paths with the same bytes, so that a model or an input file saved by hand while a suite runs fails it,
+    and so does a test model a test left there ([Writing tests](#writing-tests)); a failure names each folder
+    and the paths that changed, never what a file holds;
   - `_no_sbi_logs`: `<repo>/sbi-logs` must not exist, checked at setup as well as teardown, so a
     leftover tree makes every run error before its first test.
 - **One session fixture is no guard and sets nothing**, `_long_lived_objects_set_aside`: it takes one
@@ -519,14 +524,16 @@ Then delete the scratch folder, as the recipe says.
   `build_run_host` (`tests/_fixtures.py`) makes a bare page to host it, and the window's suites share
   their other helpers in `tests/_window_helpers.py`.
 - **The test model lives in the real `Resources/` while it is installed.** `install_sbitest`
-  (`tests/_fixtures.py`), which `build_tiny_run` and `tests/test_tool.py`'s module fixture call,
-  writes a one-variable model, SBITEST, into `Resources/Bounds/sbitest/`, `Resources/Cells/sbitest/`,
-  `Resources/Units/sbitest/` and `Resources/Models/SBITEST.json`, so that the tool can be driven with
-  real `--bounds` and `--cell` files; its teardown removes them in a `finally`. Other suites write
-  throwaway models there the same way: `tests/test_user_models.py`'s UMTEST models, and
-  `tests/test_user_sbi.py`'s full user-model pipeline. A killed run never reaches the `finally` and
-  leaves them behind: delete whatever `git status` lists as untracked under `Resources/`. They are not
-  inputs.
+  (`tests/_fixtures.py`), which `build_tiny_run` calls, and `sbitest_installed`, through which
+  `tests/test_tool.py`'s module fixture installs it, write a one-variable model, SBITEST, into
+  `Resources/Bounds/sbitest/`, `Resources/Cells/sbitest/`, `Resources/Units/sbitest/` and
+  `Resources/Models/SBITEST.json`, so that the tool can be driven with real `--bounds` and `--cell`
+  files. Its teardown removes them in a `finally`, `sbitest_installed` takes them out however its block
+  ends, and an install that fails partway takes out what it wrote. Other suites write throwaway models
+  there the same way: `tests/test_user_models.py`'s UMTEST models, and `tests/test_user_sbi.py`'s full
+  user-model pipeline. The session guard `_no_inputs_written` fails a run that ends with any of them
+  left. A killed run never reaches the `finally` and leaves them behind: delete whatever `git status`
+  lists as untracked under `Resources/`. They are not inputs.
 - **A widget that was never shown** reports a placeholder size from `width()`: 640×480 for one built
   without a parent, 100×30 for one built inside another. The suites run offscreen and show nothing,
   so assert on `sizeHint()`, `minimumSizeHint()` or `maximumWidth()`, or show the widget, resize it
