@@ -3908,39 +3908,24 @@ def test_no_widget_a_checks_reading_or_a_runs_end_makes_is_shown_as_a_window_of_
     """STANDING, beside the builders' guard. What the Checks page makes after it is built, every check's result at a
     reading with a record of each kind and again at a check's run's end, is made inside its page: none is shown as a
     window of its own, but the window itself and the questions the dialogs' guard records."""
-    from PySide6.QtWidgets import QMessageBox, QWidget
     from core import orchestrator
-    from core.gui.main_window import MainWindow
-    from core.gui.widgets.ask import Ask
     from tests._runs import StandIn, turn_until
-    from tests._window_helpers import shown_off_screen
+    from tests._window_helpers import shown_off_screen, windows_of_their_own
     stand_in = StandIn(word="Check")
     monkeypatch.setattr(orchestrator, "validate_calibration", stand_in)
     app = qt_app()
-    shown = []
-    real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
-
-    def heard(widget, on: bool) -> None:
-        if on and widget.isWindow() and not isinstance(widget, (MainWindow, Ask, QMessageBox)):
-            words = getattr(widget, "text", None)
-            shown.append((type(widget).__name__, words() if callable(words) else "", widget.parent() is None))
-
     with _checks_page(tmp_path, records=_every_record, shown=False) as (window, _screen, page, _store):
-        monkeypatch.setattr(QWidget, "setVisible", lambda widget, on: (heard(widget, on), real["setVisible"](widget, on)))
-        monkeypatch.setattr(QWidget, "show", lambda widget: (heard(widget, True), real["show"](widget)))
-        monkeypatch.setattr(QWidget, "setHidden", lambda widget, on: (heard(widget, not on), real["setHidden"](widget, on)))
-        shown_off_screen(window, 1300, 820)
-        window.go_to("inference", "checks")           # the page's first reading, which makes every result
-        _settle()
-        made = sum(1 for one in page.check_pages.values() if one.result is not None)
-        _ready(page, "calibration")
-        page._main_clicked()
-        assert stand_in.started.wait(5)
-        stand_in.release()
-        turn_until(app, lambda: not controller().is_live())
-        _settle()
-        for name, method in real.items():
-            monkeypatch.setattr(QWidget, name, method)
+        with windows_of_their_own(monkeypatch) as shown:
+            shown_off_screen(window, 1300, 820)
+            window.go_to("inference", "checks")           # the page's first reading, which makes every result
+            _settle()
+            made = sum(1 for one in page.check_pages.values() if one.result is not None)
+            _ready(page, "calibration")
+            page._main_clicked()
+            assert stand_in.started.wait(5)
+            stand_in.release()
+            turn_until(app, lambda: not controller().is_live())
+            _settle()
     assert made >= 6, made
     assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"
 

@@ -5801,6 +5801,31 @@ def test_the_round_passes_the_network_it_shows(tmp_path, monkeypatch):
         _round_ends(run)
 
 
+@pytest.mark.parametrize("step", ["Inference", "the narrowing round"])
+def test_no_widget_an_inferences_or_a_rounds_run_end_makes_is_shown_as_a_window_of_its_own(step, tmp_path,
+                                                                                           monkeypatch):
+    """STANDING, beside the builders' guard and the Checks page's. What Inference makes from its run's press to the
+    run's end, its result read from an inference's records with its estimates and its figures, and what the narrowing
+    round makes from its press to its run's end, its result read from the round's posterior, is made inside the page:
+    none is shown as a window of its own but the window itself and the questions the dialogs' guard records."""
+    from tests._window_helpers import windows_of_their_own
+    if step == "Inference":
+        with _fifth_step(tmp_path, monkeypatch) as (_window, _screen, page, _runs):
+            with windows_of_their_own(monkeypatch) as shown:
+                _inferred(page, tmp_path)
+            made = (page.result.table_words() is not None, len(page.result.pictures) > 0)
+    else:
+        with _sixth_step(tmp_path, monkeypatch) as (_window, _screen, page, run, made):
+            _ready_round(page, made)
+            with windows_of_their_own(monkeypatch) as shown:
+                page._main_clicked()
+                assert run.started.wait(5), page.foot.reason.text()
+                _round_ends(run)
+            made = (len(page.result.sentences()) > 0, len(page.result.next_steps()) == 2)
+    assert made == (True, True), f"the run's end made no result: nothing is tested ({made})"
+    assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"
+
+
 def test_the_network_of_the_posterior_in_use_is_said_and_marked_when_it_differs(tmp_path, monkeypatch):
     """Under the network: the posterior in use's own, from its record, and marked "Attention." under the depth while the
     round trains another."""

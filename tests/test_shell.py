@@ -6,6 +6,7 @@ steps' states are the rules' own. The window's reading of its session, its run a
 what each of Home's places opens in the window, are tested on a whole window.
 """
 import contextlib
+import functools
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -5729,21 +5730,69 @@ def _names_kept(app):
         app.setApplicationName(names[1])
 
 
+@functools.cache
+def _windows_messages_in_the_code() -> dict:
+    """Every file of the program's code that shows a plain Windows message or names the call that shows one in its code
+    -- ``MessageBoxW`` or another of that call's spellings, as an attribute or as a string handed to a lookup by name
+    -- each with the function every such name stands in (None outside any function), read off its syntax tree: the
+    files under the code's roots and the top-level code files, each read once a process. A comment that names the
+    call is no call, and is passed over."""
+    import ast
+    import re
+    from pathlib import Path
+    from tests._fixtures import CODE_FILES, CODE_ROOTS
+    repo = Path(__file__).resolve().parents[1]
+    named = re.compile(r"MessageBox[A-Za-z]*")
+    files = [path for root in CODE_ROOTS for path in sorted((repo / root).rglob("*.py"))]
+    files += [repo / name for name in CODE_FILES]
+
+    class Shown(ast.NodeVisitor):
+        """The function each name of the call stands in, in the order the file holds them."""
+
+        def __init__(self):
+            self.within, self.found = [], []
+
+        def visit_FunctionDef(self, node):
+            self.within.append(node.name)
+            self.generic_visit(node)
+            self.within.pop()
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Attribute(self, node):
+            if named.fullmatch(node.attr):
+                self.found.append(self.within[-1] if self.within else None)
+            self.generic_visit(node)
+
+        def visit_Constant(self, node):
+            if isinstance(node.value, str) and named.fullmatch(node.value):
+                self.found.append(self.within[-1] if self.within else None)
+
+    found = {}
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        if not re.search(r"(?<![A-Za-z0-9_])MessageBox", text):
+            continue
+        shown = Shown()
+        shown.visit(ast.parse(text))
+        if shown.found:
+            found[path.relative_to(repo).as_posix()] = shown.found
+    return found
+
+
 def _main(entry):
     """The entry point's ``main()``, run once its plain Windows message is seen to be the suites' stand-in -- a real one
-    would wait for a person's OK -- and to be shown by that one function alone, read off the module's syntax tree, so
-    that a message shown by a function of another name is never reached; and once the entry module is seen to hold
-    nothing of the window's module, which ``main`` imports inside itself after its claim: a ``build_app`` of the
-    module's own would build the whole program for real here, the test's stand-in passed by."""
-    import ast
-    from pathlib import Path
+    would wait for a person's OK -- and to be shown by that one function alone in the whole of the program's code, read
+    off the syntax tree of every file of it, so that a message shown by a function of another name, in this module or
+    in any other, is never reached; and once the entry module is seen to hold nothing of the window's module, which
+    ``main`` imports inside itself after its claim: a ``build_app`` of the module's own would build the whole program
+    for real here, the test's stand-in passed by."""
     from tests._dialogs import native_box
     assert entry._native_box is native_box, "the entry point's Windows message is not stood in for: it would wait"
-    tree = ast.parse(Path(entry.__file__).read_text(encoding="utf-8"))
-    shown = [function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
-             for node in ast.walk(function) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
-    every = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr == "MessageBoxW"]
-    assert (shown, len(every)) == (["_native_box"], 1), "a Windows message is shown somewhere else than _native_box"
+    found = _windows_messages_in_the_code()
+    assert found == {"core/gui/__main__.py": ["_native_box"]}, (
+        "a plain Windows message is shown, or its call named, somewhere in the program's code but the entry point's "
+        f"_native_box: {found}")
     assert "build_app" not in vars(entry), "the entry module imports the window's module before it claims"
     return entry.main()
 

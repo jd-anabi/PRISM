@@ -63,15 +63,12 @@ def _no_sbi_logs():
         f"core.SBI.train._NoTracker (train_nn's tracker=None)")
 
 
-def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, bytes]") -> None:
-    """Fail, by raising, when ``folder``, where the plans a person saves are kept, does not hold what it held at the
-    start of the run: ``held`` is its listing then (tests/_settings_folder.listing) and ``kept`` its files' bytes then.
-    The message names the first five of what changed: the folder itself comes first when it was made or has gone, so
-    that a folder empty before or after is not read as nothing; then a plan rewritten under its own name, marked so,
-    since it is the one change that loses work; then the paths that came or went. A plan the person saved before the
-    run is in both and does no harm; one saved by hand while the run was going fails the same way, and the message says
-    so.
-    Raised rather than asserted, so the check survives a run with assertions switched off."""
+def _changed(folder: Path, held: "list[str] | None", kept: "dict[str, bytes]") -> list[str]:
+    """What ``folder`` holds now that differs from what it held at the start of the run, ``held`` being its listing
+    then (tests/_settings_folder.listing) and ``kept`` its files' bytes then: the folder itself first when it was made
+    or has gone, so that a folder empty before or after is not read as nothing; then a file rewritten under its own
+    name, marked so, since it is the one change that loses work; then the paths that came or went. Paths alone, never
+    what a file holds."""
     from tests import _settings_folder
     holds = _settings_folder.listing(folder)
     changed = [f"{path} (rewritten)" for path, was in kept.items()
@@ -79,9 +76,32 @@ def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, by
     changed += sorted(set(holds or ()) ^ set(held or ()))
     if (holds is None) != (held is None):
         changed.insert(0, f"the folder itself ({'gone' if holds is None else 'made'})")
+    return changed
+
+
+def check_plans_kept(folder: Path, held: "list[str] | None", kept: "dict[str, bytes]") -> None:
+    """Fail, by raising, when ``folder``, where the plans a person saves are kept, does not hold what it held at the
+    start of the run: ``held`` is its listing then (tests/_settings_folder.listing) and ``kept`` its files' bytes then.
+    The message names the first five of what changed, as ``_changed`` orders them, a plan rewritten under its own name
+    marked so. A plan the person saved before the run is in both and does no harm; one saved by hand while the run was
+    going fails the same way, and the message says so.
+    Raised rather than asserted, so the check survives a run with assertions switched off."""
+    changed = _changed(folder, held, kept)
     if changed:
         raise AssertionError(f"the suite changed what the real plans folder {folder} holds, or a plan was saved by "
                              f"hand while the run was going, so look at the paths before blaming the code: "
+                             f"{changed[:5]}")
+
+
+def check_inputs_kept(folder: Path, held: "list[str] | None", kept: "dict[str, bytes]") -> None:
+    """Fail, by raising, when ``folder``, one of the folders of the program's inputs a person edits by hand, does not
+    hold what it held at the start of the run, read as ``check_plans_kept`` reads the plans' folder: the message names
+    the folder and the first five of what changed, and says that a file saved there by hand while the run was going
+    fails the same way. Raised rather than asserted, so the check survives a run with assertions switched off."""
+    changed = _changed(folder, held, kept)
+    if changed:
+        raise AssertionError(f"the suite changed what the real inputs folder {folder} holds, or a file in it was "
+                             f"saved by hand while the run was going, so look at the paths before blaming the code: "
                              f"{changed[:5]}")
 
 
@@ -114,6 +134,41 @@ def _no_plans_written(tmp_path_factory):
     check_plans_kept(folder, held, kept)
     written = sorted(str(path.relative_to(session)) for path in session.rglob("*"))
     assert not written, f"the suites' own folder of plans was written to: {written}"
+
+
+#: The folders of the program's inputs a person edits by hand, under ``Resources/``, beside the plans' folder, which has
+#: a guard of its own.
+_INPUT_FOLDERS = ("Bounds", "Cells", "Units", "Models")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_inputs_written():
+    """The folders of the program's inputs a person edits by hand, ``Resources/Bounds``, ``Cells``, ``Units`` and
+    ``Models``, hold at the end of the session exactly what each held at its start: the same paths, and each file the
+    same bytes. It sits beside _no_plans_written for the same reason: the suites leave the repository as they found it.
+    A file a test left there would be read by the next launch as one of the person's own -- a model left in ``Models``
+    is listed among the person's models -- and a file written over cannot be brought back. The suites do write there
+    for a while: the test model (tests/_fixtures.py's ``install_sbitest``) and the throwaway models of the user
+    models' suite are saved there, so that the program can be driven with real input files, and taken out as their
+    tests end; a test that ends with one left fails the run, and so does a file saved there by hand while the run is
+    going. Each folder is compared as the plans' folder is, by ``check_inputs_kept`` above, and every folder that
+    changed is named with the paths that changed, never with what a file holds."""
+    from core import config
+    from tests import _settings_folder
+    held = {}
+    for name in _INPUT_FOLDERS:
+        folder = config.RESOURCES_ROOT / name
+        listed = _settings_folder.listing(folder)
+        held[folder] = (listed, {path: Path(path).read_bytes() for path in listed or () if Path(path).is_file()})
+    yield
+    failed = []
+    for folder, (listed, kept) in held.items():
+        try:
+            check_inputs_kept(folder, listed, kept)
+        except AssertionError as error:
+            failed.append(str(error))
+    if failed:
+        raise AssertionError("; ".join(failed))
 
 
 @pytest.fixture

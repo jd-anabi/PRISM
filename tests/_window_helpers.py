@@ -1,5 +1,6 @@
 """What the window's suites share: the session a window holds, and the ways a test shows a window where no screen
-shows it, brings it to the front, presses a key where a person's key goes and notes the focus given.
+shows it, brings it to the front, presses a key where a person's key goes, notes the focus given and watches for a
+widget shown as a window of its own.
 
 At its head this file imports the standard library and the window's session class, which loads neither the toolkit
 nor torch; each toolkit name is imported inside the function that uses it, so that a suite that may not load the
@@ -70,6 +71,34 @@ def given(monkeypatch):
 
     monkeypatch.setattr(QWidget, "setFocus", set_focus)
     return given
+
+
+@contextlib.contextmanager
+def windows_of_their_own(monkeypatch):
+    """Every widget made visible, shown or unhidden inside the block that is a window of its own as it is, but the
+    window itself and the questions and message boxes the dialogs' guard records, in the list the block is handed: each
+    as its class's name, its words when it has any, and whether it has no parent. A widget made with no parent and
+    made visible is a window of its own, shown on the screen at once, a flash in the real program before its page
+    takes it in. The toolkit's three calls are put back as the block ends."""
+    from PySide6.QtWidgets import QMessageBox, QWidget
+    from core.gui.main_window import MainWindow
+    from core.gui.widgets.ask import Ask
+    shown = []
+    real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
+
+    def heard(widget, on: bool) -> None:
+        if on and widget.isWindow() and not isinstance(widget, (MainWindow, Ask, QMessageBox)):
+            words = getattr(widget, "text", None)
+            shown.append((type(widget).__name__, words() if callable(words) else "", widget.parent() is None))
+
+    monkeypatch.setattr(QWidget, "setVisible", lambda widget, on: (heard(widget, on), real["setVisible"](widget, on)))
+    monkeypatch.setattr(QWidget, "show", lambda widget: (heard(widget, True), real["show"](widget)))
+    monkeypatch.setattr(QWidget, "setHidden", lambda widget, on: (heard(widget, not on), real["setHidden"](widget, on)))
+    try:
+        yield shown
+    finally:
+        for name, method in real.items():
+            monkeypatch.setattr(QWidget, name, method)
 
 
 def _pick(choice, value) -> None:

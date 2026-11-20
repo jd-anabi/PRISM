@@ -882,30 +882,16 @@ def test_no_widget_the_builders_make_is_shown_as_a_window_of_its_own(monkeypatch
     page and form among them, and a configuration installed on Parameter inference, is watched as it is made visible,
     shown or unhidden: none is a window then but the window itself and the questions and message boxes the dialogs'
     guard records."""
-    from PySide6.QtWidgets import QMessageBox, QWidget
     from core.gui import keys
-    from core.gui.main_window import MainWindow
-    from core.gui.widgets.ask import Ask
     from tests._fixtures import build_step_page, build_window, forced_cfg, install_config, qt_app
+    from tests._window_helpers import windows_of_their_own
     qt_app()
-    shown = []
-    real = {name: getattr(QWidget, name) for name in ("setVisible", "show", "setHidden")}
-
-    def heard(widget, on: bool) -> None:
-        if on and widget.isWindow() and not isinstance(widget, (MainWindow, Ask, QMessageBox)):
-            words = getattr(widget, "text", None)
-            shown.append((type(widget).__name__, words() if callable(words) else ""))
-
-    monkeypatch.setattr(QWidget, "setVisible", lambda widget, on: (heard(widget, on), real["setVisible"](widget, on)))
-    monkeypatch.setattr(QWidget, "show", lambda widget: (heard(widget, True), real["show"](widget)))
-    monkeypatch.setattr(QWidget, "setHidden", lambda widget, on: (heard(widget, not on), real["setHidden"](widget, on)))
-    window = build_window()
-    for part in keys.PARTS:
-        window.part(part.key)
-    install_config(window.part("inference"), forced_cfg())
-    build_step_page()
-    for name, method in real.items():
-        monkeypatch.setattr(QWidget, name, method)
+    with windows_of_their_own(monkeypatch) as shown:
+        window = build_window()
+        for part in keys.PARTS:
+            window.part(part.key)
+        install_config(window.part("inference"), forced_cfg())
+        build_step_page()
     assert shown == [], f"{len(shown)} widgets were shown as windows of their own: {shown}"
 
 

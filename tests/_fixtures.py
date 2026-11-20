@@ -442,8 +442,10 @@ def install_sbitest():
     ``--bounds``/``--cell`` exactly as an operator would drive it, instead of against a hand-built
     config no flag could have produced. ``teardown`` removes exactly what this helper wrote (the
     SBITEST bounds/cell/units files and the model JSON) and unregisters the model; call it from a
-    ``finally``. ``git status`` after a run is what shows ``Resources/`` clean -- the session conftest
-    only snapshots and asserts ``Artifacts/``.
+    ``finally``, or install through ``sbitest_installed``, which does. An install that fails partway
+    (its files written, the model not yet loaded) takes out what it wrote before its failure goes on.
+    The session's guard over the inputs' folders (tests/conftest.py's ``_no_inputs_written``) fails a
+    run that ends with any of it left.
     """
     from core import config, registry
     from core.Helpers import model_store
@@ -451,8 +453,6 @@ def install_sbitest():
     doc = {"schema_version": 1, "name": name,
            "variables": [{"name": "x", "drift": "-k*x", "D": "d0", "init": 0.5, "forcing": None}],
            "params": {"k": 1.0, "d0": 0.05}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}}
-    model_store.save_user_model(doc)
-    registry.load_user_models()
 
     def teardown():
         try:
@@ -461,8 +461,25 @@ def install_sbitest():
             pass
         registry.unregister(name)
 
+    try:
+        model_store.save_user_model(doc)
+        registry.load_user_models()
+    except BaseException:
+        teardown()
+        raise
     return (str(config.BOUNDS_PATH / name.lower() / "default.txt"),
             str(config.CELL_PATH / name.lower() / "default.txt"), teardown)
+
+
+@contextmanager
+def sbitest_installed():
+    """The test model installed for the block (``install_sbitest``), as ``(bounds, cell)``, the paths of its two real
+    input files, and taken out again as the block ends, however it ends."""
+    bounds, cell, teardown = install_sbitest()
+    try:
+        yield bounds, cell
+    finally:
+        teardown()
 
 
 def build_tiny_run(store, hw=None):

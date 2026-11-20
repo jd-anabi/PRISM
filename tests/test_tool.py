@@ -65,29 +65,14 @@ def tool_env(_session_default_store, tmp_path_factory):
     Depends on ``_session_default_store`` (even though it does not use the value) so the capture above
     is guaranteed to happen first even if pytest's scope/autouse ordering were ever in doubt."""
     from core import orchestrator
-    from tests._fixtures import _tiny_gen_prior, install_sbitest
+    from tests._fixtures import _tiny_gen_prior, sbitest_installed
     root = tmp_path_factory.mktemp("tool_artifacts")
-    teardown = None
-    with pytest.MonkeyPatch.context() as mp:
-        try:
-            # INSIDE the try: an install that fails halfway (the model JSON written, a folder not) must
-            # still be undone, and so must the monkeypatches -- the context manager restores those.
-            bounds, cell, teardown = install_sbitest()
-            mp.setenv("PRISM_ARTIFACTS", str(root))
-            mp.setattr(orchestrator.pipeline, "gen_prior", _tiny_gen_prior)
-            yield str(bounds), str(cell), root
-        finally:
-            if teardown is not None:
-                teardown()
-            else:
-                # install_sbitest raised before handing back its teardown: remove whatever it wrote
-                from core import registry
-                from core.Helpers import model_store
-                try:
-                    model_store.delete_user_model("SBITEST")
-                except Exception:                                # noqa: BLE001 -- best-effort cleanup
-                    pass
-                registry.unregister("SBITEST")
+    # The test model is taken out however the module ends, and an install that fails halfway takes out what it wrote
+    # itself; the patches made after it are put back by the context they are made in.
+    with pytest.MonkeyPatch.context() as mp, sbitest_installed() as (bounds, cell):
+        mp.setenv("PRISM_ARTIFACTS", str(root))
+        mp.setattr(orchestrator.pipeline, "gen_prior", _tiny_gen_prior)
+        yield str(bounds), str(cell), root
 
 
 @pytest.fixture(scope="module")

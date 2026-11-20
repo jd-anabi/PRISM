@@ -3429,6 +3429,109 @@ def test_a_plan_written_into_the_real_folder_fails_the_run(request, tmp_path, mo
     assert [ast.unparse(one) for one in guard.decorator_list] == ["pytest.fixture(scope='session', autouse=True)"]
 
 
+def test_a_file_written_into_the_real_inputs_fails_the_run(request, tmp_path, monkeypatch):
+    """The folders of the program's inputs a person edits by hand -- the bounds, the cells, the units and the models --
+    hold at the run's end what they held as it began: the same paths, and each file the same bytes. A file left there
+    would be read by the next launch as one of the person's own, a model among the person's models, and a file written
+    over cannot be brought back. The session's guard keeps each folder's listing and its files' bytes as the run begins
+    and checks them as it ends; its own function is driven here as the test runner drives it, with the program's inputs
+    put in a folder of this test's own. A run that changes nothing passes, and so does one whose test model came and
+    went; a file added, a file rewritten under its own name, a file taken away and a folder made where there was none
+    each fail it. A failure names the folder and the path, a file rewritten marked so, and says that a file saved by
+    hand during the run fails the same way; it never says what a file holds. The guard stands for the whole session,
+    by itself."""
+    import shutil
+    from core import config
+    words = "the suite changed what the real inputs folder"
+    inputs = tmp_path / "inputs"
+    monkeypatch.setattr(config, "RESOURCES_ROOT", inputs)
+    for name in ("Bounds", "Cells", "Units"):
+        (inputs / name).mkdir(parents=True)
+    cell = inputs / "Cells" / "own.txt"
+    cell.write_text("the person's own words", encoding="utf-8")
+    around_the_run = _guards(request)._no_inputs_written.__wrapped__     # the function the fixture was made from
+    run = around_the_run()
+    next(run)                                                            # as the run begins
+    (inputs / "Bounds" / "sbitest").mkdir()
+    (inputs / "Bounds" / "sbitest" / "default.txt").write_text("a test model's bounds", encoding="utf-8")
+    shutil.rmtree(inputs / "Bounds" / "sbitest")                         # a test model that came and went
+    with pytest.raises(StopIteration):
+        next(run)                                                        # nothing left changed: the run passes
+
+    added, models = inputs / "Units" / "left.txt", inputs / "Models"
+    for change, folder, named in (("added", inputs / "Units", repr(str(added))),
+                                  ("rewritten", inputs / "Cells", repr(f"{cell} (rewritten)")),
+                                  ("taken away", inputs / "Cells", repr(str(cell))),
+                                  ("made", models, "['the folder itself (made)']")):
+        run = around_the_run()
+        next(run)
+        if change == "added":
+            added.write_text("a test's words", encoding="utf-8")
+        elif change == "rewritten":
+            cell.write_text("a test's words", encoding="utf-8")
+        elif change == "taken away":
+            cell.unlink()
+        else:
+            models.mkdir()
+        with pytest.raises(AssertionError, match=words) as failed:
+            next(run)
+        said = str(failed.value)
+        assert f"{words} {folder} holds" in said and named in said, (change, said)
+        assert "saved by hand while the run was going" in said, f"the check did not say a person can cause this: {said}"
+        assert "words" not in said.replace(words, ""), f"the check said what a file holds: {said}"
+        if change == "added":
+            added.unlink()
+        elif change == "taken away":
+            cell.write_text("the person's own words", encoding="utf-8")
+        elif change == "made":
+            models.rmdir()
+
+    tree = ast.parse((REPO / "tests" / "conftest.py").read_text(encoding="utf-8"))
+    guard, = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_no_inputs_written"]
+    assert [ast.unparse(one) for one in guard.decorator_list] == ["pytest.fixture(scope='session', autouse=True)"]
+
+
+def test_the_test_model_is_taken_out_however_its_test_ends(tmp_path, monkeypatch):
+    """The test model the suites install among the program's inputs (tests/_fixtures.py's ``install_sbitest``), so that
+    the command-line tool can be driven with real input files, is taken out again however the test that installed it
+    ends: a block that installs it through ``sbitest_installed`` and raises leaves none of its files and no model
+    registered, as one that ends well does; and an install that fails partway, its files written and the model not yet
+    loaded, takes out what it wrote before its failure goes on. Tried with the program's inputs in a folder of this
+    test's own and the record of models that would not load on a stand-in, so that nothing of the real inputs and
+    nothing of the process's own record is touched."""
+    from core import config, registry
+    from tests._fixtures import install_sbitest, sbitest_installed
+    inputs = tmp_path / "inputs"
+    for name, folder in (("BOUNDS_PATH", "Bounds"), ("CELL_PATH", "Cells"), ("UNITS_PATH", "Units"),
+                         ("MODELS_PATH", "Models")):
+        monkeypatch.setattr(config, name, inputs / folder)
+    monkeypatch.setattr(registry, "load_errors", [])
+    assert registry.get("SBITEST") is None, "the test model is registered already: this test would take it out"
+
+    def left() -> list:
+        return sorted(path.relative_to(inputs).as_posix() for path in inputs.rglob("*") if path.is_file())
+
+    class Raised(RuntimeError):
+        """A failure put in here: of a test's body, or of the install."""
+
+    with pytest.raises(Raised):
+        with sbitest_installed() as (bounds, cell):
+            assert Path(bounds).is_file() and Path(cell).is_file() and registry.get("SBITEST") is not None, left()
+            raise Raised("the test's body failed")
+    assert (left(), registry.get("SBITEST")) == ([], None), "a test that raised left the test model installed"
+    with sbitest_installed():
+        assert left() != []
+    assert (left(), registry.get("SBITEST")) == ([], None), "a test that ended well left the test model installed"
+
+    def unloadable():
+        raise Raised("the model could not be loaded")
+
+    monkeypatch.setattr(registry, "load_user_models", unloadable)
+    with pytest.raises(Raised):
+        install_sbitest()
+    assert (left(), registry.get("SBITEST")) == ([], None), "an install that failed partway left what it wrote"
+
+
 def test_the_computer_is_kept_awake_from_the_start_of_a_run_to_its_end(tmp_path, windows_asked):
     """Windows is asked to keep the computer awake as a run starts, and to let it sleep again as the run ends: once
     each, both from the window's thread, however the run ends -- finished, stopped or failed. The request stands
