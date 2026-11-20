@@ -7002,3 +7002,32 @@ def test_a_loss_figure_that_cannot_be_drawn_saved_or_shown_costs_the_posterior_n
                 orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name=f"loss_stopped_while_{what}",
                                              num_runs=2, **{**tr.budget, "fig_sink": sink})
         assert {s.id for s in store.list("posterior")} == before, what
+
+
+def test_a_loss_figure_that_fails_while_it_is_drawn_is_closed(store, monkeypatch):
+    """A loss figure whose drawing fails after the figure was opened reaches no sink, which is where a figure is
+    closed: it is closed where the failure is caught, so that it does not stay open until the process ends, and only
+    it is, a figure the caller holds staying open. The posterior is written as when the drawing fails before any figure
+    is opened, with the one warning naming what failed and no figure in its record."""
+    from matplotlib import pyplot as plt
+    from core import orchestrator
+    from core.refusals import PreflightWarning
+    from tests._fixtures import stubbed_training
+    tr = stubbed_training(store, monkeypatch)
+
+    def no_layout(*args, **kwargs):
+        raise RuntimeError("the layout could not be made")
+
+    held = plt.figure()                                  # a figure of the caller's, open before the training
+    try:
+        open_before = plt.get_fignums()
+        with monkeypatch.context() as patch:
+            patch.setattr(plt, "tight_layout", no_layout)
+            with pytest.warns(PreflightWarning, match=r"could not be drawn \(RuntimeError: the layout could not be"):
+                post = orchestrator.build_posterior(tr.cfg, tr.prior, None, True, name="loss_half_drawn", num_runs=2,
+                                                    **tr.budget)
+        assert plt.get_fignums() == open_before, "the figure the failed drawing opened was left open"
+        m = store.get("posterior", post.id)
+        assert m.figures == [] and "loss.npz" in m.payloads, (m.figures, m.payloads)
+    finally:
+        plt.close(held)

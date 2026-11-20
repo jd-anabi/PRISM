@@ -1882,9 +1882,15 @@ def build_posterior(
                 # A figure the posterior can be saved without, since loss.npz holds its curves: one that cannot
                 # be drawn, saved or shown costs a warning, never the trained posterior. A stop still passes.
                 loss_sink = w.fig_sink(fig_sink, optional=True)
+                open_before = set(plt.get_fignums())
                 try:
                     fig_loss = visualizers.plot_training_loss(diag)
                 except Exception as _e:              # noqa: BLE001 -- the figure, never the training
+                    # What the failed drawing opened reaches no sink, which is where a figure is closed: it is closed
+                    # here, and only it, or pyplot would hold it until the process ends.
+                    with contextlib.suppress(Exception):
+                        for _number in set(plt.get_fignums()) - open_before:
+                            plt.close(_number)
                     w.figure_lost("Training loss", "drawn", _e)
                 else:
                     if fig_loss is not None:
